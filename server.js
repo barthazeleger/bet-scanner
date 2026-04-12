@@ -1335,9 +1335,9 @@ async function runPrematch(emit) {
   emit({ log: `🎯 ${finalPicks.length} overtuigde pick${finalPicks.length>1?'s':''}${weakNote}! Sturen naar Telegram...` });
 
   // ── TELEGRAM BERICHTEN ─────────────────────────────────────────────────────
-  const today = new Date().toLocaleDateString('nl-NL',{day:'2-digit',month:'long',year:'numeric'});
+  const todayLabel = new Date().toLocaleDateString('nl-NL',{day:'2-digit',month:'long',year:'numeric'});
   const pickWord = finalPicks.length === 1 ? 'OVERTUIGDE PICK' : `${finalPicks.length} OVERTUIGDE PICKS`;
-  const header = `🌅 DAGELIJKSE PRE-MATCH SCAN\n📅 ${today}\n📊 ${totalEvents} wedstrijden geanalyseerd\n✅ ${pickWord} (van ${allCandidates.length} kandidaten)\n\n`;
+  const header = `🌅 DAGELIJKSE PRE-MATCH SCAN\n📅 ${todayLabel}\n📊 ${totalEvents} wedstrijden geanalyseerd\n✅ ${pickWord} (van ${allCandidates.length} kandidaten)\n\n`;
 
   let msgs = [header];
   let cur  = 0;
@@ -1870,23 +1870,62 @@ async function schedulePreKickoffCheck(bet) {
 
       // Haal huidige odds op via api-football.com
       let currentOdds = null;
-      if (bet.fixtureId) {
-        // fixtureId is opgeslagen bij het loggen van de bet via de scan
-        try {
-          const oddsData = await afGet('v3.football.api-sports.io', '/odds', { fixture: bet.fixtureId });
-          const rawBks   = oddsData?.[0]?.bookmakers || [];
-          const bet365   = rawBks.find(b => b.name?.toLowerCase().includes('bet365')) || rawBks[0];
-          if (bet365) {
-            const mw = bet365.bets?.find(b => b.id === 1); // Match Winner
-            if (mw) {
-              const isHome = markt.includes('🏠') || !markt.includes('✈️');
-              const side   = isHome ? 'Home' : 'Away';
-              const val    = mw.values?.find(v => v.value === side || v.value === 'Draw');
-              if (val) currentOdds = parseFloat(val.odd) || null;
-            }
+      try {
+        let fxId = bet.fixtureId;
+
+        // Geen fixtureId? Zoek fixture op teamnamen
+        if (!fxId) {
+          const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+          const parts = (matchName || '').split(' vs ').map(s => s.trim().toLowerCase());
+          if (parts.length >= 2) {
+            const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', { date: today });
+            const match = (fixtures || []).find(f => {
+              const h = (f.teams?.home?.name || '').toLowerCase();
+              const a = (f.teams?.away?.name || '').toLowerCase();
+              return (h.includes(parts[0]) || parts[0].includes(h.split(' ').pop())) &&
+                     (a.includes(parts[1]) || parts[1].includes(a.split(' ').pop()));
+            });
+            if (match) fxId = match.fixture?.id;
           }
-        } catch {}
-      }
+        }
+
+        if (fxId) {
+          const oddsData = await afGet('v3.football.api-sports.io', '/odds', { fixture: fxId });
+          const rawBks   = oddsData?.[0]?.bookmakers || [];
+          const bk       = rawBks.find(b => b.name?.toLowerCase().includes('bet365')) || rawBks[0];
+          if (bk) {
+            const marktLc = markt.toLowerCase();
+            let val = null;
+
+            if (marktLc.includes('over') || marktLc.includes('under')) {
+              // Over/Under goals — bet id 5
+              const ou = bk.bets?.find(b => b.id === 5) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('over'));
+              if (ou) {
+                // Zoek de juiste lijn (bijv. "Over 2.5" of "Under 2.5")
+                const lineMatch = marktLc.match(/(over|under)\s*(\d+\.?\d*)/);
+                if (lineMatch) {
+                  const side = lineMatch[1].charAt(0).toUpperCase() + lineMatch[1].slice(1); // "Over" of "Under"
+                  const line = lineMatch[2]; // "2.5"
+                  val = ou.values?.find(v => v.value === `${side} ${line}`);
+                }
+              }
+            } else if (marktLc.includes('wint') || marktLc.includes('winner')) {
+              // Match Winner — bet id 1
+              const mw = bk.bets?.find(b => b.id === 1);
+              if (mw) {
+                const isHome = marktLc.includes('🏠') || !marktLc.includes('✈️');
+                val = mw.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
+              }
+            } else if (marktLc.includes('btts') || marktLc.includes('beide')) {
+              // Both Teams To Score — bet id 8
+              const btts = bk.bets?.find(b => b.id === 8) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('both'));
+              if (btts) val = btts.values?.find(v => v.value === 'Yes');
+            }
+
+            if (val) currentOdds = parseFloat(val.odd) || null;
+          }
+        }
+      } catch {}
 
       // Beoordeling
       const time30 = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
