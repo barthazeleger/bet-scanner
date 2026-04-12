@@ -1809,6 +1809,7 @@ function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
 }
 
 async function readBets() {
+  const t0 = Date.now();
   const sh  = getSheetsClient();
   const { tab } = await getSheetMeta();
   const res = await sh.spreadsheets.values.get({
@@ -1816,6 +1817,11 @@ async function readBets() {
     range: `${tab}!A1:P500`,
     valueRenderOption: 'UNFORMATTED_VALUE',
   });
+  const readMs = Date.now() - t0;
+  if (readMs > 3000) {
+    console.warn(`⚠️ Sheets read traag: ${readMs}ms`);
+    tg(`⚠️ Google Sheets response time: ${readMs}ms (> 3s) — overweeg database migratie`).catch(() => {});
+  }
   const data = res.data.values || [];
 
   const bets = [];

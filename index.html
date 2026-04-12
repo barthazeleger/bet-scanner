@@ -2350,26 +2350,34 @@ function filterLive() {
   const onlyLive = document.getElementById('liveOnly').checked;
   const onlyMine = document.getElementById('myBetsOnly').checked;
   const grid = document.getElementById('live-grid');
-  // Map: team name (lower) → open bet object
-  const myBetsMap = new Map();
-  if (betData) {
-    (betData.bets||[]).filter(b => b.uitkomst === 'Open').forEach(b => {
-      b.wedstrijd.split(' vs ').forEach(t => myBetsMap.set(t.trim().toLowerCase(), b));
-    });
+  // Map: wedstrijd → bet object (beide teams)
+  const myBetsList = betData ? (betData.bets||[]).filter(b => b.uitkomst === 'Open') : [];
+
+  function matchesBet(ev) {
+    const h = ev.home.toLowerCase(), a = ev.away.toLowerCase();
+    for (const b of myBetsList) {
+      const parts = b.wedstrijd.split(' vs ').map(t => t.trim().toLowerCase());
+      if (parts.length < 2) continue;
+      // Beide teams moeten matchen (home→home, away→away of omgekeerd)
+      const homeMatch = h.includes(parts[0]) || parts[0].includes(h.split(' ').pop());
+      const awayMatch = a.includes(parts[1]) || parts[1].includes(a.split(' ').pop());
+      const homeMatchR = h.includes(parts[1]) || parts[1].includes(h.split(' ').pop());
+      const awayMatchR = a.includes(parts[0]) || parts[0].includes(a.split(' ').pop());
+      if ((homeMatch && awayMatch) || (homeMatchR && awayMatchR)) return b;
+    }
+    return null;
   }
-  const myTeams = new Set(myBetsMap.keys());
+
+  // Legacy map voor bet lookup per team (voor cards)
+  const myBetsMap = new Map();
+  myBetsList.forEach(b => {
+    b.wedstrijd.split(' vs ').forEach(t => myBetsMap.set(t.trim().toLowerCase(), b));
+  });
 
   let evts = [...liveEvts];
   if (onlyLive) evts = evts.filter(e => e.live);
   if (onlyMine) {
-    // Fuzzy matching net als bij recente bets
-    evts = evts.filter(e => {
-      const h = e.home.toLowerCase(), a = e.away.toLowerCase();
-      for (const [t] of myTeams.entries()) {
-        if (h.includes(t) || t.includes(h.split(' ').pop()) || a.includes(t) || t.includes(a.split(' ').pop())) return true;
-      }
-      return false;
-    });
+    evts = evts.filter(e => matchesBet(e));
   }
 
   // Sorteer: live wedstrijden bovenaan, daarna op starttijd (vroegst eerst)
