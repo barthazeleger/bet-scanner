@@ -3424,7 +3424,7 @@ function scheduleDailyScan() {
 function scheduleDailyResultsCheck() {
   const now    = new Date();
   const target = new Date(now);
-  target.setHours(9, 3, 0, 0); // 09:03 (lichte offset om :00 piek te vermijden)
+  target.setHours(6, 0, 0, 0); // 06:00 — resultaten + push bij het opstaan
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
   const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
