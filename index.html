@@ -846,7 +846,7 @@ nav::-webkit-scrollbar { display: none; }
         <input type="checkbox" id="liveAutoRefresh" checked onchange="toggleLiveAutoRefresh()">
         <span class="sw-track"></span>
       </label>
-      <span>Auto-refresh (30s)</span>
+      <span>Auto-refresh (10s)</span>
     </div>
     <span id="live-info" style="font-size:12px;color:var(--muted)"></span>
   </div>
@@ -2418,23 +2418,18 @@ function checkBetNotifications(events) {
 }
 
 let liveAutoTimer = null;
-let liveFirstLoad = true;
 
 async function fetchLive() {
   document.getElementById('live-info').textContent = 'Laden...';
   try {
-    // Eerste keer: api-football (rijke data). Daarna: ESPN (gratis auto-refresh)
-    const url = liveFirstLoad ? '/api/live-scores' : '/api/live-poll';
-    const d = await api(url).then(r => r?.json());
+    // ESPN als enige bron — gratis, onbeperkt, geen duplicaten
+    const d = await api('/api/live-poll').then(r => r?.json());
     if (!d) return;
     liveEvts = d.events || [];
-    liveFirstLoad = false;
     const lc = d.liveCount ?? liveEvts.filter(e=>e.live).length;
-    const src = url.includes('poll') ? 'ESPN' : 'api-football';
-    document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal • ${src}`;
+    document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal`;
     checkBetNotifications(liveEvts);
     filterLive();
-    // Start auto-refresh als aanstaat
     if (document.getElementById('liveAutoRefresh')?.checked) startLiveAutoRefresh();
   } catch {
     document.getElementById('live-info').textContent = 'Fout bij ophalen';
@@ -2444,37 +2439,17 @@ async function fetchLive() {
 function startLiveAutoRefresh() {
   stopLiveAutoRefresh();
   liveAutoTimer = setInterval(async () => {
-    // Alleen refreshen als we op de live tab zitten
     if (!document.getElementById('page-live')?.classList.contains('active')) return;
     try {
       const d = await api('/api/live-poll').then(r => r?.json());
       if (!d) return;
-      const espnEvts = d.events || [];
-      // Merge: update bestaande events met ESPN data, behoud events die ESPN niet dekt
-      const espnMap = new Map();
-      espnEvts.forEach(e => {
-        espnMap.set(e.home.toLowerCase(), e);
-        espnMap.set(e.away.toLowerCase(), e);
-      });
-      liveEvts = liveEvts.map(existing => {
-        const match = espnMap.get(existing.home.toLowerCase()) || espnMap.get(existing.away.toLowerCase());
-        if (match) {
-          // Update scores + status van ESPN, behoud api-football metadata
-          espnMap.delete(match.home.toLowerCase());
-          espnMap.delete(match.away.toLowerCase());
-          return { ...existing, scoreH: match.scoreH, scoreA: match.scoreA, minute: match.minute, live: match.live, finished: match.finished };
-        }
-        return existing; // behoud api-football data voor competities die ESPN niet dekt
-      });
-      // Voeg nieuwe ESPN events toe die niet in api-football zaten
-      const seen = new Set(liveEvts.map(e => e.home.toLowerCase()));
-      espnEvts.forEach(e => { if (!seen.has(e.home.toLowerCase())) liveEvts.push(e); });
+      liveEvts = d.events || [];
       const lc = liveEvts.filter(e=>e.live).length;
-      document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal • auto`;
+      document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal`;
       checkBetNotifications(liveEvts);
       filterLive();
     } catch {}
-  }, 30000);
+  }, 10000);
 }
 
 function stopLiveAutoRefresh() {
