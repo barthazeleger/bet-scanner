@@ -16,7 +16,7 @@ const ADMIN_EMAIL  = (process.env.ADMIN_EMAIL || '').toLowerCase();
 const ADMIN_PASSW  = process.env.ADMIN_PASSWORD || '';
 const USER_TAB     = 'Users';
 
-// Routes that don't require authentication
+// Routes that don't require authentication (full paths)
 const PUBLIC_PATHS = new Set(['/api/status', '/api/auth/login', '/api/auth/register']);
 
 // JWT middleware
@@ -35,7 +35,9 @@ function requireAdmin(req, res, next) {
 }
 
 // Apply JWT auth to all /api/* routes except public ones
-app.use('/api', (req, res, next) => {
+// Note: use req.path (full path), NOT inside app.use('/api') which strips prefix
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
   if (PUBLIC_PATHS.has(req.path)) return next();
   requireAuth(req, res, next);
 });
