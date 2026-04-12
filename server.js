@@ -2634,6 +2634,43 @@ app.get('/api/check-results', async (req, res) => {
 });
 
 // Live scores via api-football
+// Lightweight live poll via ESPN (gratis, onbeperkt — voor auto-refresh)
+app.get('/api/live-poll', async (req, res) => {
+  try {
+    const espnGet = url => fetch(url, { headers: { Accept: 'application/json' } }).then(r => r.json()).catch(() => ({}));
+    const leagues = [
+      'eng.1','eng.2','esp.1','ger.1','ita.1','fra.1','ned.1','por.1','tur.1',
+      'uefa.champions','uefa.europa','bel.1','sco.1'
+    ];
+    const raw = await Promise.all(leagues.map(async code => {
+      const d = await espnGet(`https://site.api.espn.com/apis/site/v2/sports/soccer/${code}/scoreboard`);
+      return (d.events || []).map(ev => {
+        const comp = ev.competitions?.[0];
+        const home = comp?.competitors?.find(c => c.homeAway === 'home');
+        const away = comp?.competitors?.find(c => c.homeAway === 'away');
+        const status = ev.status?.type;
+        const clock = ev.status?.displayClock || '';
+        const detail = status?.shortDetail || '';
+        const isLive = status?.state === 'in' || detail.match(/^(1st|2nd|HT|Half|ET)/i);
+        const isFT = status?.completed || false;
+        if (!home || !away) return null;
+        return {
+          id: ev.id, home: home.team?.displayName||'', away: away.team?.displayName||'',
+          homeLogo: home.team?.logo||'', awayLogo: away.team?.logo||'',
+          scoreH: parseInt(home.score||'0'), scoreA: parseInt(away.score||'0'),
+          minute: isLive ? (detail.match(/^(HT|Half)/i) ? 'HT' : clock.replace(/\s/g,'')+"'") : isFT ? 'FT' : '',
+          live: isLive, finished: isFT,
+          league: ev.season?.type?.name || code,
+          startTime: new Date(ev.date).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' }),
+        };
+      }).filter(Boolean);
+    }));
+    const events = raw.flat();
+    res.json({ events, liveCount: events.filter(e => e.live).length, ts: Date.now() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Live scores via api-football (rijkere data, kost API calls — voor eerste load + details)
 app.get('/api/live-scores', async (req, res) => {
   try {
     const knownLeagueIds = new Set(AF_FOOTBALL_LEAGUES.map(l => l.id));
