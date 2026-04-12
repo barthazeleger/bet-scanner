@@ -417,7 +417,7 @@ const CURRENT_SEASON = new Date().getMonth() < 7
   ? new Date().getFullYear() - 1   // april 2026 → season 2025
   : new Date().getFullYear();
 
-// Voetbal competities via api-football.com (league ID, ESPN code, thuisvoordeel)
+// Voetbal competities via api-football.com (league ID, thuisvoordeel)
 const AF_FOOTBALL_LEAGUES = [
   // ── Europa — Tier 1 ────────────────────────────────────────────────────────
   { id:39,  key:'epl',          name:'Premier League',      ha:0.05, season:CURRENT_SEASON },
@@ -467,8 +467,7 @@ const AF_FOOTBALL_LEAGUES = [
   { id:98,  key:'j1league',     name:'J1 League',           ha:0.04, season:new Date().getFullYear() },
 ];
 
-// ESPN standings cache
-const espnStandings = {};
+// (ESPN standings removed — api-football standings used exclusively)
 
 // ── LAST PICKS (in-memory voor analyse tab) ──────────────────────────────────
 let lastPrematchPicks = [];
@@ -676,26 +675,7 @@ function analyseTotal(bookmakers, outcomeName, point) {
   return { best, avgIP: prices.length ? prices.reduce((s,p)=>s+1/p,0)/prices.length : 0 };
 }
 
-// ESPN standings ophalen voor positie-informatie (gecached per sessie)
-async function fetchEspnStandings(espnCode) {
-  if (!espnCode) return {};
-  if (espnStandings[espnCode]) return espnStandings[espnCode];
-  try {
-    const url = `https://site.api.espn.com/apis/v2/sports/soccer/${espnCode}/standings`;
-    const d   = await fetch(url, { headers: { Accept:'application/json' } }).then(r=>r.json()).catch(()=>({}));
-    const map = {};
-    for (const entry of (d.standings?.entries || [])) {
-      const name = entry.team?.displayName || '';
-      const rank = entry.stats?.find(s => s.name==='rank')?.value
-                || entry.stats?.find(s => s.name==='playoffSeed')?.value
-                || 0;
-      const pts  = entry.stats?.find(s => s.name==='points')?.value || 0;
-      if (name) map[name.toLowerCase()] = { rank: +rank, pts: +pts };
-    }
-    espnStandings[espnCode] = map;
-    return map;
-  } catch { return {}; }
-}
+// (fetchEspnStandings removed — api-football standings provide rank/form/goals)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // API-SPORTS.IO ENRICHMENT — vorm, H2H, blessures, scheidsrechter, team-stats
@@ -812,12 +792,21 @@ async function enrichWithApiSports(emit) {
           const all = entry.all;
           if (!nm || !all) continue;
           const played = all.played || 1;
+          const home = entry.home;
+          const away = entry.away;
+          const homePlayed = home?.played || 1;
+          const awayPlayed = away?.played || 1;
           statsMap[nm] = {
             form:         entry.form || '',
             goalsFor:     +(all.goals?.for  / played).toFixed(2),
             goalsAgainst: +(all.goals?.against / played).toFixed(2),
             teamId:       entry.team?.id,
             rank:         entry.rank || 0,
+            // Home/away splits for split adjustment
+            homeGPG:      +(home?.goals?.for / homePlayed).toFixed(2),
+            homeGAPG:     +(home?.goals?.against / homePlayed).toFixed(2),
+            awayGPG:      +(away?.goals?.for / awayPlayed).toFixed(2),
+            awayGAPG:     +(away?.goals?.against / awayPlayed).toFixed(2),
           };
         }
       } else {
@@ -922,8 +911,46 @@ async function fetchH2H(homeId, awayId) {
   } catch { return null; }
 }
 
+// ── Team season statistics (for O/U refinement) ─────────────────────────────
+// Cached per scan session. Only fetched for candidate fixtures (post odds-filter).
+const teamStatsCache = {}; // key = `${teamId}-${leagueId}-${season}`
+
+async function fetchTeamStats(teamId, leagueId, season) {
+  if (!AF_KEY || !teamId || !leagueId) return null;
+  const cacheKey = `${teamId}-${leagueId}-${season}`;
+  if (teamStatsCache[cacheKey]) return teamStatsCache[cacheKey];
+  try {
+    const data = await afGet('v3.football.api-sports.io', '/teams/statistics', {
+      team: teamId, league: leagueId, season
+    });
+    // data is a single object (not array) — afGet returns response.response which
+    // for this endpoint is an object, not array. Handle both cases.
+    const stats = Array.isArray(data) ? data[0] : data;
+    if (!stats) return null;
+    const result = {
+      goalsForAvg:     parseFloat(stats.goals?.for?.average?.total) || 0,
+      goalsAgainstAvg: parseFloat(stats.goals?.against?.average?.total) || 0,
+      goalsForHomeAvg: parseFloat(stats.goals?.for?.average?.home) || 0,
+      goalsAgainstAwayAvg: parseFloat(stats.goals?.against?.average?.away) || 0,
+      cleanSheet:      stats.clean_sheet?.total || 0,
+      cleanSheetPct:   0,
+      failedToScore:   stats.failed_to_score?.total || 0,
+      failedToScorePct: 0,
+      played:          0,
+    };
+    // Calculate percentages
+    const played = (stats.fixtures?.played?.total) || 1;
+    result.played = played;
+    result.cleanSheetPct = +(result.cleanSheet / played).toFixed(3);
+    result.failedToScorePct = +(result.failedToScore / played).toFixed(3);
+    teamStatsCache[cacheKey] = result;
+    await sleep(100);
+    return result;
+  } catch { return null; }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// PREMATCH SCAN — The Odds API + ESPN
+// PREMATCH SCAN — api-football.com
 // ═══════════════════════════════════════════════════════════════════════════════
 async function runPrematch(emit) {
   if (!AF_KEY) {
@@ -933,16 +960,13 @@ async function runPrematch(emit) {
 
   emit({ log: `🎯 Prematch scan — api-football.com (${AF_FOOTBALL_LEAGUES.length} competities, bet365 odds, lineups, predictions)` });
 
-  // ── STAP 1: ESPN standings parallel ─────────────────────────────────────
-  emit({ log: '📊 ESPN standings ophalen...' });
-  const standingsCache = {};
-  await Promise.all(AF_FOOTBALL_LEAGUES.filter(l => l.espn).map(async l => {
-    standingsCache[l.key] = await fetchEspnStandings(l.espn);
-  }));
-  emit({ log: `✅ Standings geladen (${Object.keys(standingsCache).length} competities)` });
+  // ── STAP 1: (ESPN removed — standings komen via enrichWithApiSports) ────
 
   // ── STAP 2: Team stats, blessures, scheidsrechters ───────────────────────
   h2hCallsThisScan = 0;
+  // Clear team stats cache for fresh scan
+  for (const k of Object.keys(teamStatsCache)) delete teamStatsCache[k];
+  let teamStatsCalls = 0;
   await enrichWithApiSports(emit);
 
   // ── Calibratie ───────────────────────────────────────────────────────────
@@ -973,7 +997,6 @@ async function runPrematch(emit) {
       emit({ log: `✅ ${league.name}: ${fixtures.length} wedstrijd(en)` });
       totalEvents += fixtures.length;
 
-      const standings = standingsCache[league.key] || {};
       const afStats   = afCache.teamStats[league.key] || {};
       const afInj     = afCache.injuries[league.key]  || {};
 
@@ -1045,27 +1068,38 @@ async function runPrematch(emit) {
           }
         }
 
-        // ── ESPN positie-aanpassing ────────────────────────────────────
-        let posAdj = 0, posStr = '';
-        if (league.espn && Object.keys(standings).length > 0) {
-          const hmSt = standings[hm.toLowerCase()];
-          const awSt = standings[aw.toLowerCase()];
-          if (hmSt && awSt) {
-            posAdj = Math.max(-0.06, Math.min(0.06, (awSt.rank - hmSt.rank) * 0.003));
-            posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
-          }
-        }
-
-        const ha = league.ha || 0;
-        const adjHome = Math.min(0.88, fp.home + ha + posAdj + predAdj + lineupPenalty.home);
-        const adjAway = Math.max(0.08, fp.away - ha * 0.5 - posAdj * 0.5 - predAdj * 0.5 + lineupPenalty.away);
-        const adjDraw = fp.draw && fp.draw > 0.05 ? fp.draw - posAdj * 0.3 : null;
-
         // ── api-football.com stats: vorm, blessures, scheidsrechter ───
         const hmKey = hm.toLowerCase(), awKey = aw.toLowerCase();
         const hmSt  = afStats[hmKey], awSt = afStats[awKey];
         const hmInj = afInj[hmKey] || [], awInj = afInj[awKey] || [];
         const refInfo = afCache.referees[`${hmKey} vs ${awKey}`];
+
+        // ── Positie-aanpassing (api-football rank) ──────────────────
+        let posAdj = 0, posStr = '';
+        if (hmSt && awSt && hmSt.rank && awSt.rank) {
+          posAdj = Math.max(-0.06, Math.min(0.06, (awSt.rank - hmSt.rank) * 0.003));
+          posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
+        }
+
+        // ── Home/away split aanpassing ──────────────────────────────
+        let splitAdj = 0, splitNote = '';
+        if (hmSt && awSt && hmSt.homeGPG !== undefined && awSt.awayGPG !== undefined) {
+          // Home team: compare home goals-per-game vs overall GPG
+          const hmHomeBoost = hmSt.goalsFor > 0 ? (hmSt.homeGPG - hmSt.goalsFor) / hmSt.goalsFor : 0;
+          // Away team: compare away goals-against-per-game vs overall GA/game
+          const awAwayDefPenalty = awSt.goalsAgainst > 0 ? (awSt.awayGAPG - awSt.goalsAgainst) / awSt.goalsAgainst : 0;
+          // Positive hmHomeBoost = home team scores more at home than average → favor home
+          // Positive awAwayDefPenalty = away team concedes more away than average → favor home
+          splitAdj = Math.max(-0.04, Math.min(0.04, (hmHomeBoost + awAwayDefPenalty) * 0.06));
+          if (Math.abs(splitAdj) >= 0.005) {
+            splitNote = ` | H/A split: ${splitAdj>0?'+':''}${(splitAdj*100).toFixed(1)}%`;
+          }
+        }
+
+        const ha = league.ha || 0;
+        const adjHome = Math.min(0.88, fp.home + ha + posAdj + splitAdj + predAdj + lineupPenalty.home);
+        const adjAway = Math.max(0.08, fp.away - ha * 0.5 - posAdj * 0.5 - splitAdj * 0.5 - predAdj * 0.5 + lineupPenalty.away);
+        const adjDraw = fp.draw && fp.draw > 0.05 ? fp.draw - posAdj * 0.3 - splitAdj * 0.2 : null;
 
         let formAdj = 0, formNote = '';
         if (hmSt && awSt) {
@@ -1110,7 +1144,7 @@ async function runPrematch(emit) {
         const awayEdge = bA.price > 0 ? adjAway2 * bA.price - 1 : -1;
         const drawEdge = bD?.price > 0 ? (adjDraw||0) * bD.price - 1 : -1;
 
-        const sharedNotes = `${posStr}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}`;
+        const sharedNotes = `${posStr}${splitNote}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}`;
         const reasonH = `Consensus: ${(fp.home*100).toFixed(1)}%→${(adjHome2*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`;
         const reasonA = `Consensus: ${(fp.away*100).toFixed(1)}%→${(adjAway2*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`;
         const reasonD = `Gelijkspel: ${((fp.draw||0)*100).toFixed(1)}% | ${bD?.bookie}: ${bD?.price}${sharedNotes} | ${ko}`;
@@ -1129,16 +1163,49 @@ async function runPrematch(emit) {
         const under = analyseTotal(bookies, 'Under', 2.5);
         if (over.best.price >= 1.60 && over.avgIP > 0) {
           const totIP  = over.avgIP + under.avgIP;
-          const overP  = totIP > 0 ? over.avgIP / totIP : 0.5;
+          let   overP  = totIP > 0 ? over.avgIP / totIP : 0.5;
+
+          // ── Team stats O/U refinement (fetched only for candidate fixtures) ──
+          let tsNote = '';
+          if (hmSt?.teamId && awSt?.teamId && teamStatsCalls < 60) {
+            const [hmTS, awTS] = await Promise.all([
+              fetchTeamStats(hmSt.teamId, league.id, league.season),
+              fetchTeamStats(awSt.teamId, league.id, league.season),
+            ]);
+            teamStatsCalls += 2;
+            apiCallsUsed += 2;
+
+            if (hmTS && awTS) {
+              let tsAdj = 0;
+              // Both teams high-scoring (>1.5 goals/game each) → nudge Over up
+              if (hmTS.goalsForAvg > 1.5 && awTS.goalsForAvg > 1.5) {
+                tsAdj += Math.min(0.03, ((hmTS.goalsForAvg + awTS.goalsForAvg) - 3.0) * 0.02);
+              }
+              // High clean sheet rate (>40%) from either team → nudge Under up
+              if (hmTS.cleanSheetPct > 0.40) {
+                tsAdj -= Math.min(0.03, (hmTS.cleanSheetPct - 0.40) * 0.08);
+              }
+              if (awTS.cleanSheetPct > 0.40) {
+                tsAdj -= Math.min(0.03, (awTS.cleanSheetPct - 0.40) * 0.08);
+              }
+              // Cap total adjustment at +/-5%
+              tsAdj = Math.max(-0.05, Math.min(0.05, tsAdj));
+              if (Math.abs(tsAdj) >= 0.005) {
+                overP = Math.max(0.10, Math.min(0.90, overP + tsAdj));
+                tsNote = ` | TeamStats: ${tsAdj>0?'+':''}${(tsAdj*100).toFixed(1)}%`;
+              }
+            }
+          }
+
           const overEdge  = overP * over.best.price - 1;
           const underEdge = under.best.price > 0 ? (1-overP) * under.best.price - 1 : -1;
           if (overEdge >= MIN_EDGE)
             mkP(`${hm} vs ${aw}`, league.name, `⚽ Over 2.5 goals`, over.best.price,
-              `O/U consensus: ${(overP*100).toFixed(1)}% over | ${over.best.bookie}: ${over.best.price}${predNote} | ${ko}`,
+              `O/U consensus: ${(overP*100).toFixed(1)}% over | ${over.best.bookie}: ${over.best.price}${tsNote}${predNote} | ${ko}`,
               Math.round(overP*100), overEdge * 0.24 * (cm.over?.multiplier ?? 1), kickoffTime, over.best.bookie);
           if (underEdge >= MIN_EDGE && under.best.price >= 1.60)
             mkP(`${hm} vs ${aw}`, league.name, `🔒 Under 2.5 goals`, under.best.price,
-              `O/U consensus: ${((1-overP)*100).toFixed(1)}% under | ${under.best.bookie}: ${under.best.price} | ${ko}`,
+              `O/U consensus: ${((1-overP)*100).toFixed(1)}% under | ${under.best.bookie}: ${under.best.price}${tsNote} | ${ko}`,
               Math.round((1-overP)*100), underEdge * 0.22 * (cm.under?.multiplier ?? 1), kickoffTime, under.best.bookie);
         }
 
