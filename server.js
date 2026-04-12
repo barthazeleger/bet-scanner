@@ -27,7 +27,7 @@ if (DASHBOARD_PASSWORD) {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '3.2.0';
+const APP_VERSION    = '3.3.0';
 const TOKEN      = '8722733522:AAGuQiuENAwHYrW21wXD-W5drNAxJHSiYMw';
 const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -306,6 +306,10 @@ const AF_FOOTBALL_LEAGUES = [
   { id:203, key:'soccer_superlig',  name:'Süper Lig',          espn:'tur.1', ha:0.06, season:CURRENT_SEASON },
   { id:144, key:'soccer_jupiler',   name:'Jupiler Pro League', espn:null,    ha:0.05, season:CURRENT_SEASON },
   { id:40,  key:'soccer_championship',name:'Championship',     espn:'eng.2', ha:0.04, season:CURRENT_SEASON },
+  { id:41,  key:'soccer_league1',   name:'League One',         espn:'eng.3', ha:0.04, season:CURRENT_SEASON },
+  { id:42,  key:'soccer_league2',   name:'League Two',         espn:'eng.4', ha:0.04, season:CURRENT_SEASON },
+  { id:136, key:'soccer_serieb',    name:'Serie B',            espn:'ita.2', ha:0.04, season:CURRENT_SEASON },
+  { id:66,  key:'soccer_ligue2',    name:'Ligue 2',            espn:'fra.2', ha:0.04, season:CURRENT_SEASON },
   { id:179, key:'soccer_scottish',  name:'Scottish Prem',      espn:null,    ha:0.05, season:CURRENT_SEASON },
   { id:253, key:'soccer_mls',       name:'MLS',                espn:'usa.1', ha:0.04, season:new Date().getFullYear() },
   { id:71,  key:'soccer_brasileirao',name:'Brasileirao',       espn:null,    ha:0.06, season:new Date().getFullYear() },
@@ -1163,13 +1167,13 @@ async function runPrematch(emit) {
 // Wordt aangeroepen vanuit runPrematch (gecombineerde scan) én vanuit runLive (dagelijks).
 // ═══════════════════════════════════════════════════════════════════════════════
 async function getLivePicks(emit, calibEpBuckets = {}) {
-  const topLeagueIds = new Set([39,140,78,135,61,88,94,203,144,2,3,179,253]);
+  const topLeagueIds = new Set([39,140,78,135,61,88,94,203,144,2,3,179,253,40,41,42,136,66]);
   const { picks, combiPool, mkP } = buildPickFactory(1.50, calibEpBuckets);
 
   const liveFixtures = await afGet('v3.football.api-sports.io', '/fixtures', { live: 'all' });
   const candidates = liveFixtures
     .filter(f => topLeagueIds.has(f.league?.id))
-    .slice(0, 8);
+    .slice(0, 12);
 
   emit({ log: `📡 Live: ${liveFixtures.length} wedstrijden | ${candidates.length} topcompetities` });
   if (!candidates.length) return [];
@@ -1335,7 +1339,7 @@ async function readBets() {
   const { tab } = await getSheetMeta();
   const res = await sh.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `${tab}!A1:L500`,
+    range: `${tab}!A1:M500`,
   });
   const data = res.data.values || [];
 
@@ -1358,7 +1362,8 @@ async function readBets() {
       tip:       row[8]  || 'Main',
       uitkomst:  row[9]  || 'Open',
       wl:        pf(row[10]),
-      tijd:      row[11] || ''
+      tijd:      row[11] || '',
+      score:     parseInt(row[12]) || null
     });
   }
   return { bets, stats: calcStats(bets), _raw: data };
@@ -1377,7 +1382,7 @@ async function writeBet(bet) {
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [[
       bet.id, bet.datum, bet.sport, bet.wedstrijd, bet.markt,
-      bet.odds, bet.units, inzet, bet.tip||'Main', bet.uitkomst||'Open', wl, bet.tijd||''
+      bet.odds, bet.units, inzet, bet.tip||'Main', bet.uitkomst||'Open', wl, bet.tijd||'', bet.score||''
     ]] },
   });
 }
@@ -1390,7 +1395,8 @@ async function updateBetOutcome(id, uitkomst) {
   for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
     if (parseFloat(_raw[i]?.[0]) !== parseFloat(id)) continue;
     const odds  = parseFloat(_raw[i][5]) || 0;
-    const inzet = parseFloat(_raw[i][7]) || 0;
+    const units = parseFloat(_raw[i][6]) || 0;
+    const inzet = parseFloat(_raw[i][7]) || +(units * UNIT_EUR).toFixed(2);
     const wl    = uitkomst === 'W' ? +((odds-1)*inzet).toFixed(2) : uitkomst === 'L' ? -inzet : 0;
     const rowNum = i + 1; // 1-gebaseerd
     await sh.spreadsheets.values.update({
@@ -1963,6 +1969,12 @@ app.listen(PORT, () => {
   console.log(`   Bet tracker   : GET/POST /api/bets\n`);
   scheduleDailyResultsCheck();
   scheduleDailyScan();
+
+  // Herplan pre-kickoff checks voor alle open bets bij herstart
+  readBets().then(({ bets }) => {
+    bets.filter(b => b.uitkomst === 'Open' && b.tijd).forEach(b => schedulePreKickoffCheck(b).catch(() => {}));
+    console.log(`⏱  Pre-kickoff checks herplanned voor ${bets.filter(b=>b.uitkomst==='Open'&&b.tijd).length} open bet(s)`);
+  }).catch(() => {});
 
   // Keep-alive voor Render free tier (voorkomt slaapstand na 15 min)
   if (process.env.RENDER_EXTERNAL_HOSTNAME) {
