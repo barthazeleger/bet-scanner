@@ -505,6 +505,7 @@ nav::-webkit-scrollbar { display: none; }
     </div>
     <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-ghost btn-sm" id="btn-check" onclick="checkResults()">📡 Check uitslagen</button>
+      <button class="btn btn-ghost btn-sm" id="btn-recalc" onclick="recalcWL()">🔧 Herbereken W/L</button>
       <span id="check-msg" style="font-size:12px;color:var(--muted)"></span>
     </div>
   </div>
@@ -635,6 +636,14 @@ nav::-webkit-scrollbar { display: none; }
     <div class="chart-card">
       <div class="chart-title">⚽ Per sport</div>
       <div class="chart-wrap"><canvas id="ch-sports"></canvas></div>
+    </div>
+    <div class="chart-card" style="grid-column:span 2">
+      <div class="chart-title">📊 Hit rate per score (5–10) <span style="font-size:11px;color:var(--muted);font-weight:400">— hoe vaak converteert elk cijfer?</span></div>
+      <div id="score-analysis" style="padding:8px 0"></div>
+    </div>
+    <div class="chart-card" style="grid-column:span 2">
+      <div class="chart-title">🎲 Hit rate per markttype <span style="font-size:11px;color:var(--muted);font-weight:400">— welke markten presteren het best?</span></div>
+      <div id="market-analysis" style="padding:8px 0"></div>
     </div>
   </div>
 </section>
@@ -863,7 +872,21 @@ nav::-webkit-scrollbar { display: none; }
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.5</span><br>
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.6</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Score & markt analyse + bankroll fix</div>
+          <div style="color:var(--muted);line-height:1.7">📊 Score analyse — hit rate per confidence score (5–10) in data-tab<br>
+          🎯 Markt analyse — hit rate + €WL per markttype (Over/Under/Winnaar/Draw/BTTS)<br>
+          🔧 Herbereken W/L knop — corrigeert historische bets na inzet-bug<br>
+          💰 Bankroll fix — wl nu correct berekend als inzet-kolom leeg is</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.5</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
@@ -1659,6 +1682,83 @@ async function redrawCharts(data) {
     }
   });
 
+  // ── Score analyse (5-10) ──────────────────────────────────────────────────
+  const scoreBuckets = {};
+  bets.forEach(b => {
+    if (b.score == null || b.uitkomst === 'Open') return;
+    if (!scoreBuckets[b.score]) scoreBuckets[b.score] = { W: 0, L: 0, wl: 0 };
+    scoreBuckets[b.score][b.uitkomst === 'W' ? 'W' : 'L']++;
+    scoreBuckets[b.score].wl = +(scoreBuckets[b.score].wl + (b.wl || 0)).toFixed(2);
+  });
+  const scoreEl = document.getElementById('score-analysis');
+  const scoreKeys = [5,6,7,8,9,10].filter(s => scoreBuckets[s]);
+  if (scoreKeys.length) {
+    scoreEl.innerHTML = scoreKeys.map(s => {
+      const { W, L, wl } = scoreBuckets[s];
+      const total = W + L;
+      const hit = total > 0 ? Math.round(W / total * 100) : 0;
+      const barW = hit;
+      const col = hit >= 60 ? '#34d399' : hit >= 50 ? '#fbbf24' : '#f87171';
+      const wlStr = wl >= 0 ? '+€' + wl : '-€' + Math.abs(wl);
+      const wlCol = wl >= 0 ? '#34d399' : '#f87171';
+      return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div style="width:32px;text-align:right;font-weight:700;font-size:13px">${s}/10</div>
+        <div style="flex:1;background:var(--surface2);border-radius:6px;height:22px;position:relative;overflow:hidden">
+          <div style="width:${barW}%;background:${col}33;height:100%;border-radius:6px;transition:.3s"></div>
+          <div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 10px;font-size:12px;font-weight:600">${hit}% hit rate</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);white-space:nowrap">${W}W / ${L}L</div>
+        <div style="font-size:12px;font-weight:700;color:${wlCol};white-space:nowrap;min-width:52px;text-align:right">${wlStr}</div>
+      </div>`;
+    }).join('');
+  } else {
+    scoreEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Nog geen settled bets met score — log nieuwe picks via de scan.</div>';
+  }
+
+  // ── Markt analyse ─────────────────────────────────────────────────────────
+  const marketBuckets = {};
+  bets.forEach(b => {
+    if (b.uitkomst === 'Open') return;
+    // Categoriseer markt
+    const m = (b.markt || '').toLowerCase();
+    let cat = 'Overig';
+    if (m.includes('over') || m.includes('boven'))      cat = 'Over X goals';
+    else if (m.includes('under') || m.includes('onder')) cat = 'Under X goals';
+    else if (m.includes('wint') || m.includes('wins') || m.includes('victory')) cat = 'Wedstrijd winnaar';
+    else if (m.includes('gelijkspel') || m.includes('draw')) cat = 'Gelijkspel';
+    else if (m.includes('btts') || m.includes('beide'))  cat = 'Beide scoren';
+    if (!marketBuckets[cat]) marketBuckets[cat] = { W: 0, L: 0, wl: 0 };
+    marketBuckets[cat][b.uitkomst === 'W' ? 'W' : 'L']++;
+    marketBuckets[cat].wl = +(marketBuckets[cat].wl + (b.wl || 0)).toFixed(2);
+  });
+  const mktEl = document.getElementById('market-analysis');
+  const mktKeys = Object.keys(marketBuckets).sort((a,b) => {
+    const hitA = marketBuckets[a].W / (marketBuckets[a].W + marketBuckets[a].L) || 0;
+    const hitB = marketBuckets[b].W / (marketBuckets[b].W + marketBuckets[b].L) || 0;
+    return hitB - hitA;
+  });
+  if (mktKeys.length) {
+    mktEl.innerHTML = mktKeys.map(cat => {
+      const { W, L, wl } = marketBuckets[cat];
+      const total = W + L;
+      const hit = total > 0 ? Math.round(W / total * 100) : 0;
+      const col = hit >= 60 ? '#34d399' : hit >= 50 ? '#fbbf24' : '#f87171';
+      const wlStr = wl >= 0 ? '+€' + wl : '-€' + Math.abs(wl);
+      const wlCol = wl >= 0 ? '#34d399' : '#f87171';
+      return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div style="width:140px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${cat}</div>
+        <div style="flex:1;background:var(--surface2);border-radius:6px;height:22px;position:relative;overflow:hidden">
+          <div style="width:${hit}%;background:${col}33;height:100%;border-radius:6px;transition:.3s"></div>
+          <div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 10px;font-size:12px;font-weight:600">${hit}% hit rate</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);white-space:nowrap">${W}W / ${L}L · ${total} bets</div>
+        <div style="font-size:12px;font-weight:700;color:${wlCol};white-space:nowrap;min-width:52px;text-align:right">${wlStr}</div>
+      </div>`;
+    }).join('');
+  } else {
+    mktEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Nog geen settled bets om te analyseren.</div>';
+  }
+
   chartsDone = true;
 }
 
@@ -2194,6 +2294,19 @@ async function loadModelLog() {
 }
 
 // ── CHECK UITSLAGEN ───────────────────────────────────────────────────────────
+async function recalcWL() {
+  const btn = document.getElementById('btn-recalc');
+  const msg = document.getElementById('check-msg');
+  btn.disabled = true; btn.textContent = '⏳ Bezig...';
+  try {
+    const d = await fetch('/api/bets/recalculate', { method: 'POST' }).then(r => r.json());
+    if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
+    msg.textContent = `✓ ${d.fixed} W/L waarden herberekend`;
+    betData = d; renderStats(d.stats); renderBetsTable(d.bets);
+  } catch { msg.textContent = 'Netwerkfout'; }
+  finally { btn.disabled = false; btn.textContent = '🔧 Herbereken W/L'; }
+}
+
 async function checkResults() {
   const btn  = document.getElementById('btn-check');
   const msg  = document.getElementById('check-msg');

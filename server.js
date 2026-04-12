@@ -27,7 +27,7 @@ if (DASHBOARD_PASSWORD) {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '3.5.0';
+const APP_VERSION    = '3.6.0';
 const TOKEN      = '8722733522:AAGuQiuENAwHYrW21wXD-W5drNAxJHSiYMw';
 const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1592,6 +1592,37 @@ app.put('/api/bets/:id', async (req, res) => {
   try {
     await updateBetOutcome(req.params.id, req.body.uitkomst);
     res.json(await readBets());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// W/L herberekenen voor alle settled bets (fix na inzet-bug)
+app.post('/api/bets/recalculate', async (req, res) => {
+  try {
+    const sh = getSheetsClient();
+    const { tab } = await getSheetMeta();
+    const { bets, _raw } = await readBets();
+    let fixed = 0;
+    for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
+      const row = _raw[i];
+      if (!row || !row[0]) continue;
+      const uitkomst = row[9] || '';
+      if (uitkomst !== 'W' && uitkomst !== 'L') continue;
+      const odds  = parseFloat(row[5]) || 0;
+      const units = parseFloat(row[6]) || 0;
+      const inzet = parseFloat(row[7]) || +(units * UNIT_EUR).toFixed(2);
+      const wl    = uitkomst === 'W' ? +((odds-1)*inzet).toFixed(2) : -inzet;
+      const currentWl = parseFloat(row[10]) || 0;
+      if (Math.abs(currentWl - wl) < 0.01) continue; // al correct
+      await sh.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${tab}!K${i+1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[wl]] },
+      });
+      fixed++;
+      await sleep(80);
+    }
+    res.json({ fixed, ...(await readBets()) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
