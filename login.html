@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bet Scanner — Login</title>
+  <style>
+    :root {
+      --bg:       #f9fafb;
+      --surface:  #ffffff;
+      --surface2: #f3f4f6;
+      --border:   #e5e7eb;
+      --text:     #111827;
+      --muted:    #6b7280;
+      --accent:   #6366f1;
+      --green:    #10b981;
+      --red:      #ef4444;
+    }
+    [data-theme="dark"] {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #22263a;
+      --border:   #2d3148;
+      --text:     #e2e4ef;
+      --muted:    #8b90a7;
+      --accent:   #818cf8;
+      --green:    #34d399;
+      --red:      #f87171;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text);
+           min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+            padding: 40px; width: 100%; max-width: 400px; box-shadow: 0 4px 24px rgba(0,0,0,.08); }
+    .logo { text-align: center; margin-bottom: 32px; }
+    .logo-icon { font-size: 40px; margin-bottom: 8px; }
+    .logo-title { font-size: 22px; font-weight: 800; letter-spacing: -.5px; }
+    .logo-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+    .tabs { display: flex; gap: 4px; background: var(--surface2); border-radius: 10px;
+            padding: 4px; margin-bottom: 28px; }
+    .tab { flex: 1; padding: 8px; border: none; background: none; border-radius: 8px;
+           font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted); transition: .15s; }
+    .tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+    label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 6px; }
+    input { width: 100%; padding: 11px 14px; border: 1px solid var(--border); border-radius: 10px;
+            background: var(--surface2); color: var(--text); font-size: 14px; outline: none;
+            transition: border-color .15s; margin-bottom: 16px; }
+    input:focus { border-color: var(--accent); }
+    .btn { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none;
+           border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity .15s; margin-top: 4px; }
+    .btn:hover { opacity: .88; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .msg { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 16px;
+           display: none; text-align: center; }
+    .msg.err  { background: rgba(239,68,68,.1); color: var(--red); display: block; }
+    .msg.ok   { background: rgba(16,185,129,.1); color: var(--green); display: block; }
+    .dark-btn { position: fixed; top: 16px; right: 16px; background: var(--surface2); border: 1px solid var(--border);
+                border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 16px; color: var(--muted); }
+    .form { display: none; }
+    .form.active { display: block; }
+  </style>
+</head>
+<body>
+  <button class="dark-btn" onclick="toggleDark()">🌙</button>
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon">📡</div>
+      <div class="logo-title">Bet Scanner</div>
+      <div class="logo-sub">Picks &amp; Bet Tracker</div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('login')">Inloggen</button>
+      <button class="tab" onclick="switchTab('register')">Registreren</button>
+    </div>
+
+    <!-- Login -->
+    <div class="form active" id="f-login">
+      <label>E-mailadres</label>
+      <input type="email" id="l-email" placeholder="naam@domein.com" autocomplete="email">
+      <label>Wachtwoord</label>
+      <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+      <button class="btn" onclick="login()">Inloggen</button>
+      <div class="msg" id="l-msg"></div>
+    </div>
+
+    <!-- Register -->
+    <div class="form" id="f-register">
+      <label>E-mailadres</label>
+      <input type="email" id="r-email" placeholder="naam@domein.com" autocomplete="email">
+      <label>Wachtwoord <span style="font-weight:400">(min. 8 tekens)</span></label>
+      <input type="password" id="r-pass" placeholder="••••••••" autocomplete="new-password">
+      <label>Bevestig wachtwoord</label>
+      <input type="password" id="r-pass2" placeholder="••••••••" autocomplete="new-password" onkeydown="if(event.key==='Enter')register()">
+      <button class="btn" onclick="register()">Aanmelden</button>
+      <div class="msg" id="r-msg"></div>
+    </div>
+  </div>
+
+  <script>
+    // Redirect als al ingelogd
+    const tok = localStorage.getItem('bs_token');
+    if (tok) {
+      fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + tok } })
+        .then(r => r.ok ? (window.location.href = '/') : null)
+        .catch(() => {});
+    }
+
+    // Donker/licht thema
+    const html = document.documentElement;
+    const saved = localStorage.getItem('bs_theme');
+    if (saved) html.setAttribute('data-theme', saved);
+    function toggleDark() {
+      const isDark = html.getAttribute('data-theme') === 'dark';
+      html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+      localStorage.setItem('bs_theme', isDark ? 'light' : 'dark');
+    }
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach((t, i) => {
+        t.classList.toggle('active', (i === 0) === (tab === 'login'));
+      });
+      document.getElementById('f-login').classList.toggle('active', tab === 'login');
+      document.getElementById('f-register').classList.toggle('active', tab === 'register');
+    }
+
+    function showMsg(id, txt, type) {
+      const el = document.getElementById(id);
+      el.textContent = txt;
+      el.className = 'msg ' + type;
+    }
+
+    async function login() {
+      const btn   = document.querySelector('#f-login .btn');
+      const email = document.getElementById('l-email').value.trim();
+      const pass  = document.getElementById('l-pass').value;
+      if (!email || !pass) return showMsg('l-msg', 'Vul e-mail en wachtwoord in', 'err');
+      btn.disabled = true;
+      btn.textContent = 'Bezig...';
+      try {
+        const r = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password: pass })
+        });
+        const d = await r.json();
+        if (!r.ok) return showMsg('l-msg', d.error || 'Inloggen mislukt', 'err');
+        localStorage.setItem('bs_token', d.token);
+        localStorage.setItem('bs_user', JSON.stringify(d.user));
+        window.location.href = '/';
+      } catch { showMsg('l-msg', 'Verbindingsfout — probeer opnieuw', 'err'); }
+      finally { btn.disabled = false; btn.textContent = 'Inloggen'; }
+    }
+
+    async function register() {
+      const btn   = document.querySelector('#f-register .btn');
+      const email = document.getElementById('r-email').value.trim();
+      const pass  = document.getElementById('r-pass').value;
+      const pass2 = document.getElementById('r-pass2').value;
+      if (!email || !pass) return showMsg('r-msg', 'Vul e-mail en wachtwoord in', 'err');
+      if (pass !== pass2)  return showMsg('r-msg', 'Wachtwoorden komen niet overeen', 'err');
+      if (pass.length < 8) return showMsg('r-msg', 'Wachtwoord minimaal 8 tekens', 'err');
+      btn.disabled = true;
+      btn.textContent = 'Bezig...';
+      try {
+        const r = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password: pass })
+        });
+        const d = await r.json();
+        if (!r.ok) return showMsg('r-msg', d.error || 'Registratie mislukt', 'err');
+        showMsg('r-msg', '✅ ' + d.message, 'ok');
+      } catch { showMsg('r-msg', 'Verbindingsfout — probeer opnieuw', 'err'); }
+      finally { btn.disabled = false; btn.textContent = 'Aanmelden'; }
+    }
+  </script>
+</body>
+</html>

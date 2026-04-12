@@ -16,5 +16,9 @@ services:
         sync: false          # vul in via Render dashboard
       - key: GOOGLE_CREDENTIALS_JSON
         sync: false          # vul in via Render dashboard (volledige JSON als één regel)
-      - key: DASHBOARD_PASSWORD
-        sync: false          # kies zelf een wachtwoord
+      - key: JWT_SECRET
+        sync: false          # willekeurige lange string, bijv. 64 hex tekens
+      - key: ADMIN_EMAIL
+        sync: false          # jouw e-mailadres voor eerste login
+      - key: ADMIN_PASSWORD
+        sync: false          # jouw wachtwoord (minimaal 8 tekens)

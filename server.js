@@ -4,30 +4,46 @@ const express        = require('express');
 const path           = require('path');
 const fs             = require('fs');
 const { google }     = require('googleapis');
+const jwt            = require('jsonwebtoken');
+const bcrypt         = require('bcryptjs');
 
 const app = express();
 app.use(express.json());
 
-// ── WACHTWOORDBEVEILIGING ──────────────────────────────────────────────────────
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
-if (DASHBOARD_PASSWORD) {
-  app.use((req, res, next) => {
-    if (req.path === '/api/status') return next(); // keep-alive mag altijd
-    const auth = req.headers['authorization'] || '';
-    if (auth.startsWith('Basic ')) {
-      const decoded = Buffer.from(auth.slice(6), 'base64').toString();
-      const pass = decoded.split(':').slice(1).join(':'); // alles na eerste ':'
-      if (pass === DASHBOARD_PASSWORD) return next();
-    }
-    res.set('WWW-Authenticate', 'Basic realm="Bet Scanner"');
-    res.status(401).send('Unauthorized');
+// ── AUTH CONFIG ────────────────────────────────────────────────────────────────
+const JWT_SECRET   = process.env.JWT_SECRET || 'bet-scanner-dev-secret-change-in-prod';
+const ADMIN_EMAIL  = (process.env.ADMIN_EMAIL || '').toLowerCase();
+const ADMIN_PASSW  = process.env.ADMIN_PASSWORD || '';
+const USER_TAB     = 'Users';
+
+// Routes that don't require authentication
+const PUBLIC_PATHS = new Set(['/api/status', '/api/auth/login', '/api/auth/register']);
+
+// JWT middleware
+function requireAuth(req, res, next) {
+  const auth = req.headers['authorization'] || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Not authenticated' });
+  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
+  catch { return res.status(401).json({ error: 'Invalid or expired token' }); }
+}
+function requireAdmin(req, res, next) {
+  requireAuth(req, res, () => {
+    if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    next();
   });
 }
+
+// Apply JWT auth to all /api/* routes except public ones
+app.use('/api', (req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path)) return next();
+  requireAuth(req, res, next);
+});
 
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '3.6.0';
+const APP_VERSION    = '4.1.0';
 const TOKEN      = '8722733522:AAGuQiuENAwHYrW21wXD-W5drNAxJHSiYMw';
 const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -63,6 +79,113 @@ async function getSheetMeta() {
   _sheetTab  = s0?.title || 'Sheet1';
   _sheetGid  = s0?.sheetId ?? 0;
   return { tab: _sheetTab, gid: _sheetGid };
+}
+
+// ── USER MANAGEMENT (Google Sheets "Users" tab) ─────────────────────────────
+let _usersCache     = null;
+let _usersCacheAt   = 0;
+const USERS_TTL     = 5 * 60 * 1000; // 5 min
+
+function defaultSettings() {
+  return {
+    startBankroll: START_BANKROLL,
+    unitEur:       UNIT_EUR,
+    language:      'nl',
+    timezone:      'Europe/Amsterdam',
+    scanTimes:     [10],
+    scanEnabled:   true,
+  };
+}
+
+async function ensureUsersTab() {
+  const sh   = getSheetsClient();
+  const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const exists = meta.data.sheets?.some(s => s.properties?.title === USER_TAB);
+  if (!exists) {
+    await sh.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: [{ addSheet: { properties: { title: USER_TAB } } }] }
+    });
+    await sh.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `${USER_TAB}!A1:G1`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [['id','email','passwordHash','role','status','settings','createdAt']] }
+    });
+  }
+}
+
+async function loadUsers(force = false) {
+  if (!force && _usersCache && Date.now() - _usersCacheAt < USERS_TTL) return _usersCache;
+  try {
+    const sh  = getSheetsClient();
+    const res = await sh.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID, range: `${USER_TAB}!A2:G500`
+    });
+    const rows = (res.data.values || []).filter(r => r[0]);
+    _usersCache = rows.map(r => ({
+      id: r[0], email: (r[1]||'').toLowerCase(), passwordHash: r[2]||'',
+      role: r[3]||'user', status: r[4]||'pending',
+      settings: (() => { try { return { ...defaultSettings(), ...JSON.parse(r[5]||'{}') }; } catch { return defaultSettings(); } })(),
+      createdAt: r[6]||''
+    }));
+    _usersCacheAt = Date.now();
+    return _usersCache;
+  } catch { return _usersCache || []; }
+}
+
+async function saveUser(user) {
+  const sh   = getSheetsClient();
+  const users = await loadUsers(true);
+  const idx  = users.findIndex(u => u.id === user.id);
+  const row  = [
+    user.id, user.email, user.passwordHash, user.role, user.status,
+    JSON.stringify(user.settings || defaultSettings()), user.createdAt
+  ];
+  if (idx === -1) {
+    await sh.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID, range: `${USER_TAB}!A2`,
+      valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [row] }
+    });
+  } else {
+    await sh.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID, range: `${USER_TAB}!A${idx+2}:G${idx+2}`,
+      valueInputOption: 'RAW', requestBody: { values: [row] }
+    });
+  }
+  _usersCache = null;
+}
+
+async function seedAdminUser() {
+  if (!ADMIN_EMAIL || !ADMIN_PASSW) return;
+  try {
+    await ensureUsersTab();
+    const users = await loadUsers(true);
+    const exists = users.find(u => u.email === ADMIN_EMAIL);
+    if (!exists) {
+      const hash = await bcrypt.hash(ADMIN_PASSW, 10);
+      await saveUser({
+        id: crypto.randomUUID(), email: ADMIN_EMAIL, passwordHash: hash,
+        role: 'admin', status: 'approved',
+        settings: defaultSettings(), createdAt: new Date().toISOString()
+      });
+      console.log(`👤 Admin aangemaakt: ${ADMIN_EMAIL}`);
+    }
+  } catch (e) { console.error('seedAdminUser fout:', e.message); }
+}
+
+// Per-user scan scheduling
+const userScanTimers = {}; // userId → [timeout handles]
+
+function rescheduleUserScans(user) {
+  if (userScanTimers[user.id]) {
+    userScanTimers[user.id].forEach(h => clearTimeout(h));
+    delete userScanTimers[user.id];
+  }
+  if (!user?.settings?.scanEnabled) return;
+  const times = user.settings.scanTimes || [10];
+  userScanTimers[user.id] = times.map(h => scheduleScanAtHour(h));
 }
 
 // ── CALIBRATIE — leren van resultaten ────────────────────────────────────────
@@ -1342,7 +1465,7 @@ async function runLive(emit) {
 // BET TRACKER — GOOGLE SHEETS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function calcStats(bets) {
+function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
   const W     = bets.filter(b => b.uitkomst === 'W').length;
   const L     = bets.filter(b => b.uitkomst === 'L').length;
   const open  = bets.filter(b => b.uitkomst === 'Open').length;
@@ -1350,14 +1473,14 @@ function calcStats(bets) {
   const wlEur = bets.reduce((s, b) => s + (b.uitkomst !== 'Open' ? b.wl : 0), 0);
   const totalInzet = bets.filter(b => b.uitkomst !== 'Open').reduce((s, b) => s + b.inzet, 0);
   const roi   = totalInzet > 0 ? wlEur / totalInzet : 0;
-  const bankroll  = START_BANKROLL + wlEur;
+  const bankroll  = startBankroll + wlEur;
   const avgOdds   = total > 0 ? +(bets.reduce((s,b)=>s+b.odds,0)/total).toFixed(3) : 0;
   const avgUnits  = total > 0 ? +(bets.reduce((s,b)=>s+b.units,0)/total).toFixed(2) : 0;
   const strikeRate = (W+L) > 0 ? Math.round(W/(W+L)*100) : 0;
-  const winU  = +bets.filter(b=>b.uitkomst==='W').reduce((s,b)=>s+(b.wl/UNIT_EUR),0).toFixed(2);
-  const lossU = +bets.filter(b=>b.uitkomst==='L').reduce((s,b)=>s+(b.wl/UNIT_EUR),0).toFixed(2);
+  const winU  = +bets.filter(b=>b.uitkomst==='W').reduce((s,b)=>s+(b.wl/unitEur),0).toFixed(2);
+  const lossU = +bets.filter(b=>b.uitkomst==='L').reduce((s,b)=>s+(b.wl/unitEur),0).toFixed(2);
   return { total, W, L, open, wlEur: +wlEur.toFixed(2), roi: +roi.toFixed(4),
-           bankroll: +bankroll.toFixed(2), startBankroll: START_BANKROLL, avgOdds, avgUnits, strikeRate, winU, lossU };
+           bankroll: +bankroll.toFixed(2), startBankroll, avgOdds, avgUnits, strikeRate, winU, lossU };
 }
 
 async function readBets() {
@@ -1459,6 +1582,138 @@ async function deleteBet(id) {
 // EXPRESS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ── AUTH ROUTES ────────────────────────────────────────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'E-mail en wachtwoord verplicht' });
+    const users = await loadUsers();
+    const user  = users.find(u => u.email === email.toLowerCase());
+    if (!user)                        return res.status(401).json({ error: 'Onbekend e-mailadres' });
+    if (user.status === 'blocked')    return res.status(403).json({ error: 'Account geblokkeerd — neem contact op' });
+    if (user.status === 'pending')    return res.status(403).json({ error: 'Account wacht op goedkeuring' });
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'Onjuist wachtwoord' });
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, user: { id: user.id, email: user.email, role: user.role, settings: user.settings } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'E-mail en wachtwoord verplicht' });
+    if (password.length < 8)  return res.status(400).json({ error: 'Wachtwoord minimaal 8 tekens' });
+    await ensureUsersTab();
+    const users = await loadUsers(true);
+    if (users.find(u => u.email === email.toLowerCase()))
+      return res.status(409).json({ error: 'E-mailadres al in gebruik' });
+    const hash = await bcrypt.hash(password, 10);
+    await saveUser({
+      id: crypto.randomUUID(), email: email.toLowerCase(), passwordHash: hash,
+      role: 'user', status: 'pending',
+      settings: defaultSettings(), createdAt: new Date().toISOString()
+    });
+    tg(`🆕 Nieuwe registratie: ${email}\nGoedkeuren via Admin-panel`).catch(() => {});
+    res.json({ message: 'Registratie ontvangen — wacht op goedkeuring van admin' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const users = await loadUsers();
+    const user  = users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    res.json({ id: user.id, email: user.email, role: user.role, settings: user.settings });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── USER SETTINGS ──────────────────────────────────────────────────────────────
+app.get('/api/user/settings', async (req, res) => {
+  try {
+    const users = await loadUsers();
+    const user  = users.find(u => u.id === req.user.id);
+    res.json(user?.settings || defaultSettings());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/user/settings', async (req, res) => {
+  try {
+    const users = await loadUsers(true);
+    const user  = users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    const allowed = ['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled'];
+    allowed.forEach(k => { if (req.body[k] !== undefined) user.settings[k] = req.body[k]; });
+    await saveUser(user);
+    // Herplan scans als admin
+    if (user.role === 'admin') rescheduleUserScans(user);
+    res.json({ settings: user.settings });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/auth/password', async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Huidig en nieuw wachtwoord verplicht' });
+    if (newPassword.length < 8) return res.status(400).json({ error: 'Nieuw wachtwoord minimaal 8 tekens' });
+    const users = await loadUsers(true);
+    const user  = users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'Huidig wachtwoord onjuist' });
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    await saveUser(user);
+    res.json({ message: 'Wachtwoord gewijzigd' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── ADMIN ROUTES ───────────────────────────────────────────────────────────────
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const users = await loadUsers(true);
+    res.json(users.map(u => ({ id: u.id, email: u.email, role: u.role, status: u.status, createdAt: u.createdAt })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const users = await loadUsers(true);
+    const user  = users.find(u => u.id === req.params.id);
+    if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    if (req.body.status) user.status = req.body.status;
+    if (req.body.role)   user.role   = req.body.role;
+    await saveUser(user);
+    if (req.body.status === 'approved')
+      tg(`✅ Account goedgekeurd: ${user.email}`).catch(() => {});
+    res.json({ id: user.id, email: user.email, role: user.role, status: user.status });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const users = await loadUsers(true);
+    const idx   = users.findIndex(u => u.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    if (users[idx].email === req.user.email)
+      return res.status(400).json({ error: 'Je kunt je eigen account niet verwijderen' });
+    const sh = getSheetsClient();
+    await sh.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: [{ deleteDimension: {
+        range: { sheetId: await getUsersSheetGid(), dimension: 'ROWS', startIndex: idx + 1, endIndex: idx + 2 }
+      }}] }
+    });
+    _usersCache = null;
+    res.json({ deleted: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+async function getUsersSheetGid() {
+  const sh   = getSheetsClient();
+  const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  return meta.data.sheets?.find(s => s.properties?.title === USER_TAB)?.properties?.sheetId ?? 1;
+}
+
 // Prematch scan — SSE streaming (inclusief live check op moment van draaien)
 app.post('/api/prematch', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1486,7 +1741,15 @@ app.post('/api/live', (req, res) => {
 
 // Bets ophalen
 app.get('/api/bets', async (req, res) => {
-  try { res.json(await readBets()); }
+  try {
+    const { bets, _raw } = await readBets();
+    // Gebruik user-specifieke instellingen voor stats
+    const users = await loadUsers().catch(() => []);
+    const user  = users.find(u => u.id === req.user?.id);
+    const sb = user?.settings?.startBankroll ?? START_BANKROLL;
+    const ue = user?.settings?.unitEur       ?? UNIT_EUR;
+    res.json({ bets, stats: calcStats(bets, sb, ue), _raw });
+  }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2047,6 +2310,7 @@ app.listen(PORT, () => {
   console.log(`   Prematch scan : POST /api/prematch`);
   console.log(`   Live scan     : POST /api/live`);
   console.log(`   Bet tracker   : GET/POST /api/bets\n`);
+  seedAdminUser().catch(e => console.error('Seed admin fout:', e.message));
   scheduleDailyResultsCheck();
   scheduleDailyScan();
 
@@ -2065,27 +2329,36 @@ app.listen(PORT, () => {
 });
 
 // ── DAGELIJKSE PRE-MATCH SCAN (10:00 AM) ─────────────────────────────────────
-function scheduleDailyScan() {
+// Plan een scan op een bepaald uur (0-23); geeft de timeout handle terug
+function scheduleScanAtHour(hour) {
   const now    = new Date();
   const target = new Date(now);
-  target.setHours(10, 0, 0, 0);
+  target.setHours(hour, 0, 0, 0);
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
-  const hm = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit' });
-  console.log(`📡 Dagelijkse scan gepland om ${hm} (over ${Math.round(delay/60000)} min)`);
-
-  setTimeout(async () => {
-    console.log('📡 Dagelijkse pre-match scan gestart...');
+  const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit' });
+  console.log(`📡 Scan gepland om ${hm} (over ${Math.round(delay/60000)} min)`);
+  return setTimeout(async () => {
+    console.log(`📡 Scan om ${hour}:00 gestart...`);
     try {
-      const noopEmit = () => {};
-      await runPrematch(noopEmit);
-      console.log('📡 Dagelijkse scan klaar — picks gestuurd via Telegram');
+      await runPrematch(() => {});
+      console.log(`📡 Scan om ${hour}:00 klaar`);
     } catch (e) {
-      console.error('Dagelijkse scan fout:', e.message);
-      await tg(`⚠️ Dagelijkse scan mislukt: ${e.message}`).catch(() => {});
+      console.error(`Scan om ${hour}:00 fout:`, e.message);
+      await tg(`⚠️ Scan om ${hour}:00 mislukt: ${e.message}`).catch(() => {});
     }
-    scheduleDailyScan(); // plan morgen
+    // Herplan dezelfde scan voor morgen
+    scheduleScanAtHour(hour);
   }, delay);
+}
+
+function scheduleDailyScan() {
+  // Laad admin settings voor scan-tijden; fallback naar 10:00
+  loadUsers().then(users => {
+    const admin = users.find(u => u.role === 'admin') || { settings: defaultSettings() };
+    const times = admin.settings?.scanTimes?.length ? admin.settings.scanTimes : [10];
+    times.forEach(h => scheduleScanAtHour(h));
+  }).catch(() => scheduleScanAtHour(10));
 }
 
 // ── DAGELIJKSE UITSLAG CHECK (09:03 AM) ──────────────────────────────────────

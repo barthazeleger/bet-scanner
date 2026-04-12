@@ -348,7 +348,93 @@ nav::-webkit-scrollbar { display: none; }
     </div>
   </div>
   <button id="darkBtn" onclick="toggleDark()">🌙</button>
+  <button id="userBtn" onclick="openProfileModal()" title="Profiel & instellingen"
+          style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 10px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px">
+    👤 <span id="user-email" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  </button>
 </header>
+
+<!-- ══ PROFILE MODAL ════════════════════════════════════════════════════════ -->
+<div id="profile-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:none;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border-radius:16px;padding:32px;width:90%;max-width:480px;max-height:85vh;overflow-y:auto;position:relative">
+    <button onclick="closeProfileModal()" style="position:absolute;top:16px;right:16px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted)">×</button>
+    <div style="font-size:18px;font-weight:700;margin-bottom:24px">⚙️ Instellingen</div>
+
+    <!-- Account -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">Account</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px">Ingelogd als <strong id="profile-email" style="color:var(--text)"></strong></div>
+
+    <!-- Bankroll & unit -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">Bankroll & inzet</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Start bankroll (€)</label>
+        <input id="s-start-bankroll" type="number" min="10" max="100000" step="10"
+               style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:13px">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Unit grootte (€)</label>
+        <input id="s-unit-eur" type="number" min="1" max="1000" step="1"
+               style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:13px">
+      </div>
+    </div>
+
+    <!-- Scan tijden -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">Dagelijkse scan-tijden</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Selecteer uren waarop de scan automatisch draait en picks naar Telegram stuurt</div>
+    <div id="scan-time-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <!-- Gegenereerd door JS -->
+    </div>
+    <div style="margin-bottom:20px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="s-scan-enabled" style="width:16px;height:16px;accent-color:var(--accent)">
+        Automatische scans ingeschakeld
+      </label>
+    </div>
+
+    <!-- Taal -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">Taal & regio</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Taal</label>
+        <select id="s-language" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:13px">
+          <option value="nl">🇳🇱 Nederlands</option>
+          <option value="en">🇬🇧 English</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Tijdzone</label>
+        <select id="s-timezone" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:13px">
+          <option value="Europe/Amsterdam">Amsterdam (UTC+1/+2)</option>
+          <option value="Europe/London">London (UTC/+1)</option>
+          <option value="Europe/Berlin">Berlijn (UTC+1/+2)</option>
+          <option value="America/New_York">New York (UTC-5/-4)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Wachtwoord wijzigen -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">Wachtwoord wijzigen</div>
+    <input id="s-cur-pw" type="password" placeholder="Huidig wachtwoord" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:13px;margin-bottom:8px">
+    <input id="s-new-pw" type="password" placeholder="Nieuw wachtwoord (min. 8 tekens)" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:13px;margin-bottom:16px">
+    <button onclick="changePassword()" style="width:100%;padding:9px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--text);margin-bottom:20px">Wachtwoord wijzigen</button>
+
+    <div id="profile-msg" style="font-size:13px;text-align:center;padding:8px;border-radius:8px;display:none;margin-bottom:16px"></div>
+
+    <div style="display:flex;gap:10px">
+      <button onclick="saveSettings()" style="flex:1;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">Opslaan</button>
+      <button onclick="logout()" style="padding:10px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;color:var(--muted)">Uitloggen</button>
+    </div>
+
+    <!-- Admin panel -->
+    <div class="admin-only" style="display:none;margin-top:28px;border-top:1px solid var(--border);padding-top:24px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px">🔑 Admin — Gebruikers</div>
+      <div id="admin-users-list" style="font-size:13px">
+        <div style="color:var(--muted)">Laden...</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div id="api-warning" style="display:none;background:#fef3c7;border-bottom:1px solid #f59e0b;padding:8px 20px;font-size:13px;color:#92400e;align-items:center;gap:8px;">
   <span>⚠️</span>
@@ -872,7 +958,22 @@ nav::-webkit-scrollbar { display: none; }
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.6</span><br>
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v4.1</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Login systeem + account instellingen</div>
+          <div style="color:var(--muted);line-height:1.7">🔐 Eigen login pagina met JWT authenticatie<br>
+          👤 Account-instellingen: bankroll, unit, tijdzone, taal<br>
+          ⏰ Configureerbare scan-tijden per account (10:00, 16:00, 20:00, ...)<br>
+          🔑 Admin panel: gebruikers beheren, goedkeuren en blokkeren<br>
+          📝 Registratieformulier met Telegram-notificatie aan admin</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.6</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
@@ -1189,6 +1290,50 @@ nav::-webkit-scrollbar { display: none; }
 </div>
 
 <script>
+// ── AUTH ─────────────────────────────────────────────────────────────────────
+let currentUser = null;
+(function checkAuth() {
+  const tok = localStorage.getItem('bs_token');
+  if (!tok) { window.location.href = '/login.html'; return; }
+  // Verify token once on load
+  fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + tok } })
+    .then(r => { if (!r.ok) { localStorage.removeItem('bs_token'); window.location.href = '/login.html'; return null; } return r.json(); })
+    .then(u => { if (u) { currentUser = u; initUserUI(); } })
+    .catch(() => {}); // network error → stay on page
+})();
+
+function getToken() { return localStorage.getItem('bs_token') || ''; }
+
+// Authenticated fetch — automatically redirects to /login on 401
+async function api(url, opts = {}) {
+  opts.headers = { ...(opts.headers || {}), 'Authorization': 'Bearer ' + getToken() };
+  if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  const r = await fetch(url, opts);
+  if (r.status === 401) { localStorage.removeItem('bs_token'); window.location.href = '/login.html'; return null; }
+  return r;
+}
+
+function logout() {
+  localStorage.removeItem('bs_token');
+  localStorage.removeItem('bs_user');
+  window.location.href = '/login.html';
+}
+
+function initUserUI() {
+  if (!currentUser) return;
+  const emailEl = document.getElementById('user-email');
+  if (emailEl) emailEl.textContent = currentUser.email;
+  // Admin panel tonen
+  if (currentUser.role === 'admin') {
+    document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
+  }
+  // Laad gebruikersinstellingen
+  loadUserSettings();
+}
+
 // ── THEME ────────────────────────────────────────────────────────────────────
 const html = document.documentElement;
 const theme = localStorage.getItem('theme') || 'light';
@@ -1233,8 +1378,9 @@ function doScan(type) {
   logEl.innerHTML = '';
   pEl.innerHTML   = '';
 
-  fetch('/api/' + type, { method: 'POST' })
+  api('/api/' + type, { method: 'POST' })
     .then(res => {
+      if (!res) return;
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -1348,7 +1494,8 @@ let formOpen = false;
 let chartsDone = false;
 
 async function loadBets() {
-  const d = await fetch('/api/bets').then(r => r.json());
+  const d = await api('/api/bets').then(r => r?.json());
+  if (!d) return null;
   betData = d;
   renderStats(d.stats);
   renderBetsTable(d.bets);
@@ -1540,16 +1687,16 @@ function renderBetsTable(bets) {
 }
 
 function setOutcome(id, v) {
-  fetch('/api/bets/' + id, {
+  api('/api/bets/' + id, {
     method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ uitkomst: v })
-  }).then(r => r.json()).then(d => { betData = d; renderStats(d.stats); renderBetsTable(d.bets); });
+  }).then(r => r?.json()).then(d => { if(d){ betData = d; renderStats(d.stats); renderBetsTable(d.bets); } });
 }
 
 function removeBet(id) {
   if (!confirm('Bet #' + id + ' verwijderen?')) return;
-  fetch('/api/bets/' + id, { method: 'DELETE' })
-    .then(r => r.json())
-    .then(d => { betData = d; renderStats(d.stats); renderBetsTable(d.bets); });
+  api('/api/bets/' + id, { method: 'DELETE' })
+    .then(r => r?.json())
+    .then(d => { if(d){ betData = d; renderStats(d.stats); renderBetsTable(d.bets); } });
 }
 
 function addBet() {
@@ -1561,7 +1708,7 @@ function addBet() {
   const today = new Date();
   const d = document.getElementById('f-datum').value ||
     pad(today.getDate()) + '-' + pad(today.getMonth()+1) + '-' + today.getFullYear();
-  fetch('/api/bets', {
+  api('/api/bets', {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
       datum: d,
@@ -1573,7 +1720,8 @@ function addBet() {
       uitkomst: document.getElementById('f-uitkomst').value,
       tijd: document.getElementById('f-tijd').value || null
     })
-  }).then(r => r.json()).then(d => {
+  }).then(r => r?.json()).then(d => {
+    if(!d) return;
     betData = d; renderStats(d.stats); renderBetsTable(d.bets);
     clearForm();
     showMsg('form-msg', '✅ Bet toegevoegd!', 'green');
@@ -1592,13 +1740,14 @@ async function backfillTimes() {
   btn.disabled = true; btn.textContent = '⏳ Bezig...';
   const msg = document.getElementById('backfill-msg');
   try {
-    const r = await fetch('/api/backfill-times', { method: 'POST' });
+    const r = await api('/api/backfill-times', { method: 'POST' });
+    if (!r) return;
     const d = await r.json();
     if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
     const updated = d.results.filter(r => r.status === 'bijgewerkt');
     const notFound = d.results.filter(r => r.status === 'niet gevonden');
     msg.textContent = `✓ ${updated.length} bijgewerkt${notFound.length ? `, ${notFound.length} niet gevonden` : ''}`;
-    if (updated.length) { const bets = await fetch('/api/bets').then(r => r.json()); betData = bets; renderStats(bets.stats); renderBetsTable(bets.bets); }
+    if (updated.length) { const bets = await api('/api/bets').then(r => r?.json()); if(bets){ betData = bets; renderStats(bets.stats); renderBetsTable(bets.bets); } }
   } catch(e) { msg.textContent = 'Netwerkfout'; }
   finally { btn.disabled = false; btn.textContent = '⏰ Tijden invullen'; }
 }
@@ -1856,7 +2005,8 @@ function checkBetNotifications(events) {
 async function fetchLive() {
   document.getElementById('live-info').textContent = 'Laden...';
   try {
-    const d = await fetch('/api/live-scores').then(r => r.json());
+    const d = await api('/api/live-scores').then(r => r?.json());
+    if (!d) return;
     liveEvts = d.events || [];
     const lc = d.liveCount ?? liveEvts.filter(e=>e.live).length;
     document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal`;
@@ -2014,7 +2164,7 @@ async function toggleEvents(id) {
   if (mcCache[id]) { renderInlineMatchcast(panel, mcCache[id]); return; }
   panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:4px 0">Laden…</div>';
   try {
-    const d = await fetch(`/api/live-events/${id}`).then(r => r.json());
+    const d = await api(`/api/live-events/${id}`).then(r => r?.json());
     mcCache[id] = d;
     renderInlineMatchcast(panel, d);
   } catch {
@@ -2075,7 +2225,7 @@ let analysePicks = [];
 
 async function refreshAnalyse() {
   try {
-    const d = await fetch('/api/picks').then(r => r.json());
+    const d = await api('/api/picks').then(r => r?.json());
     analysePicks = [...(d.prematch||[]), ...(d.live||[])];
   } catch {
     analysePicks = [...(scanPicks.prematch||[]), ...(scanPicks.live||[])];
@@ -2173,7 +2323,7 @@ async function logModalBet() {
   const match = document.getElementById('m-match').value;
   if (!match || !odds) { showMsg('modal-msg', '⚠️ Vul odds in.', 'red'); return; }
 
-  const d = await fetch('/api/bets', {
+  const d = await api('/api/bets', {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
       datum: document.getElementById('m-datum').value,
@@ -2184,7 +2334,8 @@ async function logModalBet() {
       odds, units, tip: 'Main', uitkomst: 'Open', notities: '',
       score: modalPick ? (() => { const hk = modalPick.kelly||0; return Math.min(10, Math.max(5, Math.round((hk-0.015)/0.135*5)+5)); })() : null
     })
-  }).then(r => r.json());
+  }).then(r => r?.json());
+  if (!d) return;
 
   betData = d;
   showMsg('modal-msg', '✅ Bet gelogd!', 'green');
@@ -2213,7 +2364,8 @@ document.addEventListener('click', e => {
 async function loadNotifications() {
   const body = document.getElementById('notif-body');
   try {
-    const d = await fetch('/api/notifications').then(r => r.json());
+    const d = await api('/api/notifications').then(r => r?.json());
+    if (!d) return;
     notifAlerts = d.alerts || [];
 
     // Badge: urgente alerts + ongeziene model updates
@@ -2259,7 +2411,8 @@ async function loadModelLog() {
   const badge = document.getElementById('model-log-badge');
   if (!body) return;
   try {
-    const d    = await fetch('/api/version').then(r => r.json());
+    const d    = await api('/api/version').then(r => r?.json());
+    if (!d) return;
     const seenTs = parseInt(localStorage.getItem('modelLogSeen') || '0');
     // Versie string bovenaan info
     const vs = document.getElementById('app-version-str');
@@ -2300,7 +2453,7 @@ async function recalcWL() {
   const msg = document.getElementById('check-msg');
   btn.disabled = true; btn.textContent = '⏳ Bezig...';
   try {
-    const d = await fetch('/api/bets/recalculate', { method: 'POST' }).then(r => r.json());
+    const d = await api('/api/bets/recalculate', { method: 'POST' }).then(r => r?.json());
     if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
     msg.textContent = `✓ ${d.fixed} W/L waarden herberekend`;
     betData = d; renderStats(d.stats); renderBetsTable(d.bets);
@@ -2317,7 +2470,7 @@ async function checkResults() {
   area.style.display = 'none';
 
   try {
-    const d = await fetch('/api/check-results').then(r => r.json());
+    const d = await api('/api/check-results').then(r => r?.json());
     if (d.error) { msg.textContent = '❌ ' + d.error; return; }
 
     if (d.checked === 0) {
@@ -2362,6 +2515,138 @@ async function checkResults() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ── USER SETTINGS & PROFILE ───────────────────────────────────────────────────
+let userSettings = null;
+
+async function loadUserSettings() {
+  try {
+    const s = await api('/api/user/settings').then(r => r?.json());
+    if (!s) return;
+    userSettings = s;
+  } catch {}
+}
+
+function openProfileModal() {
+  const modal = document.getElementById('profile-modal');
+  modal.style.display = 'flex';
+  // Vul email in
+  document.getElementById('profile-email').textContent = currentUser?.email || '';
+  // Vul instellingen in
+  const s = userSettings || {};
+  document.getElementById('s-start-bankroll').value = s.startBankroll ?? 100;
+  document.getElementById('s-unit-eur').value        = s.unitEur ?? 10;
+  document.getElementById('s-language').value        = s.language || 'nl';
+  document.getElementById('s-timezone').value        = s.timezone || 'Europe/Amsterdam';
+  document.getElementById('s-scan-enabled').checked  = s.scanEnabled !== false;
+  // Scan-tijden picker
+  buildScanTimePicker(s.scanTimes || [10]);
+  // Admin panel
+  if (currentUser?.role === 'admin') loadAdminUsers();
+  document.getElementById('profile-msg').style.display = 'none';
+}
+
+function closeProfileModal() {
+  document.getElementById('profile-modal').style.display = 'none';
+}
+
+function buildScanTimePicker(selected) {
+  const wrap = document.getElementById('scan-time-picker');
+  const hours = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22];
+  wrap.innerHTML = hours.map(h => {
+    const on = selected.includes(h);
+    return `<button onclick="toggleScanHour(${h}, this)"
+      style="padding:5px 12px;border-radius:20px;border:1px solid ${on ? 'var(--accent)' : 'var(--border)'};
+             background:${on ? 'var(--accent)' : 'var(--surface2)'};color:${on ? '#fff' : 'var(--muted)'};
+             font-size:12px;font-weight:600;cursor:pointer"
+      data-hour="${h}" data-on="${on}">${h}:00</button>`;
+  }).join('');
+}
+
+function toggleScanHour(h, btn) {
+  const on = btn.dataset.on === 'true';
+  btn.dataset.on = !on;
+  btn.style.background    = !on ? 'var(--accent)' : 'var(--surface2)';
+  btn.style.borderColor   = !on ? 'var(--accent)' : 'var(--border)';
+  btn.style.color         = !on ? '#fff' : 'var(--muted)';
+}
+
+function getSelectedScanTimes() {
+  return [...document.querySelectorAll('#scan-time-picker button[data-on="true"]')]
+    .map(b => parseInt(b.dataset.hour));
+}
+
+function profileMsg(txt, ok = false) {
+  const el = document.getElementById('profile-msg');
+  el.textContent = txt;
+  el.style.display = 'block';
+  el.style.background = ok ? 'rgba(52,211,153,.12)' : 'rgba(248,113,113,.12)';
+  el.style.color      = ok ? 'var(--green)' : 'var(--red)';
+}
+
+async function saveSettings() {
+  const settings = {
+    startBankroll: parseFloat(document.getElementById('s-start-bankroll').value) || 100,
+    unitEur:       parseFloat(document.getElementById('s-unit-eur').value) || 10,
+    language:      document.getElementById('s-language').value,
+    timezone:      document.getElementById('s-timezone').value,
+    scanTimes:     getSelectedScanTimes(),
+    scanEnabled:   document.getElementById('s-scan-enabled').checked,
+  };
+  try {
+    const r = await api('/api/user/settings', { method: 'PUT', body: settings });
+    const d = await r?.json();
+    if (!d) return;
+    if (d.error) { profileMsg('Fout: ' + d.error); return; }
+    userSettings = d.settings;
+    profileMsg('✅ Instellingen opgeslagen', true);
+    setTimeout(closeProfileModal, 1200);
+  } catch { profileMsg('Verbindingsfout'); }
+}
+
+async function changePassword() {
+  const cur = document.getElementById('s-cur-pw').value;
+  const nw  = document.getElementById('s-new-pw').value;
+  if (!cur || !nw) { profileMsg('Vul huidig en nieuw wachtwoord in'); return; }
+  try {
+    const r = await api('/api/auth/password', { method: 'PUT', body: { currentPassword: cur, newPassword: nw } });
+    const d = await r?.json();
+    if (!d) return;
+    if (d.error) { profileMsg('Fout: ' + d.error); return; }
+    profileMsg('✅ Wachtwoord gewijzigd', true);
+    document.getElementById('s-cur-pw').value = '';
+    document.getElementById('s-new-pw').value = '';
+  } catch { profileMsg('Verbindingsfout'); }
+}
+
+async function loadAdminUsers() {
+  const list = document.getElementById('admin-users-list');
+  if (!list) return;
+  try {
+    const users = await api('/api/admin/users').then(r => r?.json());
+    if (!users) return;
+    list.innerHTML = users.map(u => `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.email}</div>
+          <div style="font-size:11px;color:var(--muted)">${u.role} · aangemeld ${u.createdAt ? u.createdAt.slice(0,10) : '?'}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          ${u.status === 'pending' ? `<button onclick="adminAction('${u.id}','approved')" style="padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">✓ Goed</button>` : ''}
+          ${u.status === 'approved' ? `<span style="color:var(--green);font-size:11px;font-weight:700">✓ Actief</span>` : ''}
+          ${u.status === 'blocked'  ? `<span style="color:var(--red);font-size:11px">Geblokkeerd</span>` : ''}
+          ${u.status !== 'blocked' && u.email !== currentUser?.email ? `<button onclick="adminAction('${u.id}','blocked')" style="padding:4px 10px;background:rgba(248,113,113,.15);color:var(--red);border:1px solid var(--red);border-radius:6px;font-size:11px;cursor:pointer">Blokkeer</button>` : ''}
+        </div>
+      </div>`).join('') || '<div style="color:var(--muted)">Geen gebruikers</div>';
+  } catch { list.innerHTML = '<div style="color:var(--muted)">Fout bij laden</div>'; }
+}
+
+async function adminAction(userId, status) {
+  try {
+    await api(`/api/admin/users/${userId}`, { method: 'PUT', body: { status } });
+    loadAdminUsers();
+  } catch {}
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
@@ -2492,8 +2777,8 @@ startClock();
 setDailyQuote();
 loadBets();
 // Calibratie data voor model-status widget
-fetch('/api/notifications').then(r=>r.json()).then(d => {
-  window._calibData = d;
+api('/api/notifications').then(r=>r?.json()).then(d => {
+  if (d) window._calibData = d;
 }).catch(()=>{});
 
 // Herstel actieve tab uit localStorage
@@ -2506,9 +2791,10 @@ fetch('/api/notifications').then(r=>r.json()).then(d => {
 (async () => {
   try {
     const [notif, ver] = await Promise.all([
-      fetch('/api/notifications').then(r => r.json()),
-      fetch('/api/version').then(r => r.json()),
+      api('/api/notifications').then(r => r?.json()),
+      api('/api/version').then(r => r?.json()),
     ]);
+    if (!notif || !ver) return;
     notifAlerts = notif.alerts || [];
     const seenTs      = parseInt(localStorage.getItem('modelLogSeen') || '0');
     const unseenModel = notifAlerts.filter(a => a.modelUpdate && new Date(a.date).getTime() > seenTs);
@@ -2531,7 +2817,7 @@ let historyVisible = false;
 
 async function loadScanHistory() {
   try {
-    scanHistory = await fetch('/api/scan-history').then(r => r.json());
+    scanHistory = await api('/api/scan-history').then(r => r?.json()) || [];
     if (!scanHistory.length) return;
 
     const wrap = document.getElementById('scan-history-wrap');
@@ -2609,7 +2895,8 @@ loadScanHistory();
 // ── API LIMIET ────────────────────────────────────────────────────────────────
 async function loadApiLimit() {
   try {
-    const s = await fetch('/api/status').then(r => r.json());
+    const s = await api('/api/status').then(r => r?.json());
+    if (!s) return;
     const rem = s.remaining, lim = s.limit || 7500;
     const txt = document.getElementById('api-limit-text');
     const fill = document.getElementById('api-limit-fill');
