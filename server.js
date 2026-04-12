@@ -1007,9 +1007,9 @@ async function runPrematch(emit) {
         if (!fid || !hm || !aw) continue;
 
         const kickoffMs  = new Date(f.fixture?.date).getTime();
-        const kickoffTime = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit' });
+        const kickoffTime = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
         const ko = new Date(kickoffMs)
-          .toLocaleString('nl-NL', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+          .toLocaleString('nl-NL', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
 
         // ── Odds ophalen van api-football.com ─────────────────────────
         await sleep(120);
@@ -1516,7 +1516,7 @@ async function runLive(emit) {
     return [];
   }
 
-  const time = new Date().toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit' });
+  const time = new Date().toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
   let msgs = [`🔴 LIVE — ${time}\n${livePicks.length} pick(s)\n\n`], cur = 0;
   for (const [i, p] of livePicks.entries()) {
     const star = i === 0 ? '⭐' : '🔵';
@@ -1928,7 +1928,7 @@ async function schedulePreKickoffCheck(bet) {
       } catch {}
 
       // Beoordeling
-      const time30 = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+      const time30 = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone:'Europe/Amsterdam' });
       lines.push(`⏰ PRE-KICKOFF CHECK\n📌 ${matchName} (aftrap ~${time30})\n🎲 Markt: ${markt}`);
 
       if (currentOdds) {
@@ -2454,7 +2454,7 @@ function scheduleScanAtHour(hour) {
   target.setHours(hour, 0, 0, 0);
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
-  const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit' });
+  const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
   console.log(`📡 Scan gepland om ${hm} (over ${Math.round(delay/60000)} min)`);
   return setTimeout(async () => {
     console.log(`📡 Scan om ${hour}:00 gestart...`);
@@ -2486,7 +2486,7 @@ function scheduleDailyResultsCheck() {
   target.setHours(9, 3, 0, 0); // 09:03 (lichte offset om :00 piek te vermijden)
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
-  const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit' });
+  const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
   console.log(`⏰ Dagelijkse check gepland om ${hm} (over ${Math.round(delay/60000)} min)`);
 
   setTimeout(async () => {
