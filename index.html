@@ -1,0 +1,2299 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bet Scanner</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%235b5bf6'/><text y='72' x='50' text-anchor='middle' font-size='60' font-family='system-ui'>🎯</text></svg>">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+/* ── THEME TOKENS ──────────────────────────────────────────────────────────── */
+:root {
+  --bg:         #f4f5f9;
+  --surface:    #ffffff;
+  --surface2:   #f0f1f7;
+  --border:     #e4e6ef;
+  --text:       #111827;
+  --muted:      #6b7280;
+  --accent:     #5b5bf6;
+  --accent-bg:  #ede9fe;
+  --green:      #10b981;
+  --green-bg:   #d1fae5;
+  --red:        #ef4444;
+  --red-bg:     #fee2e2;
+  --yellow:     #f59e0b;
+  --yellow-bg:  #fef3c7;
+  --shadow:     0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:  0 4px 16px rgba(0,0,0,0.09);
+}
+[data-theme="dark"] {
+  --bg:         #0f1117;
+  --surface:    #1a1d27;
+  --surface2:   #22263a;
+  --border:     #2e3249;
+  --text:       #e8eaf0;
+  --muted:      #8b90a7;
+  --accent:     #7c74ff;
+  --accent-bg:  #1e1b4b;
+  --green:      #34d399;
+  --green-bg:   #064e3b;
+  --red:        #f87171;
+  --red-bg:     #7f1d1d;
+  --yellow:     #fbbf24;
+  --yellow-bg:  #78350f;
+  --shadow:     0 1px 3px rgba(0,0,0,0.28);
+  --shadow-md:  0 4px 16px rgba(0,0,0,0.40);
+}
+
+/* ── RESET ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; min-height: 100vh; transition: background 0.2s, color 0.2s; font-size: 14px; line-height: 1.5; }
+
+/* ── HEADER ─────────────────────────────────────────────────────────────────── */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: 58px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: var(--shadow);
+}
+.brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.brand-icon { width: 32px; height: 32px; background: var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.brand-name { font-size: 15px; font-weight: 700; }
+.brand-sub  { font-size: 10.5px; color: var(--muted); }
+nav { display: flex; gap: 2px; flex: 1; overflow-x: auto; scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
+.tab-btn { padding: 7px 14px; border-radius: 7px; border: none; background: transparent; color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.tab-btn:hover { background: var(--surface2); color: var(--text); }
+.tab-btn.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+#darkBtn { width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface2); color: var(--text); cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: border-color 0.15s; }
+#darkBtn:hover { border-color: var(--accent); }
+
+/* ── LAYOUT ─────────────────────────────────────────────────────────────────── */
+.page { display: none; max-width: 1120px; margin: 0 auto; padding: 24px 24px; }
+.page.active { display: block; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+
+/* ── CARD ───────────────────────────────────────────────────────────────────── */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: var(--shadow); }
+.card-hd { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
+.card-title { font-size: 14.5px; font-weight: 600; }
+.card-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+/* ── BUTTONS ────────────────────────────────────────────────────────────────── */
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; font-family: inherit; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary  { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-red      { background: var(--red); color: #fff; }
+.btn-red:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-ghost    { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.btn-success  { background: var(--green-bg); color: var(--green); border: 1px solid transparent; }
+.btn-success:hover { border-color: var(--green); }
+.btn-sm       { padding: 6px 12px; font-size: 12px; }
+
+/* ── SCANS PAGE ─────────────────────────────────────────────────────────────── */
+.log-wrap { margin-top: 14px; display: none; }
+.log-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 13px 15px; font-family: 'SF Mono','Cascadia Code','Fira Code',monospace; font-size: 11.5px; min-height: 80px; max-height: 180px; overflow-y: auto; line-height: 1.9; color: var(--text); }
+.log-ok  { color: var(--green); }
+.log-err { color: var(--red); }
+.spinner { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.65s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── HERO BANNER ────────────────────────────────────────────────────────────── */
+.hero { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 70%, #6d28d9 100%); border-radius: 16px; padding: 28px 32px; margin-bottom: 20px; position: relative; overflow: hidden; color: #fff; }
+.hero::before { content: ''; position: absolute; top: -60px; right: -60px; width: 280px; height: 280px; background: rgba(255,255,255,0.04); border-radius: 50%; }
+.hero::after  { content: ''; position: absolute; bottom: -80px; right: 120px; width: 200px; height: 200px; background: rgba(255,255,255,0.03); border-radius: 50%; }
+.hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.hero-brand { font-size: 12px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; opacity: 0.6; margin-bottom: 8px; }
+.hero-time { font-size: 42px; font-weight: 800; line-height: 1; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+.hero-date { font-size: 13px; opacity: 0.65; margin-top: 5px; }
+.hero-quote { max-width: 280px; text-align: right; }
+.hero-quote-text { font-size: 13px; line-height: 1.6; opacity: 0.8; font-style: italic; }
+.hero-quote-tag { font-size: 10px; opacity: 0.45; margin-top: 5px; text-transform: uppercase; letter-spacing: 0.8px; }
+.hero-stats { display: flex; gap: 0; margin-top: 24px; background: rgba(255,255,255,0.08); border-radius: 12px; overflow: hidden; }
+.hero-stat { flex: 1; padding: 14px 20px; border-right: 1px solid rgba(255,255,255,0.1); }
+.hero-stat:last-child { border-right: none; }
+.hero-stat-val { font-size: 22px; font-weight: 700; line-height: 1; }
+.hero-stat-lbl { font-size: 10.5px; opacity: 0.55; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* ── LOG BOX (donker, binnen scan panels) ───────────────────────────────────── */
+.scan-panel .log-wrap { margin-top: 14px; display: none; }
+.scan-panel .log-box { background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 14px; font-family: 'SF Mono','Cascadia Code','Fira Code',monospace; font-size: 11px; min-height: 60px; max-height: 160px; overflow-y: auto; line-height: 1.9; color: rgba(255,255,255,0.65); }
+.scan-panel .log-ok  { color: #34d399; }
+.scan-panel .log-err { color: #f87171; }
+
+/* ── SCAN PANELS ────────────────────────────────────────────────────────────── */
+.scan-panels { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 20px; }
+.scan-panel { border-radius: 14px; padding: 24px; position: relative; overflow: hidden; cursor: default; transition: transform 0.15s, box-shadow 0.15s; }
+.scan-panel:hover { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(0,0,0,0.15); }
+.scan-panel-pm { background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); color: #fff; }
+.scan-panel-lv { background: linear-gradient(135deg, #1a0a0a 0%, #4c0519 100%); color: #fff; }
+.scan-panel::before { content: ''; position: absolute; top: -40px; right: -40px; width: 160px; height: 160px; background: rgba(255,255,255,0.04); border-radius: 50%; pointer-events: none; }
+.sp-icon { font-size: 32px; margin-bottom: 12px; display: block; }
+.sp-title { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+.sp-sub { font-size: 12px; opacity: 0.55; margin-bottom: 16px; line-height: 1.5; }
+.sp-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+.sp-tag { background: rgba(255,255,255,0.12); border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 500; }
+.sp-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 9px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.15s; font-family: inherit; }
+.sp-btn-pm { background: #3b82f6; color: #fff; }
+.sp-btn-pm:hover:not(:disabled) { background: #2563eb; }
+.sp-btn-lv { background: #ef4444; color: #fff; }
+.sp-btn-lv:hover:not(:disabled) { background: #dc2626; }
+.sp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── PICKS DISPLAY ──────────────────────────────────────────────────────────── */
+.picks-wrap { margin-top: 16px; }
+.picks-hdr { font-size: 11px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 10px; }
+.edge-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 10px; vertical-align: middle; margin-left: 6px; }
+.pick-card { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; transition: background 0.15s; }
+.pick-card:hover { background: rgba(255,255,255,0.12); }
+.pick-card.top { border-left: 3px solid #60a5fa; }
+.pick-name { font-weight: 600; font-size: 13px; color: #fff; }
+.pick-meta { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 2px; }
+.prob-row  { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.prob-bar  { width: 70px; height: 3px; background: rgba(255,255,255,0.15); border-radius: 2px; }
+.prob-fill { height: 100%; border-radius: 2px; }
+.prob-pct  { font-size: 10.5px; color: rgba(255,255,255,0.5); }
+.pick-right { text-align: right; }
+.pick-odds  { font-size: 20px; font-weight: 800; color: #fff; line-height: 1.1; }
+.pick-units { font-size: 10px; color: rgba(255,255,255,0.45); margin-top: 2px; }
+.pick-log-btn { margin-top: 6px; }
+
+/* ── RECENT BETS SIDEBAR ────────────────────────────────────────────────────── */
+.home-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+.recent-bets-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: var(--shadow); }
+.rb-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.rb-title { font-size: 13.5px; font-weight: 700; }
+.rb-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.rb-row:last-child { border-bottom: none; }
+.rb-teams { flex: 1; min-width: 0; }
+.rb-match { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rb-market { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rb-odds { font-size: 13px; font-weight: 700; color: var(--accent); flex-shrink: 0; min-width: 36px; text-align: right; }
+.rb-empty { text-align: center; padding: 24px; color: var(--muted); font-size: 13px; }
+.scan-desc { display: none; }
+
+/* ── STATS ROW ──────────────────────────────────────────────────────────────── */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(106px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.stat-box { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 13px 10px; text-align: center; box-shadow: var(--shadow); }
+.stat-val { font-size: 19px; font-weight: 700; line-height: 1.15; }
+.stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+.green  { color: var(--green); }
+.red    { color: var(--red); }
+.yellow { color: var(--yellow); }
+
+/* ── ADD FORM ───────────────────────────────────────────────────────────────── */
+.collapse-hd { display: flex; align-items: center; justify-content: space-between; }
+.collapse-body { overflow: hidden; max-height: 0; transition: max-height 0.25s ease; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 11px; padding-top: 4px; }
+.field label { display: block; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; font-weight: 600; }
+.field input, .field select, .field textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 7px; color: var(--text); padding: 8px 10px; font-size: 13px; outline: none; transition: border-color 0.15s; font-family: inherit; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+.field textarea { resize: vertical; min-height: 34px; }
+.form-actions { margin-top: 13px; display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.form-msg-txt { font-size: 12.5px; }
+
+/* ── BET TABLE ──────────────────────────────────────────────────────────────── */
+.tbl-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: auto; box-shadow: var(--shadow); }
+.bets-table { width: 100%; border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
+.bets-table th { text-align: left; padding: 10px 13px; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); font-weight: 600; background: var(--surface2); }
+.bets-table td { padding: 10px 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.bets-table tr:last-child td { border-bottom: none; }
+.bets-table tr:hover td { background: var(--surface2); }
+.badge { display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.badge-w { background: var(--green-bg); color: var(--green); }
+.badge-l { background: var(--red-bg); color: var(--red); }
+.badge-o { background: var(--yellow-bg); color: var(--yellow); }
+.sel-outcome { background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; color: var(--text); padding: 3px 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
+.wl-pos { color: var(--green); font-weight: 600; }
+.wl-neg { color: var(--red); font-weight: 600; }
+.del-btn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 3px 6px; border-radius: 4px; font-size: 13px; transition: all 0.15s; }
+.del-btn:hover { background: var(--red-bg); color: var(--red); }
+.empty-row td { text-align: center; color: var(--muted); padding: 32px; font-size: 13px; }
+
+/* ── DATA/CHARTS ────────────────────────────────────────────────────────────── */
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: var(--shadow); }
+.chart-title { font-size: 13.5px; font-weight: 600; margin-bottom: 14px; }
+.chart-wrap { position: relative; height: 200px; }
+
+/* ── LIVE PAGE ──────────────────────────────────────────────────────────────── */
+.live-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+.toggle-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.sw { position: relative; display: inline-block; width: 38px; height: 22px; }
+.sw input { opacity: 0; width: 0; height: 0; }
+.sw-track { position: absolute; inset: 0; background: var(--border); border-radius: 11px; cursor: pointer; transition: 0.2s; }
+.sw-track:before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; }
+.sw input:checked + .sw-track { background: var(--accent); }
+.sw input:checked + .sw-track:before { transform: translateX(16px); }
+.live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
+.live-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); }
+.live-card.my-bet { border-left: 3px solid var(--accent); }
+.live-card.scheduled { opacity: 0.65; }
+.live-sport { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 4px; }
+.live-teams { font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+.live-score-row { display: flex; align-items: center; justify-content: space-between; }
+.live-score { font-size: 20px; font-weight: 700; color: var(--accent); }
+.live-time { font-size: 11px; color: var(--muted); }
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: blink 1.4s infinite; margin-right: 5px; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+.empty-state { text-align: center; padding: 56px 24px; color: var(--muted); }
+.live-events-btn { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 12px; padding: 3px 8px; margin-top: 8px; transition: all 0.15s; font-family: inherit; }
+.live-events-btn:hover { background: var(--surface2); color: var(--text); }
+.live-events-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(96,165,250,0.08); }
+.live-events-panel { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; display: none; max-height: 260px; overflow-y: auto; }
+.live-events-panel.open { display: block; }
+.live-event-row { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 3px 0; }
+.live-event-min { color: var(--muted); font-size: 11px; min-width: 30px; text-align: right; font-weight: 600; }
+.live-event-ico { font-size: 14px; width: 18px; text-align: center; }
+.live-event-txt { flex: 1; line-height: 1.4; }
+.live-event-team { font-size: 10px; color: var(--muted); }
+.empty-state .ico { font-size: 38px; margin-bottom: 12px; }
+
+/* ── ANALYSE PAGE ───────────────────────────────────────────────────────────── */
+.search-bar { display: flex; gap: 10px; margin-bottom: 18px; }
+.search-bar .field { flex: 1; }
+.pick-full { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; box-shadow: var(--shadow); }
+.pick-full-hd { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.pick-full-title { font-size: 13.5px; font-weight: 600; }
+.pick-full-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.reason-box { font-size: 12px; color: var(--muted); line-height: 1.75; background: var(--surface2); border-radius: 6px; padding: 10px 13px; margin-top: 8px; }
+
+/* ── MODAL ──────────────────────────────────────────────────────────────────── */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; display: none; align-items: center; justify-content: center; }
+.overlay.open { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; width: min(480px, calc(100vw - 28px)); box-shadow: var(--shadow-md); }
+.modal-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.modal-title { font-size: 15.5px; font-weight: 700; }
+.modal-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 21px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+.modal-x:hover { background: var(--surface2); }
+.modal-actions { margin-top: 18px; display: flex; gap: 9px; align-items: center; }
+
+/* ── NOTIFICATIONS ──────────────────────────────────────────────────────────── */
+.notif-wrap { position: relative; flex-shrink: 0; }
+#notifBtn { width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface2); color: var(--text); cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; transition: border-color 0.15s; position: relative; }
+#notifBtn:hover { border-color: var(--accent); }
+.notif-badge { position: absolute; top: -5px; right: -5px; width: 17px; height: 17px; border-radius: 50%; background: var(--red); color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.notif-dropdown { position: absolute; top: calc(100% + 8px); right: 0; width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-md); z-index: 200; display: none; }
+.notif-dropdown.open { display: block; }
+.notif-hd { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+.notif-item { padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; display: flex; gap: 10px; align-items: flex-start; }
+.notif-item:last-child { border-bottom: none; }
+.notif-item.error { border-left: 3px solid var(--red); }
+.notif-item.warn  { border-left: 3px solid var(--yellow); }
+.notif-item.success { border-left: 3px solid var(--green); }
+.notif-item.info { border-left: 3px solid var(--accent); }
+.notif-empty { padding: 20px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.notif-link { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 11.5px; display: inline-block; margin-top: 3px; }
+
+/* ── CHECK RESULTS ──────────────────────────────────────────────────────────── */
+.results-list { margin-top: 14px; }
+.result-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: var(--surface2); border-radius: 8px; margin-bottom: 7px; font-size: 12.5px; }
+.result-score { font-size: 15px; font-weight: 700; color: var(--accent); flex-shrink: 0; min-width: 42px; text-align: center; }
+.result-note { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── RESPONSIVE ─────────────────────────────────────────────────────────────── */
+@media (max-width: 860px) {
+  .home-grid { grid-template-columns: 1fr; }
+  .recent-bets-card { order: -1; }
+}
+@media (max-width: 680px) {
+  .grid2, .charts-grid, .scan-panels { grid-template-columns: 1fr; }
+  header { padding: 0 14px; gap: 12px; }
+  .page { padding: 14px; }
+  .notif-dropdown { width: calc(100vw - 28px); right: -70px; }
+  .hero { padding: 20px; }
+  .hero-time { font-size: 30px; }
+  .hero-stats { flex-wrap: wrap; }
+  .hero-stat { min-width: 80px; padding: 10px 14px; }
+  .hero-quote { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══ HEADER ══════════════════════════════════════════════════════════════ -->
+<header>
+  <div class="brand">
+    <div class="brand-icon">🎯</div>
+    <div>
+      <div class="brand-name">Bet Scanner</div>
+      <div class="brand-sub">Picks &amp; Bet Tracker</div>
+    </div>
+  </div>
+
+  <nav>
+    <button class="tab-btn active" onclick="go('scans')">📡 Scans</button>
+    <button class="tab-btn" onclick="go('tracker')">📋 Tracker</button>
+    <button class="tab-btn" onclick="go('data')">📊 Data</button>
+    <button class="tab-btn" onclick="go('live')">🔴 Live</button>
+    <button class="tab-btn" onclick="go('analyse')">🔍 Analyse</button>
+    <button class="tab-btn" onclick="go('info')">📖 Info</button>
+  </nav>
+
+  <div class="notif-wrap">
+    <button id="notifBtn" onclick="toggleNotif()" title="Notificaties">🔔<span class="notif-badge" id="notif-badge" style="display:none">0</span></button>
+    <div class="notif-dropdown" id="notif-dropdown">
+      <div class="notif-hd"><span>Notificaties</span><button onclick="toggleNotif()" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--muted);line-height:1">×</button></div>
+      <div id="notif-body"><div class="notif-empty">Laden...</div></div>
+    </div>
+  </div>
+  <button id="darkBtn" onclick="toggleDark()">🌙</button>
+</header>
+
+<div id="api-warning" style="display:none;background:#fef3c7;border-bottom:1px solid #f59e0b;padding:8px 20px;font-size:13px;color:#92400e;align-items:center;gap:8px;">
+  <span>⚠️</span>
+  <span id="api-warning-msg"></span>
+  <a href="https://the-odds-api.com" target="_blank" style="margin-left:auto;color:#92400e;font-weight:600;text-decoration:underline;">Upgrade</a>
+  <button onclick="this.parentElement.style.display='none'" style="background:none;border:none;cursor:pointer;padding:0 4px;color:#92400e;font-size:16px;">×</button>
+</div>
+
+<main>
+
+<!-- ══ SCANS ════════════════════════════════════════════════════════════════ -->
+<section class="page active" id="page-scans">
+
+  <!-- Hero banner -->
+  <div class="hero">
+    <div class="hero-top">
+      <div>
+        <div class="hero-brand">Bet Scanner · AI Betting Engine</div>
+        <div class="hero-time" id="dash-time">—:—:—</div>
+        <div class="hero-date" id="dash-date">—</div>
+      </div>
+      <div class="hero-quote">
+        <div class="hero-quote-text" id="dash-quote">Laden...</div>
+        <div class="hero-quote-tag">Quote van de dag</div>
+      </div>
+    </div>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="hero-stat-val" id="dh-bankroll">€—</div>
+        <div class="hero-stat-lbl">Bankroll</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-val" id="dh-roi">—%</div>
+        <div class="hero-stat-lbl">ROI</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-val" id="dh-wl">—/—</div>
+        <div class="hero-stat-lbl">Win / Verlies</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-val" id="dh-open">—</div>
+        <div class="hero-stat-lbl">Open bets</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-val" id="dh-sr">—%</div>
+        <div class="hero-stat-lbl">Strike rate</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scan panels + recente bets -->
+  <div class="home-grid">
+
+    <!-- Scan panels -->
+    <div>
+      <div class="scan-panels">
+
+        <!-- Scan (prematch + live gecombineerd) -->
+        <div class="scan-panel scan-panel-pm" style="max-width:100%;width:100%;padding:32px 28px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
+            <div>
+              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">Bet Scanner · v<span id="scan-version">3.2.0</span></div>
+              <div style="font-size:26px;font-weight:800;line-height:1.2;letter-spacing:-.02em">Vind de beste bets<br>van dit moment</div>
+              <div style="font-size:13px;color:rgba(255,255,255,0.55);margin-top:10px;line-height:1.7">
+                Pre-match · Live xG · H2H · Opstellingen · Standen · Predictions<br>
+                16 competities · singles + combi's · half-Kelly · max odds 4.0
+              </div>
+            </div>
+            <div style="font-size:48px;line-height:1;flex-shrink:0;margin-left:16px;opacity:.9">🎯</div>
+          </div>
+          <button class="sp-btn sp-btn-pm" id="btn-prematch" onclick="doScan('prematch')"
+            style="width:100%;font-size:17px;padding:18px 28px;font-weight:800;letter-spacing:.03em;border-radius:12px;box-shadow:0 4px 24px rgba(59,130,246,0.4);transition:all .2s"
+            onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 32px rgba(59,130,246,0.55)'"
+            onmouseout="this.style.transform='';this.style.boxShadow='0 4px 24px rgba(59,130,246,0.4)'">
+            <span id="ico-prematch">▶</span> Start scan
+          </button>
+
+          <!-- API limiet indicator -->
+          <div id="api-limit-bar" style="display:flex;align-items:center;gap:10px;margin-top:14px;padding:10px 14px;background:rgba(255,255,255,0.05);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+                <span style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:.05em">api-football.com</span>
+                <span id="api-limit-text" style="font-size:11px;font-weight:700;color:rgba(255,255,255,0.7)">laden...</span>
+              </div>
+              <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:4px;overflow:hidden">
+                <div id="api-limit-fill" style="height:100%;border-radius:4px;background:#34d399;width:100%;transition:width .5s"></div>
+              </div>
+            </div>
+          </div>
+          <div class="log-wrap" id="lwrap-prematch">
+            <div class="log-box" id="log-prematch"></div>
+          </div>
+          <div class="picks-wrap" id="picks-prematch"></div>
+          <!-- live picks container (verborgen, wordt gevuld door gecombineerde scan) -->
+          <div id="picks-live" style="display:none"></div>
+
+          <!-- Scan history -->
+          <div id="scan-history-wrap" style="display:none;margin-top:16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <span style="font-size:12px;color:rgba(255,255,255,0.45);font-weight:600;letter-spacing:.04em;text-transform:uppercase">Vorige scans</span>
+              <button id="history-toggle" onclick="toggleHistory()" style="background:none;border:none;cursor:pointer;font-size:11px;color:rgba(255,255,255,0.4);padding:2px 6px">▼ toon</button>
+            </div>
+            <div id="scan-history-list" style="display:none"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Recente bets sidebar -->
+    <div class="recent-bets-card">
+      <div class="rb-hd">
+        <div class="rb-title">📋 Recente bets</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted);cursor:pointer">
+            <input type="checkbox" id="rb-live-only" onchange="renderRecentBets(betData?.bets||[])"> 🔴 live
+          </label>
+          <button class="btn btn-ghost btn-sm" onclick="go('tracker')">Alle →</button>
+        </div>
+      </div>
+      <div id="rb-list"><div class="rb-empty">Laden...</div></div>
+
+      <!-- Mini model status -->
+      <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:10px">Model gezondheid</div>
+        <div id="rb-model-status">
+          <div style="font-size:12px;color:var(--muted)">Run een scan voor model data.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</section>
+
+<!-- ══ TRACKER ══════════════════════════════════════════════════════════════ -->
+<section class="page" id="page-tracker">
+
+  <div class="stats-grid">
+    <div class="stat-box"><div class="stat-val" id="s-bankroll">—</div><div class="stat-lbl">Bankroll</div></div>
+    <div class="stat-box"><div class="stat-val" id="s-roi">—</div><div class="stat-lbl">ROI</div></div>
+    <div class="stat-box"><div class="stat-val green" id="s-w">—</div><div class="stat-lbl">Gewonnen</div></div>
+    <div class="stat-box"><div class="stat-val red" id="s-l">—</div><div class="stat-lbl">Verloren</div></div>
+    <div class="stat-box"><div class="stat-val yellow" id="s-o">—</div><div class="stat-lbl">Open</div></div>
+    <div class="stat-box"><div class="stat-val" id="s-sr">—</div><div class="stat-lbl">Strike Rate</div></div>
+    <div class="stat-box"><div class="stat-val" id="s-wl">—</div><div class="stat-lbl">W/L (€)</div></div>
+    <div class="stat-box"><div class="stat-val" id="s-odds">—</div><div class="stat-lbl">Gem. odds</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div>
+      <div class="card-title" style="margin-bottom:3px">🔄 Uitslagen ophalen</div>
+      <div style="font-size:12px;color:var(--muted)">Check open bets via ESPN — auto-update W/L waar mogelijk</div>
+    </div>
+    <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" id="btn-check" onclick="checkResults()">📡 Check uitslagen</button>
+      <span id="check-msg" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+  </div>
+  <div id="check-results-area" style="display:none;margin-bottom:14px"></div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="collapse-hd">
+      <div class="card-title">+ Bet toevoegen</div>
+      <button class="btn btn-ghost btn-sm" id="form-tog" onclick="toggleForm()">▼ Uitklappen</button>
+    </div>
+    <div class="collapse-body" id="form-body">
+      <div class="form-grid">
+        <div class="field">
+          <label>Datum</label>
+          <input type="text" id="f-datum" placeholder="dd-mm-yyyy">
+        </div>
+        <div class="field">
+          <label>Sport</label>
+          <select id="f-sport">
+            <option>Voetbal</option><option>Tennis</option><option>Basketball</option>
+            <option>IJshockey</option><option>Honkbal</option><option>Rugby</option>
+            <option>American Football</option><option>Volleybal</option>
+            <option>Tafeltennis</option><option>Snooker</option><option>Darts</option>
+            <option>MMA</option><option>Boksen</option><option>Anders</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column:span 2">
+          <label>Wedstrijd</label>
+          <input type="text" id="f-match" placeholder="Team A vs Team B">
+        </div>
+        <div class="field" style="grid-column:span 2">
+          <label>Markt / Bet</label>
+          <input type="text" id="f-markt" placeholder="Winner — Team A / Over 2.5 goals">
+        </div>
+        <div class="field">
+          <label>Odds</label>
+          <input type="number" id="f-odds" step="0.01" min="1" placeholder="1.85">
+        </div>
+        <div class="field">
+          <label>Units</label>
+          <input type="number" id="f-units" step="0.5" min="0.5" placeholder="1.0">
+        </div>
+        <div class="field">
+          <label>Tip</label>
+          <select id="f-tip"><option>Main</option><option>Side</option></select>
+        </div>
+        <div class="field">
+          <label>Uitkomst</label>
+          <select id="f-uitkomst"><option>Open</option><option>W</option><option>L</option></select>
+        </div>
+        <div class="field">
+          <label>Aftrap</label>
+          <input type="time" id="f-tijd">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary btn-sm" onclick="addBet()">Toevoegen</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearForm()">Wissen</button>
+        <span class="form-msg-txt" id="form-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+    <button class="btn btn-ghost btn-sm" id="backfill-btn" onclick="backfillTimes()">⏰ Tijden invullen</button>
+    <span class="form-msg-txt" id="backfill-msg" style="margin-left:10px;line-height:32px"></span>
+  </div>
+
+  <div class="tbl-wrap">
+    <table class="bets-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Datum</th><th>Aftrap</th><th>Sport</th><th>Wedstrijd</th><th>Bet</th>
+          <th>Odds</th><th>Units</th><th>Inzet</th><th>Uitkomst</th><th>W/L</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="bets-body"></tbody>
+    </table>
+  </div>
+
+</section>
+
+<!-- ══ DATA ═════════════════════════════════════════════════════════════════ -->
+<section class="page" id="page-data">
+  <div class="charts-grid">
+    <div class="chart-card" style="grid-column:span 2">
+      <div class="chart-title">📈 Bankroll verloop</div>
+      <div class="chart-wrap"><canvas id="ch-bankroll"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">🎯 Uitkomsten</div>
+      <div class="chart-wrap"><canvas id="ch-pie"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">⚽ Per sport</div>
+      <div class="chart-wrap"><canvas id="ch-sports"></canvas></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ LIVE ══════════════════════════════════════════════════════════════════ -->
+<section class="page" id="page-live">
+  <div class="live-bar">
+    <button class="btn btn-primary btn-sm" onclick="fetchLive()">
+      <span class="live-dot"></span> Vernieuwen
+    </button>
+    <div class="toggle-row">
+      <label class="sw">
+        <input type="checkbox" id="liveOnly" checked onchange="filterLive()">
+        <span class="sw-track"></span>
+      </label>
+      <span>Alleen live</span>
+    </div>
+    <div class="toggle-row">
+      <label class="sw">
+        <input type="checkbox" id="myBetsOnly" onchange="filterLive()">
+        <span class="sw-track"></span>
+      </label>
+      <span>Alleen mijn bets</span>
+    </div>
+    <span id="live-info" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+  <div class="live-grid" id="live-grid">
+    <div class="empty-state"><div class="ico">📡</div><div>Klik "Vernieuwen" om live scores te laden.</div></div>
+  </div>
+</section>
+
+<!-- ══ ANALYSE ══════════════════════════════════════════════════════════════ -->
+<section class="page" id="page-analyse">
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="margin-bottom:12px">🔍 Zoek in laatste scan resultaten</div>
+    <div class="search-bar">
+      <div class="field">
+        <input type="text" id="q-input" placeholder="Zoek op team, markt of competitie... (bijv. 'Bayern', 'Over 2.5', 'Premier League')" oninput="doSearch()">
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="doSearch()">Zoeken</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:6px">Toont alle picks uit de laatste prematch scan inclusief volledige redenering. Start een scan om data te laden.</div>
+  </div>
+  <div id="analyse-out">
+    <div class="empty-state"><div class="ico">🔍</div><div>Geen scandata beschikbaar. Start eerst een prematch scan.</div></div>
+  </div>
+</section>
+
+<!-- ══ INFO / DOCUMENTATIE ══════════════════════════════════════════════════ -->
+<section class="page" id="page-info">
+  <div class="grid2" style="margin-bottom:16px">
+    <div class="card" style="grid-column:span 2">
+      <div class="card-hd">
+        <div>
+          <div class="card-title" style="font-size:17px">🎯 Bet Scanner — hoe het werkt</div>
+          <div class="card-sub">Data-gedreven sportsbetting · <span id="app-version-str">versie 3.2.0</span> · april 2026</div>
+        </div>
+        <div style="font-size:24px">🤖</div>
+      </div>
+      <p style="font-size:13px;color:var(--muted);line-height:1.75">
+        Bet Scanner combineert drie databronnen met een wiskundig model om dagelijkse value bets te vinden.
+        Het doel: systematisch edge vinden waar bookmakers het mis hebben, en via Kelly Criterion slim inzetten.
+      </p>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-bottom:16px">
+    <!-- Model uitleg -->
+    <div class="card">
+      <div class="card-title" style="margin-bottom:14px">🧠 Het model uitgelegd</div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.9">
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">1. No-vig kans berekening</strong><br>
+        Alle bookmaker odds worden genormaliseerd (marge verwijderd). Het gemiddelde over alle books = consensuskans.</div>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">2. Data-aanpassingen</strong><br>
+        Op basis van api-sports.io + ESPN wordt de kans bijgesteld:
+        <ul style="padding-left:18px;margin-top:6px">
+          <li>Vorm laatste 5 wedstrijden (gewicht 35%)</li>
+          <li>H2H record (gewicht 22%)</li>
+          <li>Competitiestand / druk (gewicht 12%)</li>
+          <li>Thuisvoordeel per sport (5–6%)</li>
+          <li>Sleutelblessures (negatief, gewicht 8%)</li>
+          <li>Momentum laatste 3 vs. vorige 3 (gewicht 10%)</li>
+          <li>Inzet van de wedstrijd (degradatie / titelrace)</li>
+        </ul>
+        </div>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">3. Kelly Criterion</strong><br>
+        <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">k = (ep×(odd-1) − (1−ep)) / (odd-1)</code><br>
+        Alleen picks met k > 1.5% worden geselecteerd. Units schalen met k.</div>
+        <div><strong style="color:var(--text)">4. Calibratie (zelflerend)</strong><br>
+        Na elke afgeronde bet past het model zijn drempel per markttype aan. 8+ bets per categorie nodig voor recalibratie.</div>
+      </div>
+    </div>
+
+    <!-- API bronnen -->
+    <div class="card">
+      <div class="card-title" style="margin-bottom:14px">📡 Databronnen</div>
+      <div style="font-size:13px;line-height:1.9">
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <span style="font-size:20px">⚽</span>
+          <div>
+            <div style="font-weight:600">The Odds API</div>
+            <div style="color:var(--muted);font-size:12px">Live odds van 40+ bookmakers per wedstrijd.<br>500 calls/maand gratis · ~21 calls per scan · max ~23 scans/maand</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <span style="font-size:20px">📊</span>
+          <div>
+            <div style="font-weight:600">api-sports.io</div>
+            <div style="color:var(--muted);font-size:12px">Teamstatistieken, H2H, blessures, scheidsrechters, standen.<br>100 calls/dag gratis · ~45 calls per prematch scan</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <span style="font-size:20px">📺</span>
+          <div>
+            <div style="font-weight:600">ESPN Scoreboard API</div>
+            <div style="color:var(--muted);font-size:12px">Live scores + standen voor 17+ competities.<br>Volledig gratis, geen key nodig</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <span style="font-size:20px">🚀</span>
+          <div>
+            <div style="font-weight:600">Sportmonks (toekomst)</div>
+            <div style="color:var(--muted);font-size:12px">Echte xG, line-ups, diepere stats. Aanbevolen bij ROI > 10% over 20+ bets.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Inzet strategie -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="margin-bottom:12px">💰 Inzetstrategie</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:var(--accent)">0.3U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &lt; 4% · €3 · voorzichtig</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:var(--yellow)">0.5U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 4–8% · €5 · normaal</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:var(--green)">1.0U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 8–18% · €10 · sterk</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:var(--red)">2.0U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &gt; 18% · €20 · uitzonderlijk</div>
+      </div>
+    </div>
+    <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+      Startkapitaal €100 · 1 unit = €10 · max 5 picks/dag · min odds 1.60 · min edge 5.5% · min trefkans 28%
+    </div>
+  </div>
+
+  <!-- Abonnementen -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="margin-bottom:14px">💳 Abonnementen</div>
+    <div style="font-size:13px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-weight:600">api-football.com Pro</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">7500 req/dag · fixtures · odds · opstellingen · predictions · xG · H2H · statistieken</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-weight:700;color:var(--accent)">€19/mnd</div>
+          <div style="font-size:11px;color:var(--muted)">Start: 12-04-2026</div>
+          <div style="font-size:11px;color:var(--muted)">Verlengt: 12-05-2026</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-weight:600">Claude Code (Anthropic)</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">AI-assistent · bouwt &amp; onderhoudt de scanner, dashboard en logica</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-weight:700;color:var(--accent)">€22/mnd</div>
+          <div style="font-size:11px;color:var(--muted)">Start: 12-04-2026</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-weight:600">Claude Code credits</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">Eenmalige opwaardering · bouwt &amp; onderhoudt scanner + dashboard</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-weight:700;color:var(--accent)">€55</div>
+          <div style="font-size:11px;color:var(--muted)">Eenmalig · 12-04-2026</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);opacity:0.55">
+        <div>
+          <div style="font-weight:600;text-decoration:line-through">The Odds API</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">Odds aggregator — opgezegd (vervangen door api-football.com)</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-size:11px;color:var(--muted)">Opgezegd: 12-04-2026</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;opacity:0.45">
+        <div>
+          <div style="font-weight:600">api-sports All Sports</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">NBA · NHL · NFL · MLB + alle voetbalcompetities — beschikbaar als ROI > 10%</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-weight:600;color:var(--muted)">$99/mnd</div>
+          <div style="font-size:11px;color:var(--muted)">Inactief</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Model updates (dynamisch) -->
+  <div class="card" style="margin-bottom:16px" id="model-log-card">
+    <div class="card-hd" style="margin-bottom:12px">
+      <div class="card-title">🧠 Model updates</div>
+      <span id="model-log-badge" style="display:none;background:var(--accent);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700">nieuw</span>
+    </div>
+    <div id="model-log-body" style="font-size:13px;color:var(--muted)">Laden...</div>
+  </div>
+
+  <!-- Changelog -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:16px">📝 Versiegeschiedenis</div>
+    <div style="font-size:13px">
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.2</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Bet Scanner — volledig herontworpen scanlogica + live dashboard</div>
+          <div style="color:var(--muted);line-height:1.7">🎯 Unified scanner: pre-match + live picks in één pool, gesorteerd op verwachte €-winst<br>
+          📊 Score 5–10 op Kelly-basis — 10/10 alleen bij uitzonderlijke pick (2U)<br>
+          💰 +€X.XX verwachte winst per pick zichtbaar op elke card<br>
+          🏦 Bet365 &amp; Unibet only — bookmaker badge op elke pick<br>
+          ⏰ Aftrap-tijd op pick cards + auto-invullen in log modal + kolom in tracker<br>
+          🔴 Live tab: gebeurtenissen (goals/kaarten/wissels), stats + xG, resultaat-kleur, Over/Under balkje<br>
+          📋 Dashboard: live filter op recente bets met live score erbij<br>
+          🗂️ Scan history (10 scans, auto-restore na refresh)<br>
+          📈 MIN_EP 52% floor — alleen picks met >50% trefkans<br>
+          🔧 Tracker: aftrap kolom, potentiële winst bij open bets, notities verwijderd</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.1</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Live tab — gebeurtenissen, stats &amp; xG</div>
+          <div style="color:var(--muted);line-height:1.7">⚡ Gebeurtenissen panel per live wedstrijd (goals, kaarten, wissels met minuut)<br>
+          📊 Live stats: balbezit, schoten, hoekschoppen, reddingen + xG schatting (SoT × 0.33)<br>
+          🟢 Resultaat-kleur op score: groen bij winst, rood bij verlies, grijs bij gelijk<br>
+          📈 Over/Under voortgangsbalk — toont goals gescoord t.o.v. lijn in realtime</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.0</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Scanlogica herschreven — expectedEur + score + history</div>
+          <div style="color:var(--muted);line-height:1.7">💰 Sortering op verwachte €-winst per bet (units × inzet × edge%)<br>
+          📊 Score 5–10 op Kelly-basis zichtbaar op elke pick card<br>
+          🗂️ Scan history: laatste 10 scans opgeslagen, auto-restore na refresh<br>
+          📈 MIN_EP verhoogd naar 52% — structureel meer wins dan losses</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.9</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Pick cards uitgebreid — bookmaker, kickoff, payout</div>
+          <div style="color:var(--muted);line-height:1.7">🏦 Alleen Bet365 &amp; Unibet odds — badge per pick welke bookmaker<br>
+          ⏰ Kickoff tijd op pick card + auto-invullen in log modal<br>
+          💳 Payout calculator in modal: inzet → uitbetaling → winst live berekend<br>
+          📋 Tracker: aftrap kolom toegevoegd, notities verwijderd, potentiële winst bij open bets</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.8</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Unified scanner — pre-match + live in één pool</div>
+          <div style="color:var(--muted);line-height:1.7">🔀 Live picks geïntegreerd in prematch scan — één knop, één pool<br>
+          🔴 LIVE / PRE badge per pick, live picks slaan pre-kickoff check over<br>
+          📡 API limiet voortgangsbalk op scan card<br>
+          🎯 Combi generator: legs mogen &lt;1.60, eindodds 1.60–4.0, alleen als hitrate hoger dan single</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.7</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">api-football.com migratie + live scan in dagelijkse check</div>
+          <div style="color:var(--muted);line-height:1.7">🔄 Volledig gemigreerd naar api-football.com (The Odds API verwijderd)<br>
+          🏟️ Opstellingen (<9 starters = rotatiesignaal) en AI predictions opgenomen in kansberekening<br>
+          ⏰ Pre-kickoff check: 30 min voor aftrap hertelt odds drift via api-football.com + Telegram ping<br>
+          📡 Dagelijkse check draait nu ook live scan — actieve wedstrijden op xG en dominantie<br>
+          💰 Notificaties: unit verhoging aanbevolen bij +50%/+100% bankroll groei<br>
+          🚀 Notificatie voor All Sports upgrade ($99/mnd) bij ROI > 10% over 30+ bets</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.6</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Pick kwaliteitsfilters + model-update tracking</div>
+          <div style="color:var(--muted);line-height:1.7">🚫 Picks met odds > 6.0 geblokkeerd — geen krankzinnige outsider picks meer<br>
+          🔍 Blowout filter: als tegenstander ≤ 1.35 staat, skip underdog automatisch<br>
+          📉 Minimale trefkans 28% per pick — geen picks meer met lage hitrate<br>
+          ✅ Confidence drempel: model toont 0–5 overtuigde picks, nooit vullen om te vullen<br>
+          🔔 Model-update notificaties: bij recalibratie verschijnt melding in bell + info tab<br>
+          📝 Versiebeheeer & model log nu automatisch bijgehouden</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.5</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Dashboard redesign + Google Sheets + cloud-ready</div>
+          <div style="color:var(--muted);line-height:1.7">🎨 Volledig herontworpen homepage — hero banner met klok/stats, scan panels, recente bets sidebar, model-status widget<br>
+          ☁️ Bettracker.xlsx vervangen door Google Sheets — bets altijd online, sync over alle apparaten<br>
+          🚀 Cloud-ready voor Render deployment (render.yaml, env vars, keep-alive ping)<br>
+          🔔 Notifications panel + dagelijkse uitslag check (09:03) + tab persistentie</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.4</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Notifications + automatische uitslag check</div>
+          <div style="color:var(--muted);line-height:1.7">🔔 Notifications panel in header met API-limieten, calibratie inzichten en verliespatronen<br>
+          📡 "Check uitslagen" knop in Tracker — haalt scores op via ESPN en update W/L automatisch<br>
+          ⏰ Dagelijkse check om 09:03 met Telegram rapport<br>
+          💾 Tab persistentie via localStorage</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.3</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Calibratie &amp; zelflerende multipliers</div>
+          <div style="color:var(--muted);line-height:1.7">🧠 Calibration.json — bijhoudt win rate per markttype (home/away/draw/over/under)<br>
+          📉 Multipliers worden automatisch aangepast na 8+ afgeronde bets per categorie<br>
+          🔴 Verlies-log met patroondetectie — model verhoogt drempel bij herhaald verlies<br>
+          📊 Portfolio analyse via Telegram elke 7 settled bets + Sportmonks aanbeveling op ROI</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.2</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">api-sports.io integratie + live scan rewrite</div>
+          <div style="color:var(--muted);line-height:1.7">🏥 Blessure data, scheidsrechter stats, team H2H via api-sports.io<br>
+          ⚽ Live scan herschreven met echte api-sports.io data + xG schatting (SoT × 0.33)<br>
+          📈 4 live scenario's: xG-dominantie comeback, Over/Under waarde, extreme druk<br>
+          🔧 MMA draw bug gefixed (geen nep edge meer op hoge odds)</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.1</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">The Odds API + pick cards + dashboard</div>
+          <div style="color:var(--muted);line-height:1.7">💹 Volledige overstap van Sofascore (geblokkeerd) naar The Odds API<br>
+          🃏 Pick cards met edge badge (groen ≥8% / geel ≥5%), uitklapbare analyse<br>
+          📊 Data tab met bankroll grafiek, pie chart uitkomsten en sport-verdeling<br>
+          ⚠️ API limiet waarschuwingsbalk (rood ≤42 calls, geel ≤105 calls)</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v1.0</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Eerste versie — Sofascore + Telegram</div>
+          <div style="color:var(--muted);line-height:1.7">🚀 Express.js dashboard met bet tracker (Excel integratie)<br>
+          📱 Telegram picks via bot<br>
+          ⚽ ESPN standings voor competitiestand<br>
+          🌅 Pre-match + live scan basisversie</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ══ MODAL: QUICK LOG PICK ════════════════════════════════════════════════ -->
+<div class="overlay" id="modal" onclick="closeOverlay(event)">
+  <div class="modal">
+    <div class="modal-hd">
+      <div class="modal-title">➕ Pick loggen als bet</div>
+      <button class="modal-x" onclick="closeModal()">×</button>
+    </div>
+    <div class="form-grid">
+      <div class="field" style="grid-column:span 2">
+        <label>Wedstrijd</label>
+        <input type="text" id="m-match">
+      </div>
+      <div class="field" style="grid-column:span 2">
+        <label>Markt</label>
+        <input type="text" id="m-markt">
+      </div>
+      <div class="field">
+        <label>Odds <em style="font-size:10px;color:var(--muted)">(aanpasbaar)</em></label>
+        <input type="number" id="m-odds" step="0.01" min="1">
+      </div>
+      <div class="field">
+        <label>Units</label>
+        <input type="number" id="m-units" step="0.5" min="0.5">
+      </div>
+      <div class="field">
+        <label>Sport</label>
+        <select id="m-sport">
+          <option>Voetbal</option><option>Tennis</option><option>Basketball</option>
+          <option>IJshockey</option><option>Honkbal</option><option>Rugby</option>
+          <option>American Football</option><option>Volleybal</option>
+          <option>Snooker</option><option>Darts</option><option>Anders</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Aftrap <em style="font-size:10px;color:var(--muted)">(HH:MM · voor pre-kickoff check)</em></label>
+        <input type="time" id="m-tijd">
+      </div>
+      <div class="field">
+        <label>Datum</label>
+        <input type="text" id="m-datum">
+      </div>
+    </div>
+    <div id="payout-bar" style="display:flex;align-items:center;justify-content:space-between;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.2);border-radius:8px;padding:10px 14px;margin-bottom:4px">
+      <span style="font-size:12px;color:rgba(255,255,255,0.5)">Inzet</span>
+      <span id="payout-stake" style="font-size:14px;font-weight:700;color:#fff">€—</span>
+      <span style="font-size:12px;color:rgba(255,255,255,0.3)">→</span>
+      <span style="font-size:12px;color:rgba(255,255,255,0.5)">Uitbetaling</span>
+      <span id="payout-total" style="font-size:16px;font-weight:800;color:#34d399">€—</span>
+      <span style="font-size:12px;color:rgba(255,255,255,0.5)">winst</span>
+      <span id="payout-profit" style="font-size:14px;font-weight:700;color:#34d399">€—</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="logModalBet()">Bet loggen</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Annuleren</button>
+      <span class="form-msg-txt" id="modal-msg"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── THEME ────────────────────────────────────────────────────────────────────
+const html = document.documentElement;
+const theme = localStorage.getItem('theme') || 'light';
+html.setAttribute('data-theme', theme);
+document.getElementById('darkBtn').textContent = theme === 'dark' ? '☀️' : '🌙';
+
+function toggleDark() {
+  const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  document.getElementById('darkBtn').textContent = next === 'dark' ? '☀️' : '🌙';
+  if (chartsDone) redrawCharts();
+}
+
+// ── NAVIGATION ───────────────────────────────────────────────────────────────
+const TAB_IDS = ['scans','tracker','data','live','analyse','info'];
+function go(name) {
+  localStorage.setItem('activeTab', name);
+  document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', TAB_IDS[i] === name));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  if (name === 'tracker') loadBets();
+  if (name === 'data')    loadBets().then(d => redrawCharts(d));
+  if (name === 'live')    { requestNotifPermission(); if (!betData) loadBets().then(() => fetchLive()); else fetchLive(); }
+  if (name === 'analyse') refreshAnalyse();
+  if (name === 'info')    loadModelLog();
+}
+
+// ── SCANS ────────────────────────────────────────────────────────────────────
+let scanPicks = { prematch: [], live: [] };
+
+function doScan(type) {
+  const btn   = document.getElementById('btn-' + type);
+  const ico   = document.getElementById('ico-' + type);
+  const lwrap = document.getElementById('lwrap-' + type);
+  const logEl = document.getElementById('log-' + type);
+  const pEl   = document.getElementById('picks-' + type);
+
+  btn.disabled = true;
+  ico.innerHTML = '<span class="spinner"></span>';
+  lwrap.style.display = 'block';
+  logEl.innerHTML = '';
+  pEl.innerHTML   = '';
+
+  fetch('/api/' + type, { method: 'POST' })
+    .then(res => {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      function pump() {
+        reader.read().then(({ done, value }) => {
+          if (done) { finish(); return; }
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            try {
+              const d = JSON.parse(line.slice(5).trim());
+              if (d.log)   addLog(logEl, d.log, d.done ? 'ok' : d.error ? 'err' : '');
+              if (d.error) addLog(logEl, '❌ ' + d.error, 'err');
+              if (d.picks && d.picks.length) { scanPicks[type] = d.picks; renderPicks(pEl, d.picks); }
+              if (d.done) finish();
+            } catch {}
+          }
+          pump();
+        }).catch(() => finish());
+      }
+      pump();
+    })
+    .catch(e => { addLog(logEl, '❌ Verbindingsfout: ' + e.message, 'err'); finish(); });
+
+  function finish() { btn.disabled = false; ico.textContent = '▶'; loadApiLimit(); }
+}
+
+function addLog(el, text, cls) {
+  const d = document.createElement('div');
+  if (cls === 'ok')  d.className = 'log-ok';
+  if (cls === 'err') d.className = 'log-err';
+  d.textContent = text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderPicks(el, picks) {
+  const hdrText = picks.length === 0
+    ? '🚫 Geen overtuigde picks vandaag'
+    : `✅ ${picks.length} overtuigde pick${picks.length !== 1 ? 's' : ''} — zet alleen deze`;
+  el.innerHTML = `<div class="picks-hdr">${hdrText}</div>`;
+  picks.forEach((p, i) => {
+    const prob  = p.prob || 0;
+    const pc    = prob >= 65 ? '#34d399' : prob >= 50 ? '#fbbf24' : '#f87171';
+
+    // Score 5–10: alles wat getoond wordt IS een aanbeveling, minimum 5
+    // 0.3U → 5–6 | 0.5U → 7–8 | 1.0U → 9 | uitzonderlijk (2U) → 10
+    const hk2  = p.kelly || 0;
+    const score = Math.min(10, Math.max(5, Math.round((hk2 - 0.015) / 0.135 * 5) + 5));
+    const scoreCol = score >= 8 ? '#34d399' : score >= 5 ? '#fbbf24' : '#f87171';
+    const scoreBadge = score != null
+      ? `<span class="edge-badge" style="background:${score>=8?'rgba(52,211,153,0.15)':score>=5?'rgba(251,191,36,0.15)':'rgba(248,113,113,0.15)'};color:${scoreCol};font-size:12px;font-weight:800;padding:2px 8px">${score}/10</span>`
+      : '';
+
+    const edgeVal  = p.edge != null ? p.edge : null;
+    const reasonHtml = p.reason
+      ? `<div class="pick-reason" id="reason-${i}" style="display:none;font-size:11px;color:rgba(255,255,255,0.5);margin-top:8px;line-height:1.6;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px">${edgeVal!=null?`<span style="color:#fbbf24;font-weight:600">Edge +${edgeVal}%</span> · `:''} ${p.reason}</div>
+         <button class="reason-toggle" onclick="toggleReason(${i})" style="background:none;border:none;cursor:pointer;font-size:11px;color:rgba(255,255,255,0.45);padding:4px 0 0 0">▼ analyse</button>`
+      : '';
+
+    const div = document.createElement('div');
+    div.className = 'pick-card' + (i === 0 ? ' top' : '');
+    const scanBadge = p.scanType === 'live'
+      ? `<span style="font-size:10px;font-weight:700;background:rgba(239,68,68,0.18);color:#f87171;padding:1px 6px;border-radius:4px;margin-left:6px">LIVE</span>`
+      : `<span style="font-size:10px;font-weight:700;background:rgba(59,130,246,0.15);color:#93c5fd;padding:1px 6px;border-radius:4px;margin-left:6px">PRE</span>`;
+    div.innerHTML = `
+      <div style="flex:1;min-width:0">
+        <div class="pick-name">${i===0?'⭐ ':i===1?'🔵 ':'• '}${p.label}${scanBadge}</div>
+        <div class="pick-meta">${p.match||''}${p.league?' · '+p.league:''}${p.kickoff ? ` · <span style="color:#fbbf24;font-weight:600">⏰ ${p.kickoff}</span>` : p.scanType==='live' ? ` · <span style="color:#f87171;font-weight:600">● nu bezig</span>` : ''}</div>
+        <div class="prob-row" style="margin-top:7px">
+          <div class="prob-bar"><div class="prob-fill" style="width:${Math.min(prob,100)}%;background:${pc}"></div></div>
+          <span class="prob-pct">${prob}% kans</span>
+          ${scoreBadge}
+          ${p.expectedEur != null ? `<span style="font-size:11px;color:#4ade80;font-weight:700">+€${p.expectedEur}</span>` : ''}
+        </div>
+        ${reasonHtml}
+      </div>
+      <div class="pick-right">
+        <div class="pick-odds">${p.odd||p.odds||'?'}</div>
+        <div class="pick-units" style="margin-top:3px">${p.units}</div>
+        ${p.bookie ? `<div style="margin-top:6px;padding:3px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.03em;text-align:center;${p.bookie.toLowerCase().includes('bet365') ? 'background:#1a6b3a;color:#4ade80' : 'background:#1a2e6b;color:#93c5fd'}">${p.bookie.toLowerCase().includes('bet365') ? 'Bet365' : 'Unibet'}</div>` : ''}
+        <div class="pick-log-btn">
+          <button class="btn btn-success btn-sm" onclick="openModal(${i},'${(p.label||'').replace(/'/g,"\\'").replace(/"/g,'\\"')}')">+ Log</button>
+        </div>
+      </div>`;
+    el.appendChild(div);
+  });
+  el._picks = picks;
+}
+
+function toggleReason(i) {
+  const el = document.getElementById('reason-' + i);
+  const btn = el ? el.nextElementSibling : null;
+  if (!el) return;
+  const hidden = el.style.display === 'none';
+  el.style.display = hidden ? 'block' : 'none';
+  if (btn) btn.textContent = hidden ? '▲ analyse verbergen' : '▼ analyse tonen';
+}
+
+// ── BET TRACKER ──────────────────────────────────────────────────────────────
+let betData = null;
+let formOpen = false;
+let chartsDone = false;
+
+async function loadBets() {
+  const d = await fetch('/api/bets').then(r => r.json());
+  betData = d;
+  renderStats(d.stats);
+  renderBetsTable(d.bets);
+  updateDashStats(d.stats, d.bets);
+  return d;
+}
+
+function renderStats(s) {
+  if (!s) return;
+  const br = document.getElementById('s-bankroll');
+  br.textContent = '€' + s.bankroll;
+  br.className = 'stat-val ' + (s.bankroll >= 130 ? 'green' : 'red');
+  const roi = document.getElementById('s-roi');
+  roi.textContent = (s.roi * 100).toFixed(1) + '%';
+  roi.className = 'stat-val ' + (s.roi >= 0 ? 'green' : 'red');
+  document.getElementById('s-w').textContent  = s.W;
+  document.getElementById('s-l').textContent  = s.L;
+  document.getElementById('s-o').textContent  = s.open;
+  document.getElementById('s-sr').textContent = s.strikeRate + '%';
+  const wl = document.getElementById('s-wl');
+  wl.textContent = (s.wlEur >= 0 ? '+' : '') + '€' + s.wlEur;
+  wl.className = 'stat-val ' + (s.wlEur >= 0 ? 'green' : 'red');
+  document.getElementById('s-odds').textContent = s.avgOdds;
+}
+
+function renderBetsTable(bets) {
+  const tbody = document.getElementById('bets-body');
+  tbody.innerHTML = '';
+  if (!bets.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">Nog geen bets geregistreerd.</td></tr>';
+    return;
+  }
+  [...bets].reverse().forEach(b => {
+    const tr = document.createElement('tr');
+    const wCls = b.wl > 0 ? 'wl-pos' : b.wl < 0 ? 'wl-neg' : '';
+    tr.innerHTML = `
+      <td style="color:var(--muted);font-size:11px">${b.id}</td>
+      <td>${b.datum}</td>
+      <td style="color:var(--muted)">${b.tijd||'—'}</td>
+      <td>${b.sport}</td>
+      <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis" title="${b.wedstrijd}">${b.wedstrijd}</td>
+      <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${b.markt}">${b.markt}</td>
+      <td><strong>${b.odds}</strong></td>
+      <td>${b.units}U</td>
+      <td>€${b.inzet}</td>
+      <td>
+        <select class="sel-outcome" onchange="setOutcome(${b.id}, this.value)">
+          <option ${b.uitkomst==='Open'?'selected':''}>Open</option>
+          <option ${b.uitkomst==='W'?'selected':''}>W</option>
+          <option ${b.uitkomst==='L'?'selected':''}>L</option>
+        </select>
+      </td>
+      <td class="${wCls}">${b.wl !== 0 ? (b.wl>0?'+':'')+'€'+b.wl : b.uitkomst==='Open' ? `<span style="color:var(--muted);font-size:11px" title="Potentiële winst">+€${+((b.odds-1)*b.inzet).toFixed(2)}</span>` : '—'}</td>
+      <td><button class="del-btn" onclick="removeBet(${b.id})" title="Verwijderen">🗑</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function setOutcome(id, v) {
+  fetch('/api/bets/' + id, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ uitkomst: v })
+  }).then(r => r.json()).then(d => { betData = d; renderStats(d.stats); renderBetsTable(d.bets); });
+}
+
+function removeBet(id) {
+  if (!confirm('Bet #' + id + ' verwijderen?')) return;
+  fetch('/api/bets/' + id, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(d => { betData = d; renderStats(d.stats); renderBetsTable(d.bets); });
+}
+
+function addBet() {
+  const odds  = parseFloat(document.getElementById('f-odds').value);
+  const units = parseFloat(document.getElementById('f-units').value);
+  if (!document.getElementById('f-match').value || !odds || !units) {
+    showMsg('form-msg', '⚠️ Vul wedstrijd, odds en units in.', 'red'); return;
+  }
+  const today = new Date();
+  const d = document.getElementById('f-datum').value ||
+    pad(today.getDate()) + '-' + pad(today.getMonth()+1) + '-' + today.getFullYear();
+  fetch('/api/bets', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      datum: d,
+      sport: document.getElementById('f-sport').value,
+      wedstrijd: document.getElementById('f-match').value,
+      markt: document.getElementById('f-markt').value,
+      odds, units,
+      tip: document.getElementById('f-tip').value,
+      uitkomst: document.getElementById('f-uitkomst').value,
+      tijd: document.getElementById('f-tijd').value || null
+    })
+  }).then(r => r.json()).then(d => {
+    betData = d; renderStats(d.stats); renderBetsTable(d.bets);
+    clearForm();
+    showMsg('form-msg', '✅ Bet toegevoegd!', 'green');
+  });
+}
+
+function clearForm() {
+  ['f-datum','f-match','f-markt','f-odds','f-units','f-tijd'].forEach(id => document.getElementById(id).value = '');
+  ['f-sport','f-tip','f-uitkomst'].forEach(id => document.getElementById(id).selectedIndex = 0);
+  const now = new Date();
+  document.getElementById('f-datum').value = pad(now.getDate())+'-'+pad(now.getMonth()+1)+'-'+now.getFullYear();
+}
+
+async function backfillTimes() {
+  const btn = document.getElementById('backfill-btn');
+  btn.disabled = true; btn.textContent = '⏳ Bezig...';
+  const msg = document.getElementById('backfill-msg');
+  try {
+    const r = await fetch('/api/backfill-times', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
+    const updated = d.results.filter(r => r.status === 'bijgewerkt');
+    const notFound = d.results.filter(r => r.status === 'niet gevonden');
+    msg.textContent = `✓ ${updated.length} bijgewerkt${notFound.length ? `, ${notFound.length} niet gevonden` : ''}`;
+    if (updated.length) { const bets = await fetch('/api/bets').then(r => r.json()); betData = bets; renderStats(bets.stats); renderBetsTable(bets.bets); }
+  } catch(e) { msg.textContent = 'Netwerkfout'; }
+  finally { btn.disabled = false; btn.textContent = '⏰ Tijden invullen'; }
+}
+
+function toggleForm() {
+  formOpen = !formOpen;
+  document.getElementById('form-body').style.maxHeight = formOpen ? '700px' : '0';
+  document.getElementById('form-tog').textContent = formOpen ? '▲ Inklappen' : '▼ Uitklappen';
+}
+
+// ── DATA / CHARTS ─────────────────────────────────────────────────────────────
+let charts = {};
+
+async function redrawCharts(data) {
+  if (!data) data = betData || await loadBets();
+  if (!data) return;
+  const bets   = data.bets || [];
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  const grid   = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
+  const tick   = isDark ? '#8b90a7' : '#9ca3af';
+  const ac     = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  const gr     = getComputedStyle(document.documentElement).getPropertyValue('--green').trim();
+  const rd     = getComputedStyle(document.documentElement).getPropertyValue('--red').trim();
+  const yl     = getComputedStyle(document.documentElement).getPropertyValue('--yellow').trim();
+
+  Chart.defaults.color = tick;
+  Object.values(charts).forEach(c => c.destroy());
+  charts = {};
+
+  // Bankroll line
+  let br = 130;
+  const brL = ['Start'], brD = [br];
+  [...bets].sort((a,b) => a.id - b.id).forEach(b => {
+    if (b.uitkomst !== 'Open') {
+      br = +(br + b.wl).toFixed(2);
+      brL.push('#' + b.id);
+      brD.push(br);
+    }
+  });
+
+  charts.bankroll = new Chart(document.getElementById('ch-bankroll'), {
+    type: 'line',
+    data: {
+      labels: brL,
+      datasets: [{ label: 'Bankroll (€)', data: brD, borderColor: ac, backgroundColor: ac + '22', fill: true, tension: 0.3, pointRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: { color: grid }, ticks: { color: tick } }, y: { grid: { color: grid }, ticks: { color: tick } } }
+    }
+  });
+
+  // Pie
+  const W = bets.filter(b => b.uitkomst === 'W').length;
+  const L = bets.filter(b => b.uitkomst === 'L').length;
+  const O = bets.filter(b => b.uitkomst === 'Open').length;
+  charts.pie = new Chart(document.getElementById('ch-pie'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Gewonnen','Verloren','Open'],
+      datasets: [{ data: [W,L,O], backgroundColor: [gr, rd, yl], borderWidth: 0 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { position: 'bottom' } } }
+  });
+
+  // Sports bar
+  const sm = {};
+  bets.forEach(b => { sm[b.sport] = (sm[b.sport]||0) + 1; });
+  const sl = Object.keys(sm), sd = sl.map(s => sm[s]);
+  charts.sports = new Chart(document.getElementById('ch-sports'), {
+    type: 'bar',
+    data: {
+      labels: sl,
+      datasets: [{ data: sd, backgroundColor: ac + 'cc', borderRadius: 6 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: { display: false }, ticks: { color: tick } }, y: { grid: { color: grid }, ticks: { color: tick, precision: 0 } } }
+    }
+  });
+
+  chartsDone = true;
+}
+
+// ── LIVE SCORES ───────────────────────────────────────────────────────────────
+let liveEvts = [];
+let livePrevState = new Map(); // id → { scoreH, scoreA, live, notified }
+const sportIcons = { football:'⚽', tennis:'🎾', basketball:'🏀', 'ice-hockey':'🏒', volleyball:'🏐', handball:'🤾', snooker:'🎱', darts:'🎯', 'table-tennis':'🏓', rugby:'🏉', 'american-football':'🏈', baseball:'⚾', mma:'🥊', boxing:'🥊', futsal:'🥅' };
+
+// ── NOTIFICATIES ──────────────────────────────────────────────────────────────
+function requestNotifPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+function pushNotif(title, body, icon = '⚽') {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  new Notification(title, { body, icon: '/favicon.ico', silent: false });
+}
+
+function checkBetNotifications(events) {
+  if (!betData) return;
+  const openBets = (betData.bets || []).filter(b => b.uitkomst === 'Open');
+  if (!openBets.length) return;
+
+  for (const e of events) {
+    if (!e.live) continue;
+    const prev = livePrevState.get(e.id) || {};
+    const notified = prev.notified || new Set();
+
+    // Vind openstaande bet voor dit event
+    const teams = [e.home.toLowerCase(), e.away.toLowerCase()];
+    const myBet = openBets.find(b =>
+      b.wedstrijd.split(' vs ').some(t => teams.some(tm => tm.includes(t.trim().toLowerCase().split(' ')[0])))
+    );
+    if (!myBet) { livePrevState.set(e.id, { ...prev, notified }); continue; }
+
+    const sH = e.scoreH ?? 0, sA = e.scoreA ?? 0;
+    const goals = sH + sA;
+    const markt = myBet.markt.toLowerCase();
+    const wedstrijd = `${e.home} vs ${e.away}`;
+
+    // ── Wedstrijd afgelopen ───────────────────────────────────────────────────
+    const wasLive = prev.live === true;
+    const justEnded = wasLive && !e.live;
+    if (justEnded && !notified.has('ft')) {
+      notified.add('ft');
+      // Bepaal uitkomst
+      let result = '?';
+      if (markt.includes('wint') || markt.includes('wins') || markt.includes('victory')) {
+        const betHome = myBet.wedstrijd.toLowerCase().split(' vs ')[0].trim();
+        const isHome = e.home.toLowerCase().includes(betHome.split(' ')[0]);
+        const betScore = isHome ? sH : sA, oppScore = isHome ? sA : sH;
+        result = betScore > oppScore ? '✅ Gewonnen!' : betScore < oppScore ? '❌ Verloren' : '🟡 Gelijkspel';
+      } else if (markt.includes('over') || markt.includes('boven')) {
+        const line = parseFloat(markt.match(/[\d.]+/) || [2.5]);
+        result = goals > line ? '✅ Gewonnen!' : '❌ Verloren';
+      } else if (markt.includes('under') || markt.includes('onder')) {
+        const line = parseFloat(markt.match(/[\d.]+/) || [2.5]);
+        result = goals < line ? '✅ Gewonnen!' : '❌ Verloren';
+      } else if (markt.includes('gelijkspel') || markt.includes('draw')) {
+        result = sH === sA ? '✅ Gewonnen!' : '❌ Verloren';
+      }
+      pushNotif(`${result} — ${wedstrijd}`, `Eindstand: ${sH}–${sA} · Bet: ${myBet.markt}`);
+    }
+
+    // ── O/U lijn gepasseerd tijdens wedstrijd ─────────────────────────────────
+    const ouMatch = markt.match(/(over|boven)\s*([\d.]+)/);
+    if (ouMatch && !notified.has('ou_hit')) {
+      const line = parseFloat(ouMatch[2]);
+      const prevGoals = (prev.scoreH ?? 0) + (prev.scoreA ?? 0);
+      if (prevGoals <= line && goals > line) {
+        notified.add('ou_hit');
+        pushNotif(`✅ Over ${line} gehaald! — ${wedstrijd}`, `${goals} goals · ${sH}–${sA} · Bet gewonnen`);
+      }
+    }
+
+    // ── Winst-bet: team scoort en staat nu voor ───────────────────────────────
+    if ((markt.includes('wint') || markt.includes('wins')) && !notified.has('winning')) {
+      const betHome = myBet.wedstrijd.toLowerCase().split(' vs ')[0].trim();
+      const isHome = e.home.toLowerCase().includes(betHome.split(' ')[0]);
+      const betScore = isHome ? sH : sA, oppScore = isHome ? sA : sH;
+      const prevBetScore = isHome ? (prev.scoreH ?? 0) : (prev.scoreA ?? 0);
+      if (betScore > oppScore && prevBetScore <= (isHome ? (prev.scoreA ?? 0) : (prev.scoreH ?? 0))) {
+        notified.add('winning');
+        pushNotif(`⭐ Jouw team staat voor — ${wedstrijd}`, `${sH}–${sA} · Bet: ${myBet.markt}`);
+      }
+    }
+
+    livePrevState.set(e.id, { scoreH: sH, scoreA: sA, live: e.live, notified });
+  }
+}
+
+async function fetchLive() {
+  document.getElementById('live-info').textContent = 'Laden...';
+  try {
+    const d = await fetch('/api/live-scores').then(r => r.json());
+    liveEvts = d.events || [];
+    const lc = d.liveCount ?? liveEvts.filter(e=>e.live).length;
+    document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal`;
+    checkBetNotifications(liveEvts);
+    filterLive();
+  } catch {
+    document.getElementById('live-info').textContent = 'Fout bij ophalen';
+  }
+}
+
+function filterLive() {
+  const onlyLive = document.getElementById('liveOnly').checked;
+  const onlyMine = document.getElementById('myBetsOnly').checked;
+  const grid = document.getElementById('live-grid');
+  // Map: team name (lower) → open bet object
+  const myBetsMap = new Map();
+  if (betData) {
+    (betData.bets||[]).filter(b => b.uitkomst === 'Open').forEach(b => {
+      b.wedstrijd.split(' vs ').forEach(t => myBetsMap.set(t.trim().toLowerCase(), b));
+    });
+  }
+  const myTeams = new Set(myBetsMap.keys());
+
+  let evts = liveEvts;
+  if (onlyLive) evts = evts.filter(e => e.live);
+  if (onlyMine) evts = evts.filter(e => myTeams.has(e.home.toLowerCase()) || myTeams.has(e.away.toLowerCase()));
+
+  if (!evts.length) {
+    const msg = onlyMine ? 'Geen live wedstrijden voor jouw open bets.'
+              : onlyLive ? 'Geen live wedstrijden op dit moment.'
+              : 'Klik "Vernieuwen" om scores te laden.';
+    grid.innerHTML = `<div class="empty-state"><div class="ico">📡</div><div>${msg}</div></div>`;
+    return;
+  }
+
+  grid.innerHTML = '';
+  evts.forEach(e => {
+    const myBet  = myBetsMap.get(e.home.toLowerCase()) || myBetsMap.get(e.away.toLowerCase());
+    const isMine = !!myBet;
+    const div = document.createElement('div');
+    div.className = 'live-card' + (isMine ? ' my-bet' : '') + (e.live ? '' : ' scheduled');
+    const icon = sportIcons[e.sport] || '🏆';
+    const timeStr = e.live ? (e.minute || e.status || '') : (e.startTime ? `🕐 ${e.startTime}` : e.status || '');
+    const liveIndicator = e.live ? '<span class="live-dot"></span>' : '';
+    // Resultaat-kleur op score obv jouw bet
+    let resultStatus = null; // 'winning'|'losing'|'draw'|null
+    if (isMine && e.live && myBet) {
+      const m = myBet.markt.toLowerCase();
+      const sH = e.scoreH ?? 0, sA = e.scoreA ?? 0;
+      const totalGoals = sH + sA;
+      if (m.includes('wint') || m.includes('wins') || m.includes('victory')) {
+        const betHome = myBet.wedstrijd.toLowerCase().split(' vs ')[0].trim();
+        const isHome = e.home.toLowerCase().includes(betHome) || betHome.includes(e.home.toLowerCase().split(' ')[0]);
+        const betScore = isHome ? sH : sA, oppScore = isHome ? sA : sH;
+        resultStatus = betScore > oppScore ? 'winning' : betScore < oppScore ? 'losing' : 'draw';
+      } else if (m.includes('over') || m.includes('boven')) {
+        const line = parseFloat(m.match(/[\d.]+/) || [2.5]);
+        resultStatus = totalGoals > line ? 'winning' : totalGoals === Math.floor(line) ? 'draw' : 'losing';
+      } else if (m.includes('under') || m.includes('onder')) {
+        const line = parseFloat(m.match(/[\d.]+/) || [2.5]);
+        resultStatus = totalGoals < line ? 'winning' : 'losing';
+      } else if (m.includes('gelijkspel') || m.includes('draw')) {
+        resultStatus = sH === sA ? 'winning' : 'losing';
+      }
+    }
+    const resultBorder = resultStatus === 'winning' ? 'border-left:3px solid #4ade80'
+                       : resultStatus === 'losing'  ? 'border-left:3px solid #f87171'
+                       : resultStatus === 'draw'    ? 'border-left:3px solid #9ca3af'
+                       : '';
+    if (resultBorder) div.style.cssText += resultBorder;
+
+    const scoreColor = e.live ? (resultStatus === 'winning' ? '#4ade80' : resultStatus === 'losing' ? '#f87171' : resultStatus === 'draw' ? '#9ca3af' : 'var(--accent)') : 'var(--muted)';
+    const scoreRow = e.live
+      ? `<div class="live-score" style="color:${scoreColor}">${e.scoreH} — ${e.scoreA}</div>`
+      : `<div class="live-score" style="color:var(--muted);font-size:18px;">vs</div>`;
+
+    // Over/Under voortgangsbalk
+    let ouBar = '';
+    if (isMine && e.live && myBet) {
+      const m = myBet.markt.toLowerCase();
+      const ouMatch = m.match(/(over|under|boven|onder)\s*([\d.]+)/);
+      if (ouMatch) {
+        const isOver = ouMatch[1].startsWith('o') && ouMatch[1] !== 'onder';
+        const line   = parseFloat(ouMatch[2]);
+        const goals  = (e.scoreH ?? 0) + (e.scoreA ?? 0);
+        const pct    = Math.min(100, Math.round(goals / line * 100));
+        const hit    = isOver ? goals > line : goals < line;
+        const barCol = goals === 0 ? '#6b7280' : hit ? '#4ade80' : goals >= Math.floor(line) ? '#fbbf24' : '#f87171';
+        ouBar = `<div style="margin-top:8px">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px">
+            <span>${goals} goals gescoord</span><span>lijn: ${line}</span>
+          </div>
+          <div style="height:5px;background:var(--surface2);border-radius:3px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:${barCol};border-radius:3px;transition:width .4s"></div>
+          </div>
+        </div>`;
+      }
+    }
+
+    div.innerHTML = `
+      <div class="live-sport">${icon} ${e.league}</div>
+      <div class="live-teams">${e.home} <span style="color:var(--muted);font-weight:400">vs</span> ${e.away}</div>
+      <div class="live-score-row">
+        ${scoreRow}
+        <div class="live-time">${liveIndicator}${timeStr}</div>
+      </div>
+      ${ouBar}
+      ${isMine ? `<div style="margin-top:9px;padding:7px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.18);border-radius:7px">
+        <div style="font-size:10px;color:var(--accent);font-weight:700;margin-bottom:3px">⭐ JOUW BET</div>
+        <div style="font-size:12px;font-weight:600;line-height:1.4">${myBet.markt}</div>
+        <div style="display:flex;gap:10px;margin-top:4px;font-size:11px;color:var(--muted)">
+          <span>@ <strong style="color:var(--text)">${myBet.odds}</strong></span>
+          <span>${myBet.units}U</span>
+          <span>€${myBet.inzet}</span>
+          <span style="color:#4ade80">pot. +€${+((myBet.odds-1)*myBet.inzet).toFixed(2)}</span>
+        </div>
+      </div>` : ''}
+      ${e.live ? `<button class="live-events-btn" onclick="toggleEvents('${e.id}','${e.espnSlug||'soccer/eng.1'}')">⚡ Gebeurtenissen</button>
+      <div class="live-events-panel" id="ep-${e.id}"><div style="color:var(--muted);font-size:12px;padding:4px 0">Laden...</div></div>` : ''}`;
+    grid.appendChild(div);
+  });
+}
+
+// ── MATCHCAST ────────────────────────────────────────────────────────────────
+const mcCache = {};
+const evTypeMap = {
+  goal:    { ico: '⚽', color: '#4ade80' },
+  owngoal: { ico: '⚽', color: '#f87171', label: 'Eigen doelpunt' },
+  yellow:  { ico: '🟨', color: '' },
+  red:     { ico: '🟥', color: '#f87171' },
+  sub:     { ico: '🔄', color: 'var(--muted)' },
+};
+const statLabels = {
+  xG: 'xG (schatting)', possessionPct: 'Balbezit %', totalShots: 'Schoten',
+  shotsOnTarget: 'Op doel', blockedShots: 'Geblokt', wonCorners: 'Hoekschoppen',
+  foulsCommitted: 'Overtredingen', yellowCards: 'Gele kaarten', redCards: 'Rode kaarten',
+  offsides: 'Buitenspel', saves: 'Reddingen'
+};
+
+async function toggleEvents(id, slug) {
+  const panel = document.getElementById('ep-' + id);
+  const btn   = panel?.previousElementSibling;
+  if (!panel || !btn) return;
+  const isOpen = panel.classList.contains('open');
+  if (isOpen) {
+    panel.classList.remove('open');
+    btn.classList.remove('active');
+    btn.textContent = '⚡ Gebeurtenissen';
+    return;
+  }
+  panel.classList.add('open');
+  btn.classList.add('active');
+  btn.textContent = '⚡ Sluiten';
+
+  if (mcCache[id]) { renderInlineMatchcast(panel, mcCache[id]); return; }
+  panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:4px 0">Laden…</div>';
+  try {
+    const d = await fetch(`/api/live-events/${id}?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+    mcCache[id] = d;
+    renderInlineMatchcast(panel, d);
+  } catch {
+    panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Geen data beschikbaar.</div>';
+  }
+}
+
+function renderInlineMatchcast(panel, d) {
+  let html = '';
+
+  // Stats
+  if (d.stats?.length) {
+    html += `<div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">`;
+    html += d.stats.map((s, idx) => {
+      const hv    = parseFloat(s.home) || 0;
+      const av    = parseFloat(s.away) || 0;
+      const total = hv + av || 1;
+      const hp    = Math.round(hv / total * 100);
+      const lbl   = statLabels[s.key] || s.key;
+      const isXG  = s.key === 'xG';
+      const accent = isXG ? '#fbbf24' : 'var(--accent)';
+      const bg    = idx % 2 === 0 ? 'background:var(--surface2)' : '';
+      return `<div style="display:grid;grid-template-columns:32px 1fr 32px;align-items:center;gap:8px;padding:6px 10px;${bg}${isXG?';border-bottom:1px solid var(--border)':''}">
+        <span style="font-size:12px;font-weight:${isXG?'800':'600'};color:${isXG?'#fbbf24':'var(--text)'};text-align:right">${s.home}</span>
+        <div>
+          <div style="display:flex;height:3px;border-radius:2px;overflow:hidden;margin-bottom:3px">
+            <div style="flex:${hp};background:${accent};opacity:0.85"></div>
+            <div style="flex:${100-hp};background:rgba(248,113,113,0.35)"></div>
+          </div>
+          <div style="font-size:10px;color:var(--muted);text-align:center;font-weight:${isXG?'600':'400'}">${lbl}</div>
+        </div>
+        <span style="font-size:12px;font-weight:${isXG?'800':'600'};color:${isXG?'#fbbf24':'var(--text)'}">${s.away}</span>
+      </div>`;
+    }).join('');
+    html += `</div>`;
+  }
+
+  // Events
+  if (!d.events?.length) {
+    html += '<div style="color:var(--muted);font-size:12px">Nog geen gebeurtenissen.</div>';
+  } else {
+    html += [...d.events].reverse().map(ev => {
+      const m = evTypeMap[ev.type] || { ico: '📌', color: '' };
+      return `<div class="live-event-row">
+        <span class="live-event-min">${ev.minute ? ev.minute+"'" : ''}</span>
+        <span class="live-event-ico">${m.ico}</span>
+        <span class="live-event-txt" style="${m.color?'color:'+m.color:''}">${ev.player || ev.text}${m.label?' <span style="opacity:.6;font-size:10px">('+m.label+')</span>':''}</span>
+        ${ev.team ? `<span class="live-event-team">${ev.team.split(' ').pop()}</span>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  panel.innerHTML = html;
+}
+
+// ── ANALYSE ───────────────────────────────────────────────────────────────────
+let analysePicks = [];
+
+async function refreshAnalyse() {
+  try {
+    const d = await fetch('/api/picks').then(r => r.json());
+    analysePicks = [...(d.prematch||[]), ...(d.live||[])];
+  } catch {
+    analysePicks = [...(scanPicks.prematch||[]), ...(scanPicks.live||[])];
+  }
+  doSearch();
+}
+
+function doSearch() {
+  const q = (document.getElementById('q-input').value || '').toLowerCase().trim();
+  const out = document.getElementById('analyse-out');
+  const picks = analysePicks.length ? analysePicks : [...(scanPicks.prematch||[]), ...(scanPicks.live||[])];
+
+  if (!picks.length) {
+    out.innerHTML = '<div class="empty-state"><div class="ico">🔍</div><div>Geen scandata. Start eerst een prematch scan.</div></div>';
+    return;
+  }
+
+  const filtered = q ? picks.filter(p =>
+    (p.match||'').toLowerCase().includes(q) ||
+    (p.label||'').toLowerCase().includes(q) ||
+    (p.reason||'').toLowerCase().includes(q) ||
+    (p.league||'').toLowerCase().includes(q)
+  ) : picks;
+
+  if (!filtered.length) {
+    out.innerHTML = `<div class="empty-state"><div class="ico">🔎</div><div>Geen resultaten voor "<strong>${q}</strong>".</div></div>`;
+    return;
+  }
+
+  out.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:12px">${filtered.length} pick${filtered.length!==1?'s':''}</div>`;
+  filtered.forEach((p, i) => {
+    const prob = p.prob || 0;
+    const pc = prob >= 65 ? 'var(--green)' : prob >= 50 ? 'var(--yellow)' : 'var(--red)';
+    const div = document.createElement('div');
+    div.className = 'pick-full';
+    div.innerHTML = `
+      <div class="pick-full-hd">
+        <div>
+          <div class="pick-full-title">${i===0&&!q?'⭐ ':''}${p.label}</div>
+          <div class="pick-full-meta">${p.match||''} · ${p.league||''} · Odds: <strong>${p.odd||p.odds||'?'}</strong> · ${p.units||''}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:18px;font-weight:700;color:${pc}">${prob}%</div>
+          <div style="font-size:10.5px;color:var(--muted)">kans</div>
+        </div>
+      </div>
+      ${p.reason ? `<div class="reason-box">📊 ${p.reason}</div>` : ''}`;
+    out.appendChild(div);
+  });
+}
+
+// ── MODAL ─────────────────────────────────────────────────────────────────────
+let modalPick = null;
+
+function openModal(idx, labelHint) {
+  // Find pick from the most recently rendered picks area
+  const prematchEl = document.getElementById('picks-prematch');
+  const liveEl     = document.getElementById('picks-live');
+  const src = (prematchEl._picks||[]).length > idx ? prematchEl._picks : (liveEl._picks||[]);
+  modalPick = src[idx] || null;
+  if (!modalPick) return;
+
+  const now = new Date();
+  document.getElementById('m-match').value = modalPick.match || '';
+  document.getElementById('m-markt').value = modalPick.label || labelHint || '';
+  document.getElementById('m-odds').value  = modalPick.odd || modalPick.odds || '';
+  document.getElementById('m-units').value = parseFloat(String(modalPick.units||'1').replace('U','')) || 1;
+  document.getElementById('m-datum').value = pad(now.getDate())+'-'+pad(now.getMonth()+1)+'-'+now.getFullYear();
+  document.getElementById('m-tijd').value  = modalPick.kickoff || '';
+  document.getElementById('modal-msg').textContent = '';
+  updatePayout();
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeOverlay(e) { if (e.target === document.getElementById('modal')) closeModal(); }
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+
+function updatePayout() {
+  const odds   = parseFloat(document.getElementById('m-odds').value) || 0;
+  const units  = parseFloat(document.getElementById('m-units').value) || 0;
+  const stake  = +(units * 10).toFixed(2);   // 1 unit = €10
+  const total  = +(stake * odds).toFixed(2);
+  const profit = +(total - stake).toFixed(2);
+  document.getElementById('payout-stake').textContent  = stake  ? `€${stake.toFixed(2)}`  : '€—';
+  document.getElementById('payout-total').textContent  = total  ? `€${total.toFixed(2)}`  : '€—';
+  document.getElementById('payout-profit').textContent = profit ? `+€${profit.toFixed(2)}` : '€—';
+}
+
+document.getElementById('m-odds').addEventListener('input', updatePayout);
+document.getElementById('m-units').addEventListener('input', updatePayout);
+
+async function logModalBet() {
+  const odds  = parseFloat(document.getElementById('m-odds').value);
+  const units = parseFloat(document.getElementById('m-units').value) || 1;
+  const match = document.getElementById('m-match').value;
+  if (!match || !odds) { showMsg('modal-msg', '⚠️ Vul odds in.', 'red'); return; }
+
+  const d = await fetch('/api/bets', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      datum: document.getElementById('m-datum').value,
+      tijd:  document.getElementById('m-tijd').value || null,
+      sport: document.getElementById('m-sport').value,
+      wedstrijd: match,
+      markt: document.getElementById('m-markt').value,
+      odds, units, tip: 'Main', uitkomst: 'Open', notities: ''
+    })
+  }).then(r => r.json());
+
+  betData = d;
+  showMsg('modal-msg', '✅ Bet gelogd!', 'green');
+  setTimeout(closeModal, 1300);
+}
+
+// ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+let notifOpen = false;
+let notifAlerts = [];
+
+function toggleNotif() {
+  notifOpen = !notifOpen;
+  document.getElementById('notif-dropdown').classList.toggle('open', notifOpen);
+  if (notifOpen) loadNotifications();
+}
+
+// Sluit bij klik buiten dropdown
+document.addEventListener('click', e => {
+  const wrap = document.querySelector('.notif-wrap');
+  if (notifOpen && wrap && !wrap.contains(e.target)) {
+    notifOpen = false;
+    document.getElementById('notif-dropdown').classList.remove('open');
+  }
+});
+
+async function loadNotifications() {
+  const body = document.getElementById('notif-body');
+  try {
+    const d = await fetch('/api/notifications').then(r => r.json());
+    notifAlerts = d.alerts || [];
+
+    // Badge: urgente alerts + ongeziene model updates
+    const seenTs  = parseInt(localStorage.getItem('modelLogSeen') || '0');
+    const unseenModel = notifAlerts.filter(a => a.modelUpdate && new Date(a.date).getTime() > seenTs);
+    const urgentCount = notifAlerts.filter(a => a.type === 'error' || a.type === 'warn').length;
+    const badgeN = urgentCount + unseenModel.length;
+    const badge  = document.getElementById('notif-badge');
+    badge.textContent = badgeN;
+    badge.style.display = badgeN > 0 ? 'flex' : 'none';
+
+    // Markeer model updates als gezien bij openen
+    if (notifOpen && unseenModel.length > 0) localStorage.setItem('modelLogSeen', Date.now());
+
+    if (!notifAlerts.length) {
+      body.innerHTML = `<div class="notif-empty">✅ Alles in orde — geen meldingen.</div>`;
+      return;
+    }
+    body.innerHTML = notifAlerts.map(a => {
+      const isNew = a.modelUpdate && new Date(a.date).getTime() > seenTs;
+      const dateStr = a.date ? `<span style="font-size:10px;color:var(--muted);display:block;margin-top:2px">${new Date(a.date).toLocaleDateString('nl-NL')}</span>` : '';
+      return `<div class="notif-item ${a.type}" style="${isNew ? 'border-left:3px solid var(--accent)' : ''}">
+        <span style="font-size:16px;line-height:1.3;flex-shrink:0">${a.icon}</span>
+        <div>
+          <div>${isNew ? '<strong>' : ''}${a.msg}${isNew ? '</strong>' : ''}</div>
+          ${dateStr}
+          ${a.link ? `<a href="${a.link}" target="_blank" class="notif-link">Meer info →</a>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    const footer = d.totalSettled > 0
+      ? `${d.totalSettled} bets in model${d.modelLastUpdated ? ' · model bijgewerkt ' + new Date(d.modelLastUpdated).toLocaleDateString('nl-NL') : ''}`
+      : (d.lastUpdated ? 'bijgewerkt ' + new Date(d.lastUpdated).toLocaleDateString('nl-NL') : 'nog geen data');
+    body.innerHTML += `<div style="padding:8px 16px;font-size:11px;color:var(--muted);border-top:1px solid var(--border)">${footer}</div>`;
+  } catch {
+    body.innerHTML = '<div class="notif-empty">Fout bij ophalen notificaties.</div>';
+  }
+}
+
+// ── MODEL LOG (info tab) ──────────────────────────────────────────────────────
+async function loadModelLog() {
+  const body  = document.getElementById('model-log-body');
+  const badge = document.getElementById('model-log-badge');
+  if (!body) return;
+  try {
+    const d    = await fetch('/api/version').then(r => r.json());
+    const seenTs = parseInt(localStorage.getItem('modelLogSeen') || '0');
+    // Versie string bovenaan info
+    const vs = document.getElementById('app-version-str');
+    if (vs) vs.textContent = `versie ${d.version}`;
+
+    if (!d.modelLog?.length) {
+      body.innerHTML = '<span>Nog geen model updates — het model leert zodra bets worden afgerond.</span>';
+      badge.style.display = 'none';
+      return;
+    }
+    const hasNew = d.modelLog.some(e => new Date(e.date).getTime() > seenTs);
+    badge.style.display = hasNew ? 'inline-block' : 'none';
+
+    body.innerHTML = d.modelLog.map(e => {
+      const dir     = e.newMult > e.oldMult ? '📈' : '📉';
+      const dirClr  = e.newMult > e.oldMult ? 'var(--green)' : 'var(--red)';
+      const dateStr = new Date(e.date).toLocaleDateString('nl-NL', { day:'2-digit', month:'short', year:'numeric' });
+      const isNew   = new Date(e.date).getTime() > seenTs;
+      return `<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)${isNew?';background:rgba(99,102,241,0.04);margin:0 -4px;padding:10px 4px':''}">
+        <span style="font-size:18px;flex-shrink:0">${dir}</span>
+        <div style="flex:1">
+          <div style="font-weight:${isNew?'600':'400'};color:var(--text)">${e.note}${isNew?' <span style="font-size:10px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:10px;vertical-align:middle">nieuw</span>':''}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">
+            Multiplier: <span style="color:${dirClr};font-weight:600">${e.oldMult.toFixed(2)} → ${e.newMult.toFixed(2)}</span>
+            &nbsp;·&nbsp; ${e.n} bets &nbsp;·&nbsp; ${e.winRate}% winrate &nbsp;·&nbsp; ${dateStr}
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch {
+    body.innerHTML = '<span>Fout bij ophalen model log.</span>';
+  }
+}
+
+// ── CHECK UITSLAGEN ───────────────────────────────────────────────────────────
+async function checkResults() {
+  const btn  = document.getElementById('btn-check');
+  const msg  = document.getElementById('check-msg');
+  const area = document.getElementById('check-results-area');
+  btn.disabled = true;
+  msg.textContent = 'Ophalen...';
+  area.style.display = 'none';
+
+  try {
+    const d = await fetch('/api/check-results').then(r => r.json());
+    if (d.error) { msg.textContent = '❌ ' + d.error; return; }
+
+    if (d.checked === 0) {
+      msg.textContent = '✅ Geen open bets.';
+      return;
+    }
+    if (!d.results?.length) {
+      msg.textContent = `📡 ${d.checked} open bets — geen afgeronde wedstrijden gevonden (te vroeg?).`;
+      return;
+    }
+
+    msg.textContent = d.updated > 0
+      ? `✅ ${d.updated} bet${d.updated !== 1 ? 's' : ''} automatisch bijgewerkt`
+      : `📋 Scores gevonden — zie hieronder`;
+
+    // Re-render tabel met nieuwe data
+    if (d.bets) { betData = { bets: d.bets, stats: d.stats }; renderStats(d.stats); renderBetsTable(d.bets); }
+
+    // Toon resultaten
+    area.style.display = 'block';
+    area.innerHTML = `<div class="card">
+      <div class="card-title" style="margin-bottom:12px">📋 Gevonden resultaten</div>
+      <div class="results-list">
+        ${d.results.map(r => `
+          <div class="result-row">
+            <div class="result-score">${r.score || '?'}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.wedstrijd}">${r.wedstrijd}</div>
+              <div style="font-size:11.5px;color:var(--muted)">${r.markt}</div>
+              ${r.note ? `<div class="result-note">⚠️ ${r.note}</div>` : ''}
+            </div>
+            <div style="flex-shrink:0">
+              ${r.uitkomst === 'W' ? '<span class="badge badge-w">W</span>'
+                : r.uitkomst === 'L' ? '<span class="badge badge-l">L</span>'
+                : '<span class="badge badge-o">?</span>'}
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  } catch (e) {
+    msg.textContent = '❌ Fout: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────────
+function pad(n) { return String(n).padStart(2,'0'); }
+
+function showMsg(id, txt, color) {
+  const el = document.getElementById(id);
+  el.textContent = txt;
+  el.style.color = 'var(--' + color + ')';
+  setTimeout(() => { el.textContent = ''; }, 3500);
+}
+
+// ── DASHBOARD HEADER ──────────────────────────────────────────────────────────
+const QUOTES = [
+  "Het huis wint altijd — tenzij je een edge hebt.",
+  "In God we trust. All others must bring data.",
+  "Value is not in the odds, it's in the edge.",
+  "Discipline beats conviction every single time.",
+  "Een verlies is data. Twee op rij ook. Drie op rij: kijk naar het model.",
+  "De bookmaker heeft een marge. Wij hebben een algoritme.",
+  "Geduld is geen passiviteit — het is strategisch wachten.",
+  "Kleine edges, consistent toegepast, winnen van geluk op de lange termijn.",
+  "Bet with your head, not over it.",
+  "Statistics are the grammar of science.",
+  "Het model heeft geen gevoel. Dat is het voordeel.",
+  "ROI over 50 bets zegt meer dan ROI over 5.",
+];
+
+function startClock() {
+  function tick() {
+    const now  = new Date();
+    const h    = String(now.getHours()).padStart(2,'0');
+    const m    = String(now.getMinutes()).padStart(2,'0');
+    const s    = String(now.getSeconds()).padStart(2,'0');
+    const days = ['zondag','maandag','dinsdag','woensdag','donderdag','vrijdag','zaterdag'];
+    const months = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+    document.getElementById('dash-time').textContent = `${h}:${m}:${s}`;
+    document.getElementById('dash-date').textContent =
+      `${days[now.getDay()]} ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
+  }
+  tick();
+  setInterval(tick, 1000);
+}
+
+function updateDashStats(stats, bets) {
+  if (!stats) return;
+  document.getElementById('dh-bankroll').textContent = '€' + stats.bankroll;
+  document.getElementById('dh-roi').textContent = (stats.roi * 100).toFixed(1) + '%';
+  document.getElementById('dh-wl').textContent = `${stats.W}/${stats.L}`;
+  document.getElementById('dh-open').textContent = stats.open;
+  document.getElementById('dh-sr').textContent = stats.strikeRate + '%';
+
+  // Recente bets sidebar
+  if (bets) renderRecentBets(bets);
+}
+
+function renderRecentBets(bets) {
+  const el = document.getElementById('rb-list');
+  const liveOnly = document.getElementById('rb-live-only')?.checked;
+
+  // Bouw live score lookup op basis van huidige liveEvts
+  const liveScoreMap = new Map();
+  for (const ev of (liveEvts||[])) {
+    if (!ev.live) continue;
+    liveScoreMap.set(ev.home.toLowerCase(), ev);
+    liveScoreMap.set(ev.away.toLowerCase(), ev);
+  }
+
+  let list = [...bets].reverse();
+  if (liveOnly) {
+    list = list.filter(b => {
+      const teams = b.wedstrijd.split(' vs ').map(t => t.trim().toLowerCase());
+      return teams.some(t => liveScoreMap.has(t));
+    });
+  }
+  list = list.slice(0, 6);
+
+  if (!list.length) { el.innerHTML = `<div class="rb-empty">${liveOnly ? 'Geen live bets.' : 'Nog geen bets.'}</div>`; return; }
+  el.innerHTML = list.map(b => {
+    const teams = b.wedstrijd.split(' vs ').map(t => t.trim().toLowerCase());
+    const liveEv = teams.map(t => liveScoreMap.get(t)).find(Boolean);
+    const liveScore = liveEv
+      ? `<span style="font-size:11px;color:#f87171;font-weight:700;margin-left:4px"><span class="live-dot"></span>${liveEv.scoreH}–${liveEv.scoreA} ${liveEv.minute||''}</span>`
+      : '';
+    const badge = b.uitkomst === 'W'
+      ? `<span class="badge badge-w" style="font-size:10px;padding:2px 7px">W</span>`
+      : b.uitkomst === 'L'
+      ? `<span class="badge badge-l" style="font-size:10px;padding:2px 7px">L</span>`
+      : `<span class="badge badge-o" style="font-size:10px;padding:2px 7px">○</span>`;
+    return `<div class="rb-row">
+      ${badge}
+      <div class="rb-teams" style="flex:1;min-width:0">
+        <div class="rb-match">${b.wedstrijd}${liveScore}</div>
+        <div class="rb-market">${b.markt}</div>
+      </div>
+      <div class="rb-odds">${b.odds}</div>
+    </div>`;
+  }).join('');
+
+  // Model status
+  const ms = document.getElementById('rb-model-status');
+  const c = window._calibData;
+  if (c && c.totalSettled >= 3) {
+    const lines = Object.entries(c.markets)
+      .filter(([,v]) => v.n >= 3)
+      .map(([mk, v]) => {
+        const wr = Math.round(v.w / v.n * 100);
+        const dot = v.multiplier < 0.85 ? '🔴' : v.multiplier > 1.1 ? '🟢' : '🟡';
+        return `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+          <span>${dot} <strong>${mk}</strong></span>
+          <span style="color:var(--muted)">${v.w}/${v.n} (${wr}%)</span>
+        </div>`;
+      }).join('');
+    ms.innerHTML = lines || '<div style="font-size:12px;color:var(--muted)">Nog te weinig data per markt.</div>';
+  } else {
+    ms.innerHTML = '<div style="font-size:12px;color:var(--muted)">Nog geen calibratie data.</div>';
+  }
+}
+
+function setDailyQuote() {
+  const idx = new Date().getDate() % QUOTES.length;
+  document.getElementById('dash-quote').textContent = QUOTES[idx];
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+clearForm();
+startClock();
+setDailyQuote();
+loadBets();
+// Calibratie data voor model-status widget
+fetch('/api/notifications').then(r=>r.json()).then(d => {
+  window._calibData = d;
+}).catch(()=>{});
+
+// Herstel actieve tab uit localStorage
+(function() {
+  const saved = localStorage.getItem('activeTab');
+  if (saved && TAB_IDS.includes(saved) && saved !== 'scans') go(saved);
+})();
+
+// Laad notifications badge + model updates stil op achtergrond
+(async () => {
+  try {
+    const [notif, ver] = await Promise.all([
+      fetch('/api/notifications').then(r => r.json()),
+      fetch('/api/version').then(r => r.json()),
+    ]);
+    notifAlerts = notif.alerts || [];
+    const seenTs      = parseInt(localStorage.getItem('modelLogSeen') || '0');
+    const unseenModel = notifAlerts.filter(a => a.modelUpdate && new Date(a.date).getTime() > seenTs);
+    const urgentCount = notifAlerts.filter(a => a.type === 'error' || a.type === 'warn').length;
+    const badgeN      = urgentCount + unseenModel.length;
+    if (badgeN > 0) {
+      const badge = document.getElementById('notif-badge');
+      badge.textContent = badgeN;
+      badge.style.display = 'flex';
+    }
+    // Update versie string
+    const vs = document.getElementById('app-version-str');
+    if (vs && ver.version) vs.textContent = `versie ${ver.version}`;
+  } catch {}
+})();
+
+// ── SCAN HISTORY — laad bij page load, herstel laatste scan automatisch ──────
+let scanHistory = [];
+let historyVisible = false;
+
+async function loadScanHistory() {
+  try {
+    scanHistory = await fetch('/api/scan-history').then(r => r.json());
+    if (!scanHistory.length) return;
+
+    const wrap = document.getElementById('scan-history-wrap');
+    if (wrap) wrap.style.display = 'block';
+
+    // Laad de meest recente scan automatisch als de picks-wrap nog leeg is
+    const pEl = document.getElementById('picks-prematch');
+    if (pEl && !pEl._picks?.length && scanHistory[0]?.picks?.length) {
+      const latest = scanHistory[0];
+      const ago    = formatAgo(latest.ts);
+      renderPicks(pEl, latest.picks);
+      const hdr = pEl.querySelector('.picks-hdr');
+      if (hdr) hdr.innerHTML += ` <span style="font-size:11px;color:rgba(255,255,255,0.35);font-weight:400">· herstel ${ago}</span>`;
+      scanPicks.prematch = latest.picks;
+    }
+  } catch {}
+}
+
+function formatAgo(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.round(diff / 60000);
+  if (m < 2)  return 'zojuist';
+  if (m < 60) return `${m} min geleden`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} uur geleden`;
+  return `${Math.round(h/24)} dag geleden`;
+}
+
+function toggleHistory() {
+  historyVisible = !historyVisible;
+  const list = document.getElementById('scan-history-list');
+  const btn  = document.getElementById('history-toggle');
+  if (!list || !btn) return;
+  list.style.display = historyVisible ? 'block' : 'none';
+  btn.textContent = historyVisible ? '▲ verberg' : '▼ toon';
+  if (historyVisible && !list.innerHTML) renderHistoryList(list);
+}
+
+function renderHistoryList(el) {
+  if (!scanHistory.length) { el.innerHTML = '<div style="font-size:12px;color:rgba(255,255,255,0.35);padding:8px 0">Nog geen eerdere scans.</div>'; return; }
+  el.innerHTML = scanHistory.map((entry, i) => {
+    if (i === 0) return ''; // eerste = al getoond
+    const ago  = formatAgo(entry.ts);
+    const ts   = new Date(entry.ts).toLocaleString('nl-NL', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+    const n    = entry.picks?.length || 0;
+    return `<div style="border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:border-color .15s"
+                 onmouseover="this.style.borderColor='rgba(255,255,255,0.2)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'"
+                 onclick="restoreScan(${i})">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;font-weight:600;color:rgba(255,255,255,0.7)">${ts}</span>
+        <span style="font-size:11px;color:rgba(255,255,255,0.35)">${ago}</span>
+      </div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:3px">
+        ${n > 0 ? `${n} pick${n>1?'s':''}: ${(entry.picks||[]).slice(0,2).map(p => p.label?.split(' ')[1]||'?').join(', ')}${n>2?'…':''}` : 'Geen picks'}
+        · ${entry.totalEvents||0} wedstrijden
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function restoreScan(idx) {
+  const entry = scanHistory[idx];
+  if (!entry?.picks) return;
+  const pEl = document.getElementById('picks-prematch');
+  if (!pEl) return;
+  const ts = new Date(entry.ts).toLocaleString('nl-NL', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+  renderPicks(pEl, entry.picks);
+  const hdr = pEl.querySelector('.picks-hdr');
+  if (hdr) hdr.innerHTML += ` <span style="font-size:11px;color:rgba(255,255,255,0.35);font-weight:400">· herstel ${ts}</span>`;
+  scanPicks.prematch = entry.picks;
+}
+
+loadScanHistory();
+
+// ── API LIMIET ────────────────────────────────────────────────────────────────
+async function loadApiLimit() {
+  try {
+    const s = await fetch('/api/status').then(r => r.json());
+    const rem = s.remaining, lim = s.limit || 7500;
+    const txt = document.getElementById('api-limit-text');
+    const fill = document.getElementById('api-limit-fill');
+    if (!txt || !fill) return;
+    if (rem === null || rem === undefined) {
+      txt.textContent = 'onbekend (scan eerst)';
+      fill.style.width = '100%';
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, rem / lim * 100));
+    txt.textContent = `${rem.toLocaleString()} / ${lim.toLocaleString()} resterend`;
+    fill.style.width = pct + '%';
+    fill.style.background = pct > 50 ? '#34d399' : pct > 20 ? '#fbbf24' : '#f87171';
+    txt.style.color = pct > 50 ? 'rgba(255,255,255,0.7)' : pct > 20 ? '#fbbf24' : '#f87171';
+  } catch {}
+}
+loadApiLimit();
+</script>
+
+</body>
+</html>

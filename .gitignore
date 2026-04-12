@@ -1,0 +1,5 @@
+node_modules/
+gsheets-key.json
+calibration.json
+*.env
+.env

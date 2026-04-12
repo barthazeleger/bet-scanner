@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: toto-scanner
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SHEET_ID
+        value: 1tHV7Mrp_jUzlU-nxUAHpYL-d0rcqG2FpfGGNWbu16Ik
+      - key: ODDS_API_KEY
+        sync: false          # vul in via Render dashboard
+      - key: API_FOOTBALL_KEY
+        sync: false          # vul in via Render dashboard
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false          # vul in via Render dashboard (volledige JSON als één regel)
+      - key: DASHBOARD_PASSWORD
+        sync: false          # kies zelf een wachtwoord
