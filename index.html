@@ -2564,8 +2564,18 @@ function filterLive() {
       } else if (m.includes('under') || m.includes('onder')) {
         const line = parseFloat(m.match(/[\d.]+/) || [2.5]);
         resultStatus = totalGoals < line ? 'winning' : 'losing';
+      } else if (m.includes('btts') || m.includes('beide')) {
+        const isYes = m.includes('ja') || m.includes('yes');
+        const bothScored = sH > 0 && sA > 0;
+        resultStatus = isYes ? (bothScored ? 'winning' : (sH > 0 || sA > 0) ? 'draw' : 'losing')
+                             : (bothScored ? 'losing' : 'winning');
       } else if (m.includes('gelijkspel') || m.includes('draw')) {
         resultStatus = sH === sA ? 'winning' : 'losing';
+      } else if (m.includes('draw no bet') || m.includes('dnb')) {
+        const betHome = myBet.wedstrijd.toLowerCase().split(' vs ')[0].trim();
+        const isHome = e.home.toLowerCase().includes(betHome) || betHome.includes(e.home.toLowerCase().split(' ')[0]);
+        const betScore = isHome ? sH : sA, oppScore = isHome ? sA : sH;
+        resultStatus = betScore > oppScore ? 'winning' : betScore < oppScore ? 'losing' : 'draw';
       }
     }
     const resultBorder = resultStatus === 'winning' ? 'border-left:3px solid #4ade80'
