@@ -772,15 +772,22 @@ nav::-webkit-scrollbar { display: none; }
     </div>
     <div class="toggle-row">
       <label class="sw">
-        <input type="checkbox" id="myBetsOnly" onchange="filterLive()">
+        <input type="checkbox" id="myBetsOnly" checked onchange="filterLive()">
         <span class="sw-track"></span>
       </label>
       <span>Alleen mijn bets</span>
     </div>
+    <div class="toggle-row">
+      <label class="sw">
+        <input type="checkbox" id="liveAutoRefresh" checked onchange="toggleLiveAutoRefresh()">
+        <span class="sw-track"></span>
+      </label>
+      <span>Auto-refresh (30s)</span>
+    </div>
     <span id="live-info" style="font-size:12px;color:var(--muted)"></span>
   </div>
   <div class="live-grid" id="live-grid">
-    <div class="empty-state"><div class="ico">📡</div><div>Klik "Vernieuwen" om live scores te laden.</div></div>
+    <div class="empty-state"><div class="ico">📡</div><div>Live scores laden...</div></div>
   </div>
 </section>
 
@@ -2192,19 +2199,54 @@ function checkBetNotifications(events) {
   }
 }
 
+let liveAutoTimer = null;
+let liveFirstLoad = true;
+
 async function fetchLive() {
   document.getElementById('live-info').textContent = 'Laden...';
   try {
-    const d = await api('/api/live-scores').then(r => r?.json());
+    // Eerste keer: api-football (rijke data). Daarna: ESPN (gratis auto-refresh)
+    const url = liveFirstLoad ? '/api/live-scores' : '/api/live-poll';
+    const d = await api(url).then(r => r?.json());
     if (!d) return;
     liveEvts = d.events || [];
+    liveFirstLoad = false;
     const lc = d.liveCount ?? liveEvts.filter(e=>e.live).length;
-    document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal`;
+    const src = url.includes('poll') ? 'ESPN' : 'api-football';
+    document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal • ${src}`;
     checkBetNotifications(liveEvts);
     filterLive();
+    // Start auto-refresh als aanstaat
+    if (document.getElementById('liveAutoRefresh')?.checked) startLiveAutoRefresh();
   } catch {
     document.getElementById('live-info').textContent = 'Fout bij ophalen';
   }
+}
+
+function startLiveAutoRefresh() {
+  stopLiveAutoRefresh();
+  liveAutoTimer = setInterval(async () => {
+    // Alleen refreshen als we op de live tab zitten
+    if (!document.getElementById('page-live')?.classList.contains('active')) return;
+    try {
+      const d = await api('/api/live-poll').then(r => r?.json());
+      if (!d) return;
+      liveEvts = d.events || [];
+      const lc = d.liveCount ?? liveEvts.filter(e=>e.live).length;
+      document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal • ESPN auto`;
+      checkBetNotifications(liveEvts);
+      filterLive();
+    } catch {}
+  }, 30000);
+}
+
+function stopLiveAutoRefresh() {
+  if (liveAutoTimer) { clearInterval(liveAutoTimer); liveAutoTimer = null; }
+}
+
+function toggleLiveAutoRefresh() {
+  if (document.getElementById('liveAutoRefresh')?.checked) startLiveAutoRefresh();
+  else stopLiveAutoRefresh();
 }
 
 function filterLive() {
