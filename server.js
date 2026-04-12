@@ -1718,6 +1718,7 @@ async function readBets() {
   const res = await sh.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: `${tab}!A1:P500`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
   });
   const data = res.data.values || [];
 
@@ -2312,6 +2313,27 @@ app.post('/api/bets/recalculate', async (req, res) => {
     const sb = user?.settings?.startBankroll ?? START_BANKROLL;
     const ue = user?.settings?.unitEur       ?? UNIT_EUR;
     res.json({ fixed, bets: correctedBets, stats: calcStats(correctedBets, sb, ue) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Debug: raw sheet data voor L bets (tijdelijk — voor bankroll diagnose)
+app.get('/api/debug/wl', requireAdmin, async (req, res) => {
+  try {
+    const { bets, _raw } = await readBets();
+    const lBets = [];
+    for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
+      const row = _raw[i];
+      if (!row || !row[0]) continue;
+      if ((row[9]||'') === 'L' || (row[9]||'') === 'W') {
+        lBets.push({
+          row: i+1, id: row[0], uitkomst: row[9],
+          odds_raw: row[5], units_raw: row[6], inzet_raw: row[7], wl_raw: row[10],
+          odds_type: typeof row[5], units_type: typeof row[6], inzet_type: typeof row[7], wl_type: typeof row[10],
+          parsed_bet: bets.find(b => b.id === parseFloat(row[0]))
+        });
+      }
+    }
+    res.json({ settledCount: lBets.length, bets: lBets, stats: calcStats(bets) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
