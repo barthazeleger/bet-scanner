@@ -829,6 +829,21 @@ nav::-webkit-scrollbar { display: none; }
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.4</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">api-football live scores + 40 competities</div>
+          <div style="color:var(--muted);line-height:1.7">📡 Live scores, events en stats volledig via api-football (rijkere data)<br>
+          🏟️ 40 voetbalcompetities — alle Europese topcompetities + 2e divisies + cups + rest van de wereld<br>
+          ⚡ Events panel (goals/kaarten/wissels) direct uit api-football — inclusief minuut + speler + assist<br>
+          📊 xG direct uit api-football indien beschikbaar, anders schatting<br>
+          🔴 Live scan dekt nu alle 40 competities</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
           <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.3</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
@@ -1682,7 +1697,7 @@ function filterLive() {
           <span style="color:#4ade80">pot. +€${+((myBet.odds-1)*myBet.inzet).toFixed(2)}</span>
         </div>
       </div>` : ''}
-      ${e.live ? `<button class="live-events-btn" onclick="toggleEvents('${e.id}','${e.espnSlug||'soccer/eng.1'}')">⚡ Gebeurtenissen</button>
+      ${e.live ? `<button class="live-events-btn" onclick="toggleEvents('${e.id}')">⚡ Gebeurtenissen</button>
       <div class="live-events-panel" id="ep-${e.id}"><div style="color:var(--muted);font-size:12px;padding:4px 0">Laden...</div></div>` : ''}`;
     grid.appendChild(div);
   });
@@ -1704,7 +1719,7 @@ const statLabels = {
   offsides: 'Buitenspel', saves: 'Reddingen'
 };
 
-async function toggleEvents(id, slug) {
+async function toggleEvents(id) {
   const panel = document.getElementById('ep-' + id);
   const btn   = panel?.previousElementSibling;
   if (!panel || !btn) return;
@@ -1722,7 +1737,7 @@ async function toggleEvents(id, slug) {
   if (mcCache[id]) { renderInlineMatchcast(panel, mcCache[id]); return; }
   panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:4px 0">Laden…</div>';
   try {
-    const d = await fetch(`/api/live-events/${id}?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+    const d = await fetch(`/api/live-events/${id}`).then(r => r.json());
     mcCache[id] = d;
     renderInlineMatchcast(panel, d);
   } catch {

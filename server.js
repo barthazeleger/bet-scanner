@@ -27,7 +27,7 @@ if (DASHBOARD_PASSWORD) {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '3.3.0';
+const APP_VERSION    = '3.4.0';
 const TOKEN      = '8722733522:AAGuQiuENAwHYrW21wXD-W5drNAxJHSiYMw';
 const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -294,26 +294,52 @@ const CURRENT_SEASON = new Date().getMonth() < 7
 
 // Voetbal competities via api-football.com (league ID, ESPN code, thuisvoordeel)
 const AF_FOOTBALL_LEAGUES = [
-  { id:39,  key:'soccer_epl',       name:'Premier League',     espn:'eng.1', ha:0.05, season:CURRENT_SEASON },
-  { id:140, key:'soccer_laliga',    name:'La Liga',            espn:'esp.1', ha:0.05, season:CURRENT_SEASON },
-  { id:78,  key:'soccer_bundesliga',name:'Bundesliga',         espn:'ger.1', ha:0.05, season:CURRENT_SEASON },
-  { id:135, key:'soccer_seriea',    name:'Serie A',            espn:'ita.1', ha:0.05, season:CURRENT_SEASON },
-  { id:61,  key:'soccer_ligue1',    name:'Ligue 1',            espn:'fra.1', ha:0.05, season:CURRENT_SEASON },
-  { id:88,  key:'soccer_eredivisie',name:'Eredivisie',         espn:'ned.1', ha:0.05, season:CURRENT_SEASON },
-  { id:2,   key:'soccer_ucl',       name:'Champions League',   espn:null,    ha:0.02, season:CURRENT_SEASON },
-  { id:3,   key:'soccer_uel',       name:'Europa League',      espn:null,    ha:0.02, season:CURRENT_SEASON },
-  { id:94,  key:'soccer_primeiraliga',name:'Primeira Liga',    espn:'por.1', ha:0.05, season:CURRENT_SEASON },
-  { id:203, key:'soccer_superlig',  name:'Süper Lig',          espn:'tur.1', ha:0.06, season:CURRENT_SEASON },
-  { id:144, key:'soccer_jupiler',   name:'Jupiler Pro League', espn:null,    ha:0.05, season:CURRENT_SEASON },
-  { id:40,  key:'soccer_championship',name:'Championship',     espn:'eng.2', ha:0.04, season:CURRENT_SEASON },
-  { id:41,  key:'soccer_league1',   name:'League One',         espn:'eng.3', ha:0.04, season:CURRENT_SEASON },
-  { id:42,  key:'soccer_league2',   name:'League Two',         espn:'eng.4', ha:0.04, season:CURRENT_SEASON },
-  { id:136, key:'soccer_serieb',    name:'Serie B',            espn:'ita.2', ha:0.04, season:CURRENT_SEASON },
-  { id:66,  key:'soccer_ligue2',    name:'Ligue 2',            espn:'fra.2', ha:0.04, season:CURRENT_SEASON },
-  { id:179, key:'soccer_scottish',  name:'Scottish Prem',      espn:null,    ha:0.05, season:CURRENT_SEASON },
-  { id:253, key:'soccer_mls',       name:'MLS',                espn:'usa.1', ha:0.04, season:new Date().getFullYear() },
-  { id:71,  key:'soccer_brasileirao',name:'Brasileirao',       espn:null,    ha:0.06, season:new Date().getFullYear() },
-  { id:128, key:'soccer_argentina', name:'Primera División',   espn:null,    ha:0.06, season:new Date().getFullYear() },
+  // ── Europa — Tier 1 ────────────────────────────────────────────────────────
+  { id:39,  key:'epl',          name:'Premier League',      ha:0.05, season:CURRENT_SEASON },
+  { id:140, key:'laliga',       name:'La Liga',             ha:0.05, season:CURRENT_SEASON },
+  { id:78,  key:'bundesliga',   name:'Bundesliga',          ha:0.05, season:CURRENT_SEASON },
+  { id:135, key:'seriea',       name:'Serie A',             ha:0.05, season:CURRENT_SEASON },
+  { id:61,  key:'ligue1',       name:'Ligue 1',             ha:0.05, season:CURRENT_SEASON },
+  { id:88,  key:'eredivisie',   name:'Eredivisie',          ha:0.05, season:CURRENT_SEASON },
+  { id:94,  key:'primeiraliga', name:'Primeira Liga',       ha:0.05, season:CURRENT_SEASON },
+  { id:203, key:'superlig',     name:'Süper Lig',           ha:0.06, season:CURRENT_SEASON },
+  { id:144, key:'jupiler',      name:'Jupiler Pro League',  ha:0.05, season:CURRENT_SEASON },
+  { id:179, key:'scottish',     name:'Scottish Prem',       ha:0.05, season:CURRENT_SEASON },
+  // ── Europa — Tier 2 ────────────────────────────────────────────────────────
+  { id:40,  key:'championship', name:'Championship',        ha:0.04, season:CURRENT_SEASON },
+  { id:41,  key:'league1',      name:'League One',          ha:0.04, season:CURRENT_SEASON },
+  { id:42,  key:'league2',      name:'League Two',          ha:0.04, season:CURRENT_SEASON },
+  { id:141, key:'laliga2',      name:'La Liga 2',           ha:0.04, season:CURRENT_SEASON },
+  { id:79,  key:'bundesliga2',  name:'Bundesliga 2',        ha:0.04, season:CURRENT_SEASON },
+  { id:136, key:'serieb',       name:'Serie B',             ha:0.04, season:CURRENT_SEASON },
+  { id:66,  key:'ligue2',       name:'Ligue 2',             ha:0.04, season:CURRENT_SEASON },
+  { id:89,  key:'eerstedivisie',name:'Eerste Divisie',      ha:0.04, season:CURRENT_SEASON },
+  { id:95,  key:'liga2por',     name:'Liga Portugal 2',     ha:0.04, season:CURRENT_SEASON },
+  { id:180, key:'scottish2',    name:'Scottish Championship',ha:0.04,season:CURRENT_SEASON },
+  // ── Europese Cups ──────────────────────────────────────────────────────────
+  { id:2,   key:'ucl',          name:'Champions League',    ha:0.02, season:CURRENT_SEASON },
+  { id:3,   key:'uel',          name:'Europa League',       ha:0.02, season:CURRENT_SEASON },
+  { id:848, key:'uecl',         name:'Conference League',   ha:0.02, season:CURRENT_SEASON },
+  // ── Andere Europese competities ────────────────────────────────────────────
+  { id:218, key:'austria',      name:'Austrian Bundesliga', ha:0.05, season:CURRENT_SEASON },
+  { id:207, key:'swiss',        name:'Swiss Super League',  ha:0.05, season:CURRENT_SEASON },
+  { id:119, key:'denmark',      name:'Danish Superliga',    ha:0.05, season:CURRENT_SEASON },
+  { id:103, key:'norway',       name:'Eliteserien',         ha:0.05, season:new Date().getFullYear() },
+  { id:113, key:'sweden',       name:'Allsvenskan',         ha:0.05, season:new Date().getFullYear() },
+  { id:197, key:'greece',       name:'Super League Greece', ha:0.06, season:CURRENT_SEASON },
+  { id:106, key:'poland',       name:'Ekstraklasa',         ha:0.05, season:CURRENT_SEASON },
+  { id:345, key:'czech',        name:'Czech First League',  ha:0.05, season:CURRENT_SEASON },
+  { id:283, key:'romania',      name:'Liga I Romania',      ha:0.05, season:CURRENT_SEASON },
+  { id:210, key:'croatia',      name:'HNL Croatia',         ha:0.06, season:CURRENT_SEASON },
+  { id:235, key:'russia',       name:'Russian Premier',     ha:0.05, season:CURRENT_SEASON },
+  { id:333, key:'ukraine',      name:'Ukrainian Premier',   ha:0.05, season:CURRENT_SEASON },
+  // ── Rest van de wereld ─────────────────────────────────────────────────────
+  { id:253, key:'mls',          name:'MLS',                 ha:0.04, season:new Date().getFullYear() },
+  { id:262, key:'ligamx',       name:'Liga MX',             ha:0.06, season:new Date().getFullYear() },
+  { id:71,  key:'brasileirao',  name:'Brasileirao',         ha:0.06, season:new Date().getFullYear() },
+  { id:128, key:'argentina',    name:'Primera División',    ha:0.06, season:new Date().getFullYear() },
+  { id:307, key:'saudi',        name:'Saudi Pro League',    ha:0.05, season:CURRENT_SEASON },
+  { id:98,  key:'j1league',     name:'J1 League',           ha:0.04, season:new Date().getFullYear() },
 ];
 
 // ESPN standings cache
@@ -1167,7 +1193,7 @@ async function runPrematch(emit) {
 // Wordt aangeroepen vanuit runPrematch (gecombineerde scan) én vanuit runLive (dagelijks).
 // ═══════════════════════════════════════════════════════════════════════════════
 async function getLivePicks(emit, calibEpBuckets = {}) {
-  const topLeagueIds = new Set([39,140,78,135,61,88,94,203,144,2,3,179,253,40,41,42,136,66]);
+  const topLeagueIds = new Set(AF_FOOTBALL_LEAGUES.map(l => l.id));
   const { picks, combiPool, mkP } = buildPickFactory(1.50, calibEpBuckets);
 
   const liveFixtures = await afGet('v3.football.api-sports.io', '/fixtures', { live: 'all' });
@@ -1755,144 +1781,165 @@ app.get('/api/check-results', async (req, res) => {
 // Live scores via ESPN public API (gratis, geen key nodig)
 app.get('/api/live-scores', async (req, res) => {
   try {
-    const ESPN = 'https://site.api.espn.com/apis/site/v2/sports';
-    const espnGet = url => fetch(url, { headers: { Accept: 'application/json' } }).then(r => r.json()).catch(() => ({}));
+    const knownLeagueIds = new Set(AF_FOOTBALL_LEAGUES.map(l => l.id));
+    const leagueNames    = Object.fromEntries(AF_FOOTBALL_LEAGUES.map(l => [l.id, l.name]));
 
-    const sources = [
-      // Voetbal — alle grote competities
-      { url: `${ESPN}/soccer/eng.1/scoreboard`,  sport: 'football', league: 'Premier League' },
-      { url: `${ESPN}/soccer/esp.1/scoreboard`,  sport: 'football', league: 'La Liga' },
-      { url: `${ESPN}/soccer/ger.1/scoreboard`,  sport: 'football', league: 'Bundesliga' },
-      { url: `${ESPN}/soccer/ita.1/scoreboard`,  sport: 'football', league: 'Serie A' },
-      { url: `${ESPN}/soccer/fra.1/scoreboard`,  sport: 'football', league: 'Ligue 1' },
-      { url: `${ESPN}/soccer/ned.1/scoreboard`,  sport: 'football', league: 'Eredivisie' },
-      { url: `${ESPN}/soccer/por.1/scoreboard`,  sport: 'football', league: 'Primeira Liga' },
-      { url: `${ESPN}/soccer/tur.1/scoreboard`,  sport: 'football', league: 'Süper Lig' },
-      { url: `${ESPN}/soccer/eng.2/scoreboard`,  sport: 'football', league: 'Championship' },
-      { url: `${ESPN}/soccer/uefa.champions/scoreboard`, sport: 'football', league: 'Champions League' },
-      { url: `${ESPN}/soccer/uefa.europa/scoreboard`,    sport: 'football', league: 'Europa League' },
-      // Andere sporten
-      { url: `${ESPN}/basketball/nba/scoreboard`,      sport: 'basketball',      league: 'NBA' },
-      { url: `${ESPN}/basketball/mens-college-basketball/scoreboard`, sport: 'basketball', league: 'NCAAB' },
-      { url: `${ESPN}/hockey/nhl/scoreboard`,          sport: 'ice-hockey',      league: 'NHL' },
-      { url: `${ESPN}/baseball/mlb/scoreboard`,        sport: 'baseball',        league: 'MLB' },
-      { url: `${ESPN}/football/nfl/scoreboard`,        sport: 'american-football', league: 'NFL' },
-      { url: `${ESPN}/tennis/scoreboard`,              sport: 'tennis',          league: 'Tennis' },
-    ];
+    // Live en vandaag geplande wedstrijden ophalen in parallel
+    const today = new Date().toISOString().slice(0, 10);
+    const [liveFixtures, todayFixtures] = await Promise.all([
+      afGet('v3.football.api-sports.io', '/fixtures', { live: 'all' }),
+      afGet('v3.football.api-sports.io', '/fixtures', { date: today }),
+    ]);
 
-    const results = await Promise.all(sources.map(async src => {
-      const d = await espnGet(src.url);
-      return (d.events || []).map(ev => {
-        const comp = ev.competitions?.[0];
-        const home = comp?.competitors?.find(c => c.homeAway === 'home');
-        const away = comp?.competitors?.find(c => c.homeAway === 'away');
-        const status = ev.status?.type;
-        const isLive = status?.state === 'in';
-        if (!home || !away) return null;
-        // Toon starttijd voor niet-live wedstrijden
-        let startTime = '';
-        if (!isLive && ev.date) {
-          startTime = new Date(ev.date).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
-        }
-        return {
-          id:        ev.id,
-          espnSlug:  src.url.replace('https://site.api.espn.com/apis/site/v2/sports/', '').replace('/scoreboard', ''),
-          sport:     src.sport,
-          league:    src.league,
-          home:      home.team?.displayName || '?',
-          away:      away.team?.displayName || '?',
-          scoreH:    isLive ? parseInt(home.score || '0') : null,
-          scoreA:    isLive ? parseInt(away.score || '0') : null,
-          minute:    isLive ? (status?.shortDetail?.match(/^(HT|Half|rust)/i) ? 'HT' : ev.status?.displayClock || '') : '',
-          status:    status?.shortDetail || status?.description || '',
-          startTime: startTime,
-          live:      isLive
-        };
-      }).filter(Boolean);
-    }));
+    const LIVE_STATUSES = new Set(['1H','HT','2H','ET','BT','P','INT','LIVE']);
 
-    const events = results.flat();
-    // Sorteer: live eerst, dan gepland op starttijd
-    events.sort((a,b) => {
+    const mapFixture = (f) => {
+      const statusShort = f.fixture?.status?.short || '';
+      const elapsed     = f.fixture?.status?.elapsed;
+      const extra       = f.fixture?.status?.extra;
+      const isLive      = LIVE_STATUSES.has(statusShort);
+
+      let minute = '';
+      if (isLive) {
+        if (statusShort === 'HT') minute = 'HT';
+        else if (statusShort === 'BT') minute = 'ET rust';
+        else if (elapsed != null) minute = extra ? `${elapsed}+${extra}'` : `${elapsed}'`;
+      }
+
+      const startTime = !isLive && f.fixture?.date
+        ? new Date(f.fixture.date).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' })
+        : '';
+
+      return {
+        id:        f.fixture.id,
+        fixtureId: f.fixture.id,
+        sport:     'football',
+        league:    leagueNames[f.league?.id] || f.league?.name || '',
+        leagueId:  f.league?.id,
+        home:      f.teams?.home?.name || '?',
+        away:      f.teams?.away?.name || '?',
+        homeLogo:  f.teams?.home?.logo || '',
+        awayLogo:  f.teams?.away?.logo || '',
+        scoreH:    isLive ? (f.goals?.home ?? 0) : null,
+        scoreA:    isLive ? (f.goals?.away ?? 0) : null,
+        minute,
+        status:    f.fixture?.status?.long || '',
+        startTime,
+        live:      isLive,
+      };
+    };
+
+    // Dedup op fixture ID (live heeft voorrang boven scheduled)
+    const seen = new Set();
+    const events = [];
+
+    for (const f of liveFixtures) {
+      if (!knownLeagueIds.has(f.league?.id)) continue;
+      seen.add(f.fixture?.id);
+      events.push(mapFixture(f));
+    }
+    for (const f of todayFixtures) {
+      if (!knownLeagueIds.has(f.league?.id)) continue;
+      if (seen.has(f.fixture?.id)) continue;
+      if (f.fixture?.status?.short !== 'NS') continue; // alleen nog niet begonnen
+      seen.add(f.fixture?.id);
+      events.push(mapFixture(f));
+    }
+
+    events.sort((a, b) => {
       if (a.live !== b.live) return b.live ? 1 : -1;
       return (a.startTime || '').localeCompare(b.startTime || '');
     });
-    const liveCount = events.filter(e => e.live).length;
-    res.json({ events, liveCount });
+
+    res.json({ events, liveCount: events.filter(e => e.live).length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Live wedstrijd events (goals, cards, subs) via ESPN summary
+// Live wedstrijd events + stats via api-football (rijkere data dan ESPN)
 app.get('/api/live-events/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const slug = req.query.slug || 'soccer/eng.1';
-    const url  = `https://site.api.espn.com/apis/site/v2/sports/${slug}/summary?event=${id}`;
-    const d    = await fetch(url, { headers: { Accept: 'application/json' } }).then(r => r.json()).catch(() => ({}));
 
-    const events = [];
+    const [eventsData, statsData, fixtureData] = await Promise.all([
+      afGet('v3.football.api-sports.io', '/fixtures/events',     { fixture: id }),
+      afGet('v3.football.api-sports.io', '/fixtures/statistics', { fixture: id }),
+      afGet('v3.football.api-sports.io', '/fixtures',            { id }),
+    ]);
 
-    // ESPN keyEvents — uses type.type field
-    const typeMap = {
-      'goal':          'goal',
-      'penalty-goal':  'goal',
-      'own-goal':      'owngoal',
-      'yellow-card':   'yellow',
-      'red-card':      'red',
-      'yellow-red-card':'red',
-      'substitution':  'sub',
-    };
+    // ── Events (goals, kaarten, wissels) ─────────────────────────────────────
+    const events = (eventsData || []).map(ev => {
+      const t = ev.type || '', detail = ev.detail || '';
+      let type;
+      if (t === 'Goal') {
+        type = detail.includes('Own Goal') ? 'owngoal' : 'goal';
+      } else if (t === 'Card') {
+        type = detail.includes('Yellow') ? 'yellow' : 'red';
+      } else if (t === 'subst') {
+        type = 'sub';
+      } else { return null; }
 
-    const keyEvents = d.keyEvents || [];
-    for (const p of keyEvents) {
-      const t = p.type?.type || '';
-      const type = typeMap[t];
-      if (!type) continue; // skip kickoff, halftime, etc.
-      const minute = p.clock?.displayValue || '';
-      // extract player from shortText or text
-      const shortTxt = p.shortText || p.text || '';
-      const player = p.participants?.[0]?.athlete?.displayName
-                  || shortTxt.split(' ').slice(0, 3).join(' ');
-      const team = p.team?.displayName || p.text?.match(/\(([^)]+)\)/)?.[1] || '';
-      events.push({ type, minute, team, player, text: p.text || '' });
-    }
+      const min = ev.time?.elapsed != null
+        ? (ev.time?.extra ? `${ev.time.elapsed}+${ev.time.extra}'` : `${ev.time.elapsed}'`)
+        : '';
+      return {
+        type,
+        minute:  min,
+        team:    ev.team?.name   || '',
+        player:  ev.player?.name || '',
+        assist:  ev.assist?.name || '',
+        detail,
+      };
+    }).filter(Boolean);
 
-    // Sort by minute
-    events.sort((a, b) => parseInt(a.minute || 0) - parseInt(b.minute || 0));
+    // ── Fixture basisinfo ─────────────────────────────────────────────────────
+    const fx     = fixtureData?.[0];
+    const homeT  = fx?.teams?.home?.name  || '';
+    const awayT  = fx?.teams?.away?.name  || '';
+    const scoreH = fx?.goals?.home ?? null;
+    const scoreA = fx?.goals?.away ?? null;
+    const short  = fx?.fixture?.status?.short || '';
+    const elapsed = fx?.fixture?.status?.elapsed;
+    const extra   = fx?.fixture?.status?.extra;
+    const minute  = short === 'HT' ? 'HT' : elapsed != null
+      ? (extra ? `${elapsed}+${extra}'` : `${elapsed}'`) : '';
+    const status = fx?.fixture?.status?.long || '';
 
-    // Teams + score info
-    const comp   = d.header?.competitions?.[0];
-    const homeC  = comp?.competitors?.find(c => c.homeAway === 'home');
-    const awayC  = comp?.competitors?.find(c => c.homeAway === 'away');
-    const homeT  = homeC?.team?.displayName || '';
-    const awayT  = awayC?.team?.displayName || '';
-    const scoreH = homeC?.score ?? null;
-    const scoreA = awayC?.score ?? null;
-    const status = d.header?.competitions?.[0]?.status?.type?.shortDetail || '';
-    const minute = d.header?.competitions?.[0]?.status?.displayClock || '';
-
-    // Boxscore stats
+    // ── Stats ─────────────────────────────────────────────────────────────────
+    const homeId = fx?.teams?.home?.id;
     const statMap = {};
-    const bsTeams = d.boxscore?.teams || [];
-    for (const side of bsTeams) {
-      const isHome = side.homeAway === 'home';
-      for (const stat of (side.statistics || [])) {
-        const k = stat.name;
-        if (!statMap[k]) statMap[k] = {};
-        statMap[k][isHome ? 'home' : 'away'] = stat.displayValue ?? stat.value;
+    for (const side of (statsData || [])) {
+      const isHome = side.team?.id === homeId;
+      for (const s of (side.statistics || [])) {
+        if (!statMap[s.type]) statMap[s.type] = {};
+        statMap[s.type][isHome ? 'home' : 'away'] = s.value ?? '—';
       }
     }
 
-    const statKeys = ['possessionPct','totalShots','shotsOnTarget','blockedShots','wonCorners','foulsCommitted','yellowCards','redCards','offsides','saves'];
-    const stats = statKeys
-      .filter(k => statMap[k])
-      .map(k => ({ key: k, home: statMap[k].home ?? '—', away: statMap[k].away ?? '—' }));
+    // api-football stat keys → display keys
+    const statKeyMap = [
+      ['Ball Possession',   'possessionPct'],
+      ['Total Shots',       'totalShots'],
+      ['Shots on Goal',     'shotsOnTarget'],
+      ['Blocked Shots',     'blockedShots'],
+      ['Corner Kicks',      'wonCorners'],
+      ['Fouls',             'foulsCommitted'],
+      ['Yellow Cards',      'yellowCards'],
+      ['Red Cards',         'redCards'],
+      ['Offsides',          'offsides'],
+      ['Goalkeeper Saves',  'saves'],
+    ];
+    const stats = statKeyMap
+      .filter(([k]) => statMap[k])
+      .map(([k, key]) => ({ key, home: statMap[k]?.home ?? '—', away: statMap[k]?.away ?? '—' }));
 
-    // xG schatting: shots on target × 0.33 (gemiddelde conversiekans)
-    const sotH = parseFloat(statMap['shotsOnTarget']?.home) || 0;
-    const sotA = parseFloat(statMap['shotsOnTarget']?.away) || 0;
-    if (sotH || sotA) {
-      stats.unshift({ key: 'xG', home: (sotH * 0.33).toFixed(2), away: (sotA * 0.33).toFixed(2) });
+    // xG: gebruik API-waarde indien beschikbaar, anders schatting via schoten op doel
+    if (statMap['expected_goals'] || statMap['Expected Goals'] || statMap['xG']) {
+      const xgKey = statMap['expected_goals'] ? 'expected_goals' : statMap['xG'] ? 'xG' : 'Expected Goals';
+      stats.unshift({ key: 'xG', home: statMap[xgKey]?.home ?? '—', away: statMap[xgKey]?.away ?? '—' });
+    } else if (statMap['Shots on Goal']) {
+      const sotH2 = parseFloat(statMap['Shots on Goal']?.home) || 0;
+      const sotA2 = parseFloat(statMap['Shots on Goal']?.away) || 0;
+      if (sotH2 || sotA2) stats.unshift({ key: 'xG', home: (sotH2*0.33).toFixed(2), away: (sotA2*0.33).toFixed(2) });
     }
 
     res.json({ events, home: homeT, away: awayT, scoreH, scoreA, status, minute, stats });
