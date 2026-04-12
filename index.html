@@ -335,7 +335,7 @@ nav::-webkit-scrollbar { display: none; }
     <button class="tab-btn active" onclick="go('scans')">📡 Scans</button>
     <button class="tab-btn" onclick="go('tracker')">📋 Tracker</button>
     <button class="tab-btn" onclick="go('data')">📊 Data</button>
-    <button class="tab-btn" onclick="go('live')">🔴 Live</button>
+    <button class="tab-btn" onclick="go('live')">🎯 Mijn Bets</button>
     <button class="tab-btn" onclick="go('analyse')">🔍 Analyse</button>
     <button class="tab-btn" onclick="go('inbox')">📬 Inbox</button>
     <button class="tab-btn" onclick="go('info')">📖 Info</button>
@@ -773,7 +773,7 @@ nav::-webkit-scrollbar { display: none; }
     </button>
     <div class="toggle-row">
       <label class="sw">
-        <input type="checkbox" id="liveOnly" checked onchange="filterLive()">
+        <input type="checkbox" id="liveOnly" onchange="filterLive()">
         <span class="sw-track"></span>
       </label>
       <span>Alleen live</span>
@@ -795,7 +795,7 @@ nav::-webkit-scrollbar { display: none; }
     <span id="live-info" style="font-size:12px;color:var(--muted)"></span>
   </div>
   <div class="live-grid" id="live-grid">
-    <div class="empty-state"><div class="ico">📡</div><div>Live scores laden...</div></div>
+    <div class="empty-state"><div class="ico">🎯</div><div>Jouw bets laden...</div></div>
   </div>
 </section>
 
@@ -2329,15 +2329,34 @@ function filterLive() {
   }
   const myTeams = new Set(myBetsMap.keys());
 
-  let evts = liveEvts;
+  let evts = [...liveEvts];
   if (onlyLive) evts = evts.filter(e => e.live);
-  if (onlyMine) evts = evts.filter(e => myTeams.has(e.home.toLowerCase()) || myTeams.has(e.away.toLowerCase()));
+  if (onlyMine) {
+    // Fuzzy matching net als bij recente bets
+    evts = evts.filter(e => {
+      const h = e.home.toLowerCase(), a = e.away.toLowerCase();
+      for (const [t] of myTeams.entries()) {
+        if (h.includes(t) || t.includes(h.split(' ').pop()) || a.includes(t) || t.includes(a.split(' ').pop())) return true;
+      }
+      return false;
+    });
+  }
+
+  // Sorteer: live wedstrijden bovenaan, daarna op starttijd (vroegst eerst)
+  evts.sort((a, b) => {
+    if (a.live && !b.live) return -1;
+    if (!a.live && b.live) return 1;
+    // Beide live of beide niet-live: sorteer op starttijd
+    const tA = a.startTime || '99:99';
+    const tB = b.startTime || '99:99';
+    return tA.localeCompare(tB);
+  });
 
   if (!evts.length) {
-    const msg = onlyMine ? 'Geen live wedstrijden voor jouw open bets.'
+    const msg = onlyMine ? 'Geen wedstrijden gevonden voor jouw open bets.'
               : onlyLive ? 'Geen live wedstrijden op dit moment.'
               : 'Klik "Vernieuwen" om scores te laden.';
-    grid.innerHTML = `<div class="empty-state"><div class="ico">📡</div><div>${msg}</div></div>`;
+    grid.innerHTML = `<div class="empty-state"><div class="ico">🎯</div><div>${msg}</div></div>`;
     return;
   }
 
