@@ -568,9 +568,43 @@ nav::-webkit-scrollbar { display: none; }
     </div>
   </div>
 
-  <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-    <button class="btn btn-ghost btn-sm" id="backfill-btn" onclick="backfillTimes()">⏰ Tijden invullen</button>
-    <span class="form-msg-txt" id="backfill-msg" style="margin-left:10px;line-height:32px"></span>
+  <!-- ── PERIODE FILTER ─────────────────────────────────────────────────── -->
+  <div class="card" style="margin-bottom:14px;padding:12px 16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:12px;color:var(--muted);font-weight:600">Periode</label>
+        <input type="date" id="f-from" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--text);font-family:inherit" onchange="applyPeriodFilter()">
+        <span style="font-size:12px;color:var(--muted)">t/m</span>
+        <input type="date" id="f-to"   style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--text);font-family:inherit" onchange="applyPeriodFilter()">
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(7)">7d</button>
+        <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(14)">14d</button>
+        <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(30)">30d</button>
+        <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(0)">Alles</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;margin-left:auto">
+        <input type="checkbox" id="compare-toggle" onchange="applyPeriodFilter()">
+        <span>Vergelijk vorige periode</span>
+      </label>
+      <div style="display:flex;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" id="backfill-btn" onclick="backfillTimes()">⏰ Tijden invullen</button>
+        <span class="form-msg-txt" id="backfill-msg" style="margin-left:10px;line-height:32px"></span>
+      </div>
+    </div>
+    <!-- Vergelijkpaneel -->
+    <div id="compare-panel" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px" id="compare-label-a">Huidige periode</div>
+          <div id="compare-stats-a" style="font-size:13px"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px" id="compare-label-b">Vorige periode</div>
+          <div id="compare-stats-b" style="font-size:13px"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="tbl-wrap">
@@ -826,6 +860,19 @@ nav::-webkit-scrollbar { display: none; }
   <div class="card">
     <div class="card-title" style="margin-bottom:16px">📝 Versiegeschiedenis</div>
     <div style="font-size:13px">
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.5</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Periode filter + vergelijken</div>
+          <div style="color:var(--muted);line-height:1.7">📅 Date picker in tracker — filter op datumbereik (7d / 14d / 30d / alles of eigen periode)<br>
+          📊 Stats panel update automatisch op geselecteerd bereik<br>
+          🔁 Vergelijkfunctie — huidige periode vs. identieke vorige periode (a la Google Ads)</div>
+        </div>
+      </div>
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
@@ -1302,6 +1349,135 @@ function renderStats(s) {
   wl.textContent = (s.wlEur >= 0 ? '+' : '') + '€' + s.wlEur;
   wl.className = 'stat-val ' + (s.wlEur >= 0 ? 'green' : 'red');
   document.getElementById('s-odds').textContent = s.avgOdds;
+}
+
+// ── PERIODE FILTER ─────────────────────────────────────────────────────────────
+function parseDatum(d) {
+  // dd-mm-yyyy → Date
+  if (!d) return null;
+  const [dd, mm, yyyy] = d.split('-').map(Number);
+  return new Date(yyyy, mm - 1, dd);
+}
+
+function calcStatsLocal(bets) {
+  const W = bets.filter(b => b.uitkomst === 'W').length;
+  const L = bets.filter(b => b.uitkomst === 'L').length;
+  const open = bets.filter(b => b.uitkomst === 'Open').length;
+  const wlEur = +bets.reduce((s, b) => s + (b.uitkomst !== 'Open' ? (b.wl || 0) : 0), 0).toFixed(2);
+  const settled = bets.filter(b => b.uitkomst !== 'Open');
+  const totalInzet = settled.reduce((s, b) => s + (b.inzet || 0), 0);
+  const roi = totalInzet > 0 ? +(wlEur / totalInzet * 100).toFixed(1) : 0;
+  const strikeRate = (W + L) > 0 ? Math.round(W / (W + L) * 100) : 0;
+  return { W, L, open, total: bets.length, wlEur, roi, strikeRate };
+}
+
+function formatPeriodStats(s, prefix = '') {
+  const wlStr = (s.wlEur >= 0 ? '+' : '') + '€' + s.wlEur;
+  const wlCol = s.wlEur >= 0 ? 'var(--green)' : 'var(--red)';
+  const roiCol = s.roi >= 0 ? 'var(--green)' : 'var(--red)';
+  return `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <div style="background:var(--surface2);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:700;color:${wlCol}">${wlStr}</div>
+        <div style="font-size:10px;color:var(--muted)">W/L (€)</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:700;color:${roiCol}">${s.roi}%</div>
+        <div style="font-size:10px;color:var(--muted)">ROI</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:700">${s.strikeRate}%</div>
+        <div style="font-size:10px;color:var(--muted)">Strike rate</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:700;color:var(--green)">${s.W}</div>
+        <div style="font-size:10px;color:var(--muted)">Gewonnen</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:700;color:var(--red)">${s.L}</div>
+        <div style="font-size:10px;color:var(--muted)">Verloren</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:700">${s.total}</div>
+        <div style="font-size:10px;color:var(--muted)">Bets</div>
+      </div>
+    </div>`;
+}
+
+function setPeriod(days) {
+  const to = new Date();
+  const from = days > 0 ? new Date(Date.now() - days * 86400000) : null;
+  const fmt = d => d.toISOString().slice(0, 10);
+  document.getElementById('f-to').value   = fmt(to);
+  document.getElementById('f-from').value = from ? fmt(from) : '';
+  // highlight active button
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  applyPeriodFilter();
+}
+
+function applyPeriodFilter() {
+  if (!betData) return;
+  const fromVal = document.getElementById('f-from').value;
+  const toVal   = document.getElementById('f-to').value;
+  const compare = document.getElementById('compare-toggle').checked;
+
+  const fromDate = fromVal ? new Date(fromVal) : null;
+  const toDate   = toVal   ? new Date(toVal + 'T23:59:59') : null;
+
+  const inRange = (b, from, to) => {
+    const d = parseDatum(b.datum);
+    if (!d) return true;
+    if (from && d < from) return false;
+    if (to   && d > to)   return false;
+    return true;
+  };
+
+  const filtered = betData.bets.filter(b => inRange(b, fromDate, toDate));
+  renderBetsTable(filtered);
+
+  // Update stats panel voor gefilterde bets (maar bankroll altijd totaal)
+  if (fromDate || toDate) {
+    const s = calcStatsLocal(filtered);
+    // update stat-boxes met gefilterde waarden (behalve bankroll = altijd totaal)
+    document.getElementById('s-w').textContent  = s.W;
+    document.getElementById('s-l').textContent  = s.L;
+    document.getElementById('s-o').textContent  = s.open;
+    document.getElementById('s-sr').textContent = s.strikeRate + '%';
+    const wl = document.getElementById('s-wl');
+    wl.textContent = (s.wlEur >= 0 ? '+' : '') + '€' + s.wlEur;
+    wl.className = 'stat-val ' + (s.wlEur >= 0 ? 'green' : 'red');
+    const roi = document.getElementById('s-roi');
+    roi.textContent = s.roi + '%';
+    roi.className = 'stat-val ' + (s.roi >= 0 ? 'green' : 'red');
+  } else {
+    renderStats(betData.stats);
+  }
+
+  // Vergelijking
+  const panel = document.getElementById('compare-panel');
+  if (compare && fromDate && toDate) {
+    const days = Math.round((toDate - fromDate) / 86400000);
+    const prevTo   = new Date(fromDate.getTime() - 86400000);
+    const prevFrom = new Date(prevTo.getTime() - days * 86400000);
+
+    const betsA = filtered;
+    const betsB = betData.bets.filter(b => inRange(b, prevFrom, prevTo));
+
+    const sA = calcStatsLocal(betsA);
+    const sB = calcStatsLocal(betsB);
+
+    const fmtDate = d => d.toLocaleDateString('nl-NL', { day:'numeric', month:'short' });
+    document.getElementById('compare-label-a').textContent =
+      `${fmtDate(fromDate)} – ${fmtDate(toDate)}`;
+    document.getElementById('compare-label-b').textContent =
+      `${fmtDate(prevFrom)} – ${fmtDate(prevTo)} (vorige periode)`;
+    document.getElementById('compare-stats-a').innerHTML = formatPeriodStats(sA);
+    document.getElementById('compare-stats-b').innerHTML = formatPeriodStats(sB);
+    panel.style.display = 'block';
+  } else {
+    panel.style.display = 'none';
+  }
 }
 
 function renderBetsTable(bets) {

@@ -27,7 +27,7 @@ if (DASHBOARD_PASSWORD) {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '3.4.0';
+const APP_VERSION    = '3.5.0';
 const TOKEN      = '8722733522:AAGuQiuENAwHYrW21wXD-W5drNAxJHSiYMw';
 const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
