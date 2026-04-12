@@ -2449,9 +2449,28 @@ function startLiveAutoRefresh() {
     try {
       const d = await api('/api/live-poll').then(r => r?.json());
       if (!d) return;
-      liveEvts = d.events || [];
-      const lc = d.liveCount ?? liveEvts.filter(e=>e.live).length;
-      document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal • ESPN auto`;
+      const espnEvts = d.events || [];
+      // Merge: update bestaande events met ESPN data, behoud events die ESPN niet dekt
+      const espnMap = new Map();
+      espnEvts.forEach(e => {
+        espnMap.set(e.home.toLowerCase(), e);
+        espnMap.set(e.away.toLowerCase(), e);
+      });
+      liveEvts = liveEvts.map(existing => {
+        const match = espnMap.get(existing.home.toLowerCase()) || espnMap.get(existing.away.toLowerCase());
+        if (match) {
+          // Update scores + status van ESPN, behoud api-football metadata
+          espnMap.delete(match.home.toLowerCase());
+          espnMap.delete(match.away.toLowerCase());
+          return { ...existing, scoreH: match.scoreH, scoreA: match.scoreA, minute: match.minute, live: match.live, finished: match.finished };
+        }
+        return existing; // behoud api-football data voor competities die ESPN niet dekt
+      });
+      // Voeg nieuwe ESPN events toe die niet in api-football zaten
+      const seen = new Set(liveEvts.map(e => e.home.toLowerCase()));
+      espnEvts.forEach(e => { if (!seen.has(e.home.toLowerCase())) liveEvts.push(e); });
+      const lc = liveEvts.filter(e=>e.live).length;
+      document.getElementById('live-info').textContent = `${lc} live • ${liveEvts.length} totaal • auto`;
       checkBetNotifications(liveEvts);
       filterLive();
     } catch {}
