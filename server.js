@@ -1357,7 +1357,7 @@ function calcStats(bets) {
   const winU  = +bets.filter(b=>b.uitkomst==='W').reduce((s,b)=>s+(b.wl/UNIT_EUR),0).toFixed(2);
   const lossU = +bets.filter(b=>b.uitkomst==='L').reduce((s,b)=>s+(b.wl/UNIT_EUR),0).toFixed(2);
   return { total, W, L, open, wlEur: +wlEur.toFixed(2), roi: +roi.toFixed(4),
-           bankroll: +bankroll.toFixed(2), avgOdds, avgUnits, strikeRate, winU, lossU };
+           bankroll: +bankroll.toFixed(2), startBankroll: START_BANKROLL, avgOdds, avgUnits, strikeRate, winU, lossU };
 }
 
 async function readBets() {
@@ -1418,11 +1418,12 @@ async function updateBetOutcome(id, uitkomst) {
   const { tab } = await getSheetMeta();
   const { _raw } = await readBets();
 
+  const pf = v => parseFloat(String(v||'').replace(',','.')) || 0;
   for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
     if (parseFloat(_raw[i]?.[0]) !== parseFloat(id)) continue;
-    const odds  = parseFloat(_raw[i][5]) || 0;
-    const units = parseFloat(_raw[i][6]) || 0;
-    const inzet = parseFloat(_raw[i][7]) || +(units * UNIT_EUR).toFixed(2);
+    const odds  = pf(_raw[i][5]);
+    const units = pf(_raw[i][6]);
+    const inzet = pf(_raw[i][7]) || +(units * UNIT_EUR).toFixed(2);
     const wl    = uitkomst === 'W' ? +((odds-1)*inzet).toFixed(2) : uitkomst === 'L' ? -inzet : 0;
     const rowNum = i + 1; // 1-gebaseerd
     await sh.spreadsheets.values.update({
@@ -1601,17 +1602,18 @@ app.post('/api/bets/recalculate', async (req, res) => {
     const sh = getSheetsClient();
     const { tab } = await getSheetMeta();
     const { bets, _raw } = await readBets();
+    const pf = v => parseFloat(String(v||'').replace(',','.')) || 0;
     let fixed = 0;
     for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
       const row = _raw[i];
       if (!row || !row[0]) continue;
       const uitkomst = row[9] || '';
       if (uitkomst !== 'W' && uitkomst !== 'L') continue;
-      const odds  = parseFloat(row[5]) || 0;
-      const units = parseFloat(row[6]) || 0;
-      const inzet = parseFloat(row[7]) || +(units * UNIT_EUR).toFixed(2);
+      const odds  = pf(row[5]);
+      const units = pf(row[6]);
+      const inzet = pf(row[7]) || +(units * UNIT_EUR).toFixed(2);
       const wl    = uitkomst === 'W' ? +((odds-1)*inzet).toFixed(2) : -inzet;
-      const currentWl = parseFloat(row[10]) || 0;
+      const currentWl = pf(row[10]);
       if (Math.abs(currentWl - wl) < 0.01) continue; // al correct
       await sh.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
@@ -1791,7 +1793,7 @@ async function checkOpenBetResults() {
       }
     }
 
-    if (uitkomst) updateBetOutcome(bet.id, uitkomst);
+    if (uitkomst) await updateBetOutcome(bet.id, uitkomst);
     results.push({ id: bet.id, wedstrijd: bet.wedstrijd, markt: bet.markt,
                    score: `${ev.scoreH}-${ev.scoreA}`, uitkomst,
                    note: uitkomst ? null : 'Score gevonden — update handmatig' });
