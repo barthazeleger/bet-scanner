@@ -578,7 +578,7 @@ nav::-webkit-scrollbar { display: none; }
       <thead>
         <tr>
           <th>#</th><th>Datum</th><th>Aftrap</th><th>Sport</th><th>Wedstrijd</th><th>Bet</th>
-          <th>Odds</th><th>Units</th><th>Inzet</th><th>Uitkomst</th><th>W/L</th><th></th>
+          <th>Odds</th><th>Units</th><th>Inzet</th><th>Score</th><th>Uitkomst</th><th>W/L</th><th></th>
         </tr>
       </thead>
       <tbody id="bets-body"></tbody>
@@ -826,6 +826,25 @@ nav::-webkit-scrollbar { display: none; }
   <div class="card">
     <div class="card-title" style="margin-bottom:16px">📝 Versiegeschiedenis</div>
     <div style="font-size:13px">
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.3</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Render deploy + dagelijkse scan + bugs + meer competities</div>
+          <div style="color:var(--muted);line-height:1.7">🚀 Live op Render — wachtwoordbeveiliging, altijd bereikbaar<br>
+          📡 Dagelijkse pre-match scan om 10:00 — picks automatisch via Telegram<br>
+          🔁 Pre-kickoff checks herplanned na server-herstart<br>
+          💰 Bankroll bug gefixed — W/L correct berekend bij lege inzet-kolom<br>
+          🟢 Scan cards: ✓ Gelogd indicator als bet al in tracker staat<br>
+          🔴 Tracker: verloren bets rood, gewonnen bets groen gemarkeerd<br>
+          📊 Score (bijv. 7/10) opgeslagen in tracker voor data-analyse later<br>
+          🏟️ Meer competities: Serie B, League One, League Two, Ligue 2<br>
+          🔴 Live scan: max 12 wedstrijden (was 8)</div>
+        </div>
+      </div>
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
@@ -1214,9 +1233,15 @@ function renderPicks(el, picks) {
         <div class="pick-odds">${p.odd||p.odds||'?'}</div>
         <div class="pick-units" style="margin-top:3px">${p.units}</div>
         ${p.bookie ? `<div style="margin-top:6px;padding:3px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.03em;text-align:center;${p.bookie.toLowerCase().includes('bet365') ? 'background:#1a6b3a;color:#4ade80' : 'background:#1a2e6b;color:#93c5fd'}">${p.bookie.toLowerCase().includes('bet365') ? 'Bet365' : 'Unibet'}</div>` : ''}
-        <div class="pick-log-btn">
-          <button class="btn btn-success btn-sm" onclick="openModal(${i},'${(p.label||'').replace(/'/g,"\\'").replace(/"/g,'\\"')}')">+ Log</button>
-        </div>
+        <div class="pick-log-btn">${(() => {
+          const alGelogd = betData && (betData.bets||[]).some(b =>
+            b.wedstrijd.toLowerCase() === (p.match||'').toLowerCase() &&
+            b.markt.toLowerCase().includes((p.label||'').toLowerCase().replace(/^[^\w]+/,'').split(' ')[0])
+          );
+          return alGelogd
+            ? `<span style="font-size:11px;color:#34d399;font-weight:700">✓ Gelogd</span>`
+            : `<button class="btn btn-success btn-sm" onclick="openModal(${i},'${(p.label||'').replace(/'/g,"\\'").replace(/"/g,'\\"')}')">+ Log</button>`;
+        })()}</div>
       </div>`;
     el.appendChild(div);
   });
@@ -1274,6 +1299,8 @@ function renderBetsTable(bets) {
   [...bets].reverse().forEach(b => {
     const tr = document.createElement('tr');
     const wCls = b.wl > 0 ? 'wl-pos' : b.wl < 0 ? 'wl-neg' : '';
+    if (b.uitkomst === 'L') tr.style.background = 'rgba(248,113,113,0.07)';
+    if (b.uitkomst === 'W') tr.style.background = 'rgba(52,211,153,0.07)';
     tr.innerHTML = `
       <td style="color:var(--muted);font-size:11px">${b.id}</td>
       <td>${b.datum}</td>
@@ -1284,6 +1311,7 @@ function renderBetsTable(bets) {
       <td><strong>${b.odds}</strong></td>
       <td>${b.units}U</td>
       <td>€${b.inzet}</td>
+      <td style="text-align:center">${b.score != null ? `<span style="font-size:11px;font-weight:700;color:${b.score>=8?'#34d399':b.score>=6?'#fbbf24':'#94a3b8'}">${b.score}/10</span>` : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
       <td>
         <select class="sel-outcome" onchange="setOutcome(${b.id}, this.value)">
           <option ${b.uitkomst==='Open'?'selected':''}>Open</option>
@@ -1861,7 +1889,8 @@ async function logModalBet() {
       sport: document.getElementById('m-sport').value,
       wedstrijd: match,
       markt: document.getElementById('m-markt').value,
-      odds, units, tip: 'Main', uitkomst: 'Open', notities: ''
+      odds, units, tip: 'Main', uitkomst: 'Open', notities: '',
+      score: modalPick ? (() => { const hk = modalPick.kelly||0; return Math.min(10, Math.max(5, Math.round((hk-0.015)/0.135*5)+5)); })() : null
     })
   }).then(r => r.json());
 
