@@ -2632,8 +2632,11 @@ app.post('/api/prematch', (req, res) => {
     .then(picks => {
       // Non-admin: filter gevoelige model data uit picks
       const safePicks = picks.map(p => {
-        const pick = { match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie };
-        if (isAdmin) { pick.reason = p.reason; pick.kelly = p.kelly; pick.ep = p.ep; pick.edge = p.edge; pick.strength = p.strength; pick.expectedEur = p.expectedEur; pick.signals = p.signals || []; }
+        // Score server-side berekenen (zodat kelly niet naar de client hoeft)
+        const hk = p.kelly || 0;
+        const score = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
+        const pick = { match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, edge: p.edge, score, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie };
+        if (isAdmin) { pick.reason = p.reason; pick.kelly = p.kelly; pick.ep = p.ep; pick.strength = p.strength; pick.expectedEur = p.expectedEur; pick.signals = p.signals || []; }
         return pick;
       });
       emit({ done: true, picks: safePicks }); res.end(); scanRunning = false;
