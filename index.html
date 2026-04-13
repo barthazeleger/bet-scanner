@@ -931,9 +931,16 @@ nav::-webkit-scrollbar { display: none; }
     <div class="card-title" style="margin-bottom:14px">📊 API Budget</div>
     <div id="status-api-budget"></div>
   </div>
-  <div class="card">
+  <div class="card" style="margin-bottom:16px">
     <div class="card-title" style="margin-bottom:14px">🧠 Model Status</div>
     <div id="status-model"></div>
+  </div>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div class="card-title">⚽ Competities</div>
+      <div style="font-size:12px;color:var(--muted)" id="status-league-count">—</div>
+    </div>
+    <div id="status-leagues" style="font-size:13px;columns:2;column-gap:20px"></div>
   </div>
 </section>
 
@@ -3454,6 +3461,17 @@ async function loadStatus() {
         Laatste calibratie: ${m.lastCalibration ? new Date(m.lastCalibration).toLocaleString('nl-NL', { timeZone:'Europe/Amsterdam' }) : 'nog niet'}
       </div>
     `;
+
+    // Competities
+    const leagues = d.leagues || [];
+    document.getElementById('status-league-count').textContent = `${leagues.length} competities`;
+    document.getElementById('status-leagues').innerHTML = leagues.map(l =>
+      `<div style="padding:3px 0;break-inside:avoid;display:flex;align-items:center;gap:6px">
+        <span style="color:var(--green);font-size:10px">●</span>
+        <span style="font-size:12px">${l.name}</span>
+        <span style="font-size:10px;color:var(--muted);margin-left:auto">${(l.ha*100).toFixed(0)}% HA</span>
+      </div>`
+    ).join('');
   } catch { document.getElementById('status-services').innerHTML = '<div style="color:var(--muted)">Fout bij laden</div>'; }
 }
 

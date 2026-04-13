@@ -2828,7 +2828,8 @@ app.get('/api/status', (req, res) => {
       totalWins: c.totalWins || 0,
       lastCalibration: c.modelLastUpdated || null,
       marketsTracked: Object.keys(c.markets || {}).filter(k => (c.markets[k]?.n || 0) > 0).length,
-    }
+    },
+    leagues: AF_FOOTBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
   });
 });
 
