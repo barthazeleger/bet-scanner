@@ -22,3 +22,5 @@ services:
         sync: false          # jouw e-mailadres voor eerste login
       - key: ADMIN_PASSWORD
         sync: false          # jouw wachtwoord (minimaal 8 tekens)
+      - key: RESEND_KEY
+        sync: false          # Resend API key voor email (100/dag gratis)

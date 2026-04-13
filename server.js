@@ -94,8 +94,33 @@ async function sendPushToAll(payload) {
   }
 }
 
+// ── EMAIL (Resend) ─────────────────────────────────────────────────────────
+async function sendEmail(to, subject, html) {
+  const RESEND_KEY = process.env.RESEND_KEY;
+  if (!RESEND_KEY) return;
+  await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: 'EdgePickr <noreply@edgepickr.com>',
+      to, subject, html
+    })
+  }).catch(() => {});
+}
+
+// ── 2FA LOGIN CODES ────────────────────────────────────────────────────────
+const loginCodes = new Map(); // email → { code, expiresAt }
+
+// Cleanup expired codes every 10 min
+setInterval(() => {
+  const now = Date.now();
+  for (const [email, entry] of loginCodes) {
+    if (now > entry.expiresAt) loginCodes.delete(email);
+  }
+}, 10 * 60 * 1000);
+
 // Routes that don't require authentication (full paths)
-const PUBLIC_PATHS = new Set(['/api/status', '/api/auth/login', '/api/auth/register']);
+const PUBLIC_PATHS = new Set(['/api/status', '/api/auth/login', '/api/auth/register', '/api/auth/verify-code']);
 
 // JWT middleware
 function requireAuth(req, res, next) {
@@ -153,6 +178,7 @@ function defaultSettings() {
     timezone:      'Europe/Amsterdam',
     scanTimes:     [10],
     scanEnabled:   true,
+    twoFactorEnabled: false,
   };
 }
 
@@ -2391,6 +2417,33 @@ app.post('/api/auth/login', async (req, res) => {
     if (user.status === 'pending')    return res.status(403).json({ error: 'Account wacht op goedkeuring' });
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: 'E-mail of wachtwoord onjuist' });
+    // 2FA: if enabled, send code via email instead of token
+    if (user.settings?.twoFactorEnabled) {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      loginCodes.set(user.email, { code, expiresAt: Date.now() + 5 * 60 * 1000 });
+      await sendEmail(user.email, 'EdgePickr login code', `<h2>Je login code: ${code}</h2><p>Geldig voor 5 minuten.</p>`);
+      return res.json({ requires2FA: true });
+    }
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, user: { id: user.id, email: user.email, role: user.role, settings: user.settings } });
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
+});
+
+// ── 2FA VERIFY CODE ───────────────────────────────────────────────────────
+app.post('/api/auth/verify-code', async (req, res) => {
+  try {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    if (rateLimit('verify2fa:' + ip, 5, 15 * 60 * 1000)) return res.status(429).json({ error: 'Te veel pogingen — probeer over 15 minuten opnieuw' });
+    const { email, code } = req.body || {};
+    if (!email || !code) return res.status(400).json({ error: 'E-mail en code verplicht' });
+    const entry = loginCodes.get(email.toLowerCase());
+    if (!entry || entry.code !== code || Date.now() > entry.expiresAt) {
+      return res.status(401).json({ error: 'Ongeldige of verlopen code' });
+    }
+    loginCodes.delete(email.toLowerCase());
+    const users = await loadUsers();
+    const user = users.find(u => u.email === email.toLowerCase());
+    if (!user) return res.status(401).json({ error: 'Verificatie mislukt' });
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id: user.id, email: user.email, role: user.role, settings: user.settings } });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
@@ -2440,7 +2493,7 @@ app.put('/api/user/settings', async (req, res) => {
     const users = await loadUsers(true);
     const user  = users.find(u => u.id === req.user.id);
     if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
-    const allowed = ['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled'];
+    const allowed = ['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled','twoFactorEnabled'];
     allowed.forEach(k => { if (req.body[k] !== undefined) user.settings[k] = req.body[k]; });
     await saveUser(user);
     // Herplan scans als admin
@@ -2485,8 +2538,12 @@ app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
     if (req.body.status) user.status = req.body.status;
     if (req.body.role)   user.role   = req.body.role;
     await saveUser(user);
-    if (req.body.status === 'approved')
+    if (req.body.status === 'approved') {
       tg(`✅ Account goedgekeurd: ${user.email}`).catch(() => {});
+      sendEmail(user.email, 'Je EdgePickr account is goedgekeurd!',
+        '<h2>Hey!</h2><p>Je account is goedgekeurd. Je kunt nu inloggen op <a href="https://edgepickr.com">https://edgepickr.com</a></p>'
+      ).catch(() => {});
+    }
     res.json({ id: user.id, email: user.email, role: user.role, status: user.status });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
