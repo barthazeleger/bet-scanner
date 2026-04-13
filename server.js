@@ -2703,6 +2703,91 @@ app.get('/api/picks', (req, res) => {
   res.json({ prematch: lastPrematchPicks, live: lastLivePicks });
 });
 
+// POTD (Pick of the Day) post generator voor Reddit + X
+app.get('/api/potd', async (req, res) => {
+  try {
+    const allPicks = [...lastPrematchPicks, ...lastLivePicks];
+    if (!allPicks.length) return res.json({ error: 'Geen picks beschikbaar — draai eerst een scan' });
+
+    // #1 pick = hoogste expectedEur
+    const pick = [...allPicks].sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0))[0];
+
+    // Record ophalen
+    const { bets, stats } = await readBets();
+    const settled = bets.filter(b => b.uitkomst === 'W' || b.uitkomst === 'L');
+    const W = settled.filter(b => b.uitkomst === 'W').length;
+    const L = settled.filter(b => b.uitkomst === 'L').length;
+    const P = 0; // push/void
+    const profitU = +(settled.reduce((s, b) => s + (b.wl || 0), 0) / UNIT_EUR).toFixed(1);
+    const profitStr = profitU >= 0 ? `+${profitU}U` : `${profitU}U`;
+
+    // Last 5
+    const last5 = settled.slice(-5).map(b => b.uitkomst === 'W' ? '✅' : '❌').join('');
+    const last5Short = settled.slice(-5).map(b => b.uitkomst === 'W' ? 'W' : 'L').join('-');
+
+    // Laatste pick resultaat
+    const lastBet = settled[settled.length - 1];
+    const lastResult = lastBet
+      ? `${lastBet.uitkomst === 'W' ? '✅' : '❌'} ${lastBet.wedstrijd} ${lastBet.uitkomst === 'W' ? '(W)' : '(L)'}`
+      : 'Geen vorige pick';
+
+    // Pick data
+    const match = pick.match || '';
+    const odds = pick.odd || pick.odds || 0;
+    const units = pick.units || 0;
+    const prob = pick.prob || 0;
+    const edge = pick.edge || 0;
+    const fairProb = prob;
+    const impliedProb = odds > 1 ? (1 / odds * 100) : 0;
+    const kickoff = pick.kickoff || '';
+    const league = pick.league || '';
+    const label = pick.label || '';
+    const reason = pick.reason || '';
+    const referee = pick.referee || '';
+    const signals = pick.signals || [];
+
+    const today = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Amsterdam' }).replace(/\//g, '-');
+
+    // Reddit post
+    const reddit = [
+      `**Pick of the Day (${today})** 🎯 🔥`,
+      `**Record (W-L-P):** ${W}-${L}-${P} **${profitStr}**`,
+      `**Last 5:** ${last5}`,
+      '',
+      lastBet ? `**Last Pick:** ${lastResult}` : '',
+      '',
+      `**${match}**`,
+      `🕐 ${kickoff} (Amsterdam time)`,
+      `💰 Odds: ${odds}`,
+      `💵 Stake: ${units}U`,
+      '',
+      `*${reason}*`,
+      '',
+      `**Technical info:**`,
+      `Edge on bookie +${edge.toFixed(1)}% · Consensus: ${impliedProb.toFixed(1)}%→${fairProb.toFixed(1)}%${referee ? ` | 🟨 ${referee}` : ''}`,
+      '',
+      `#PickOfTheDay #SportsBetting #SoccerBetting #potd #ValueBet`,
+    ].filter(l => l !== undefined).join('\n');
+
+    // X post
+    const x = [
+      `🔥 Pick of the Day (${today})`,
+      '',
+      `Record: ${W}-${L}-${P} (${profitStr}) | Last 5: ${last5Short}`,
+      '',
+      `⚽ ${match}`,
+      `🕐 ${kickoff} (Amsterdam) | 💰 Stake: ${units}U`,
+      `📊 Odds: ${odds}`,
+      '',
+      `📊 Model edge: +${edge.toFixed(1)}% EV (${impliedProb.toFixed(1)}% → ${fairProb.toFixed(1)}%)`,
+      '',
+      `#PickOfTheDay #SportsBetting #SoccerBetting #potd #ValueBet`,
+    ].join('\n');
+
+    res.json({ pick, reddit, x, record: { W, L, P, profitU, last5 } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Scan history — laatste N scans met picks
 app.get('/api/scan-history', async (req, res) => {
   const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
