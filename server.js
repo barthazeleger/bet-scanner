@@ -164,8 +164,8 @@ const APP_VERSION    = '7.1.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
-const UNIT_EUR   = 10;
-const START_BANKROLL = 100;
+const UNIT_EUR   = 25;
+const START_BANKROLL = 250;
 // (calibration + signal weights stored in Supabase)
 
 // ── USER MANAGEMENT (Supabase "users" table) ────────────────────────────────
