@@ -21,38 +21,50 @@ EdgePickr is een data-driven sportsbetting analytics platform dat AI en statisti
 ## Pricing Tiers
 
 ### 1. Free (trial)
-- 1 dagelijkse scan (10:00)
-- Resultaten van gisteren
-- Basis tracker (max 10 open bets)
+- 1 dagelijkse scan (10:00) — max 2 picks zichtbaar (overige blurred met "upgrade voor alle picks")
 - Geen wedstrijd analyser
-- Advertentie voor upgrade
-- **Doel**: laten proeven, conversie naar Starter
+- Basis tracker (max 10 open bets)
+- Geen CLV, geen live tracking
+- Subtiele upgrade prompts (niet irritant)
+- **Doel**: laten proeven, FOMO creëren, conversie naar Starter
 
-### 2. Starter — €9,99/mnd
-- 1 dagelijkse scan
+### 2. Starter — €19,99/mnd
+- 1 dagelijkse scan — alle picks zichtbaar
 - 5 wedstrijd analyses per dag
 - Volledige tracker
 - Push notificaties (dagelijks overzicht)
-- Email support
-- **Doel**: casual bettors die het serieuzer willen aanpakken
+- Pre-kickoff odds check
+- **Bankroll doelgroep**: €100-500 (ROI van ~4% verdient het terug)
+- **Doel**: casual bettors die slimmer willen wedden
 
-### 3. Pro — €24,99/mnd
+### 3. Pro — €49,99/mnd
 - 3 scans per dag (ochtend, middag, avond)
 - 25 wedstrijd analyses per dag
 - CLV tracking
 - Live bet monitoring
 - Correlatie-check
-- Pre-kickoff odds alerts
+- Odds movement alerts
+- Telegram integratie
+- **Bankroll doelgroep**: €500-2.000 (ROI van ~3% verdient het terug)
 - **Doel**: serieuze bettors die edge willen maximaliseren
 
-### 4. Unlimited — €49,99/mnd
-- Onbeperkte scans
+### 4. Unlimited — €99,99/mnd
+- 10 scans per dag
 - Onbeperkte analyses
 - Alle Pro features
 - Prioriteit bij model updates
-- Telegram integratie
 - API toegang (voor eigen tools)
+- Persoonlijke scan-tijden configureren
+- **Bankroll doelgroep**: €2.000+ (ROI van ~2% verdient het terug)
 - **Doel**: professionele bettors, tipster services
+
+## Upgrade Flow (in-app)
+- Free users: "4 meer picks beschikbaar" met blurred cards + upgrade knop
+- Elke tier: "Upgrade" knop in settings + pricing vergelijkstabel
+- Betaling via Stripe (internationaal) of Mollie (NL iDEAL)
+- Maandelijks of jaarlijks (15% korting bij jaar)
+- Gratis 7-dagen trial bij Starter (geen creditcard nodig)
+- Downgrade/opzeg altijd mogelijk, direct na huidige periode
 
 ## API Kosten vs. Inkomsten
 
@@ -62,14 +74,14 @@ EdgePickr is een data-driven sportsbetting analytics platform dat AI en statisti
 | Free | ~200 (1 scan) | ~€0,50 |
 | Starter | ~250 (1 scan + 5 analyses) | ~€0,65 |
 | Pro | ~700 (3 scans + 25 analyses) | ~€1,80 |
-| Unlimited | ~2000 (onbeperkt) | ~€5,00 |
+| Unlimited | ~3000 (10 scans + onbeperkt) | ~€7,50 |
 
-### Break-even per tier
-| Tier | Prijs | Kosten | Marge | Break-even users |
-|---|---|---|---|---|
-| Starter | €9,99 | €0,65 | €9,34 | - |
-| Pro | €24,99 | €1,80 | €23,19 | - |
-| Unlimited | €49,99 | €5,00 | €44,99 | - |
+### Marge per tier
+| Tier | Prijs | Kosten | Marge |
+|---|---|---|---|
+| Starter | €19,99 | €0,65 | €19,34 (97%) |
+| Pro | €49,99 | €1,80 | €48,19 (96%) |
+| Unlimited | €99,99 | €7,50 | €92,49 (92%) |
 
 ### API plan schaling
 | Users | API calls/dag | Plan nodig | Kosten/mnd |
@@ -83,10 +95,10 @@ EdgePickr is een data-driven sportsbetting analytics platform dat AI en statisti
 ### Inkomsten projectie (conservatief)
 | Maand | Free | Starter | Pro | Unlimited | MRR |
 |---|---|---|---|---|---|
-| 1 | 50 | 5 | 2 | 1 | €150 |
-| 3 | 200 | 20 | 8 | 3 | €600 |
-| 6 | 500 | 50 | 20 | 5 | €1.500 |
-| 12 | 1000 | 100 | 40 | 10 | €3.000 |
+| 1 | 50 | 5 | 2 | 1 | €350 |
+| 3 | 200 | 20 | 8 | 3 | €1.400 |
+| 6 | 500 | 50 | 20 | 5 | €2.800 |
+| 12 | 1000 | 100 | 40 | 10 | €5.500 |
 
 ## Go-to-Market Strategie
 
