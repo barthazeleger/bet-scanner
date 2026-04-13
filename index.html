@@ -3270,7 +3270,11 @@ function updatePayout() {
   const edge = ((odds - fairOdds) / fairOdds * 100);
   const kelly = Math.max(0, (prob * (odds - 1) - (1 - prob)) / (odds - 1));
   const hk = kelly * 0.5;
-  const recUnits = hk < 0.015 ? 0 : hk < 0.04 ? 0.3 : hk < 0.08 ? 0.5 : hk < 0.12 ? 1.0 : 2.0;
+  let recUnits = hk < 0.015 ? 0 : hk < 0.04 ? 0.3 : hk < 0.08 ? 0.5 : hk < 0.12 ? 1.0 : 2.0;
+  // Cap: nooit hoger dan scanner's originele advies (modal mist model-dampings)
+  if (recUnits > origUnits && diff <= 0) recUnits = origUnits;
+  // Bij lagere odds: units mogen niet omhoog
+  if (diff < 0 && recUnits > origUnits) recUnits = origUnits;
   const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
   const diffCol = diff >= 0 ? '#34d399' : '#f87171';
 
