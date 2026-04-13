@@ -764,6 +764,22 @@ const NHL_LEAGUES = [
   { id: 57, key: 'nhl', name: 'NHL', ha: 0.03, season: '2025-2026' },
 ];
 
+// ── BASEBALL LEAGUES (api-sports.io baseball) ──────────────────────────────
+const BASEBALL_LEAGUES = [
+  { id: 1, key: 'mlb', name: 'MLB', ha: 0.03, season: '2026' },
+];
+
+// ── NFL LEAGUES (api-sports.io american-football) ──────────────────────────
+const NFL_LEAGUES = [
+  { id: 1, key: 'nfl', name: 'NFL', ha: 0.03, season: '2025' },
+];
+
+// ── HANDBALL LEAGUES (api-sports.io handball) ──────────────────────────────
+const HANDBALL_LEAGUES = [
+  { id: 35, key: 'bundesliga_handball', name: 'Handball Bundesliga', ha: 0.06, season: '2025-2026' },
+  { id: 30, key: 'ehf_cl', name: 'EHF Champions League', ha: 0.05, season: '2025-2026' },
+];
+
 // ── LAST PICKS (in-memory voor analyse tab) ──────────────────────────────────
 let lastPrematchPicks = [];
 let lastLivePicks = [];
@@ -1078,9 +1094,12 @@ const afCache = {
 let afRateLimit = { remaining: null, limit: 7500, updatedAt: null, callsToday: 0, date: null };
 // Per-sport rate limit tracking (All Sports plan: 7500 calls/sport/day)
 const sportRateLimits = {
-  football:   { callsToday: 0, date: null },
-  basketball: { callsToday: 0, date: null },
-  hockey:     { callsToday: 0, date: null },
+  football:           { callsToday: 0, date: null },
+  basketball:         { callsToday: 0, date: null },
+  hockey:             { callsToday: 0, date: null },
+  baseball:           { callsToday: 0, date: null },
+  'american-football': { callsToday: 0, date: null },
+  handball:           { callsToday: 0, date: null },
 };
 
 // Load persistent usage from Supabase at startup
@@ -1125,8 +1144,11 @@ async function afGet(host, path, params = {}) {
     }
     afRateLimit.updatedAt = new Date().toISOString();
     // Per-sport tracking
-    const sport = host.includes('basketball') ? 'basketball'
-                : host.includes('hockey')     ? 'hockey'
+    const sport = host.includes('basketball')        ? 'basketball'
+                : host.includes('hockey')            ? 'hockey'
+                : host.includes('baseball')          ? 'baseball'
+                : host.includes('american-football') ? 'american-football'
+                : host.includes('handball')          ? 'handball'
                 : 'football';
     const srl = sportRateLimits[sport];
     if (srl.date !== todayStr) { srl.callsToday = 0; srl.date = todayStr; }
@@ -2043,6 +2065,655 @@ async function runHockey(emit) {
   emit({ log: `🏒 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} hockey picks` });
 
   if (picks.length) saveScanEntry(picks, 'nhl', totalEvents);
+
+  return picks;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BASEBALL SCANNER · api-sports.io baseball
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runBaseball(emit) {
+  if (!AF_KEY) { emit({ log: '⚾ Baseball: geen API key' }); return []; }
+  emit({ log: `⚾ Baseball scan · ${BASEBALL_LEAGUES.length} competities` });
+
+  const calib = loadCalib();
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const MIN_EDGE = 0.055;
+  let totalEvents = 0;
+  let apiCallsUsed = 0;
+
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+
+  for (const league of BASEBALL_LEAGUES) {
+    try {
+      // Fixtures today
+      const fixtures = await afGet('v1.baseball.api-sports.io', '/games', {
+        date: today, league: league.id, season: league.season
+      });
+      apiCallsUsed++;
+
+      const games = (fixtures || []).filter(f => {
+        const st = f.status?.short || '';
+        return st === 'NS' || st === 'SCH';
+      });
+
+      if (!games.length) { emit({ log: `📭 ${league.name}: geen wedstrijden` }); continue; }
+      emit({ log: `⚾ ${league.name}: ${games.length} wedstrijd(en)` });
+      totalEvents += games.length;
+
+      // Standings for form/rank
+      await sleep(120);
+      const standings = await afGet('v1.baseball.api-sports.io', '/standings', {
+        league: league.id, season: league.season
+      });
+      apiCallsUsed++;
+
+      // Build standings lookup
+      const standingsMap = {};
+      for (const group of (standings || [])) {
+        const teams = Array.isArray(group) ? group : [group];
+        for (const t of teams) {
+          const tid = t.team?.id;
+          if (!tid) continue;
+          standingsMap[tid] = {
+            rank: t.position || 99,
+            win: t.games?.win?.total || 0,
+            loss: t.games?.lose?.total || 0,
+            form: t.form || '',
+            teamName: t.team?.name || '',
+          };
+        }
+      }
+
+      for (const g of games) {
+        const gameId = g.id;
+        const hm = g.teams?.home?.name;
+        const aw = g.teams?.away?.name;
+        const hmId = g.teams?.home?.id;
+        const awId = g.teams?.away?.id;
+        if (!gameId || !hm || !aw) continue;
+
+        const kickoffMs = new Date(g.date || g.time || g.timestamp * 1000).getTime();
+        const ko = new Date(kickoffMs).toLocaleString('nl-NL', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
+        const kickoffTime = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
+
+        // Odds
+        await sleep(120);
+        const oddsResp = await afGet('v1.baseball.api-sports.io', '/odds', { game: gameId });
+        apiCallsUsed++;
+
+        const parsed = parseGameOdds(oddsResp, hm, aw);
+        if (!parsed.moneyline.length) continue;
+
+        // Fair probabilities from moneyline consensus
+        const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
+        const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
+        if (!homeOdds.length || !awayOdds.length) continue;
+
+        const avgHomePrice = homeOdds.reduce((s,o)=>s+o.price,0) / homeOdds.length;
+        const avgAwayPrice = awayOdds.reduce((s,o)=>s+o.price,0) / awayOdds.length;
+        const totalIP = 1/avgHomePrice + 1/avgAwayPrice;
+        if (totalIP < 0.5) continue;
+        const fpHome = (1/avgHomePrice) / totalIP;
+        const fpAway = (1/avgAwayPrice) / totalIP;
+
+        // Standings adjustments
+        const hmSt = hmId ? standingsMap[hmId] : null;
+        const awSt = awId ? standingsMap[awId] : null;
+
+        let posAdj = 0;
+        if (hmSt && awSt) {
+          posAdj = Math.max(-0.06, Math.min(0.06, (awSt.rank - hmSt.rank) * 0.002));
+        }
+
+        // Form (last 5-10 from standings form string)
+        let formAdj = 0;
+        if (hmSt?.form && awSt?.form) {
+          const fmScore = s => [...(s.slice(-10)||'')].reduce((a,c)=>a+(c==='W'?3:c==='L'?0:1),0);
+          formAdj = Math.max(-0.05, Math.min(0.05, (fmScore(hmSt.form) - fmScore(awSt.form)) / 30 * 0.04));
+        }
+
+        // Home advantage (~54% in MLB)
+        const ha = 0.04;
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5);
+
+        const bH = bestFromArr(homeOdds);
+        const bA = bestFromArr(awayOdds);
+
+        const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
+        const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
+
+        // Build signals
+        const matchSignals = [];
+        if (ha !== 0) matchSignals.push(`baseball_home:+${(ha*100).toFixed(1)}%`);
+        if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
+        if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
+
+        const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
+        const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-10)||'?'} vs ${awSt?.form?.slice(-10)||'?'}` : '';
+        const sharedNotes = `${posStr}${formNote}`;
+
+        // Moneyline picks
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+          mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
+            `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
+
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+          mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
+            `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
+
+        // Over/Under total runs
+        const overOdds = parsed.totals.filter(o => o.side === 'over');
+        const underOdds = parsed.totals.filter(o => o.side === 'under');
+        if (overOdds.length && underOdds.length) {
+          const pointCounts = {};
+          for (const o of [...overOdds, ...underOdds]) {
+            pointCounts[o.point] = (pointCounts[o.point] || 0) + 1;
+          }
+          const mainLine = Object.entries(pointCounts).sort((a,b)=>b[1]-a[1])[0]?.[0];
+          if (mainLine) {
+            const line = parseFloat(mainLine);
+            const ov = overOdds.filter(o => Math.abs(o.point - line) < 0.6);
+            const un = underOdds.filter(o => Math.abs(o.point - line) < 0.6);
+            if (ov.length && un.length) {
+              const avgOvIP = ov.reduce((s,o)=>s+1/o.price,0) / ov.length;
+              const avgUnIP = un.reduce((s,o)=>s+1/o.price,0) / un.length;
+              const totIP2 = avgOvIP + avgUnIP;
+              const overP = totIP2 > 0 ? avgOvIP / totIP2 : 0.5;
+              const bestOv = bestFromArr(ov);
+              const bestUn = bestFromArr(un);
+              const overEdge = overP * bestOv.price - 1;
+              const underEdge = (1-overP) * bestUn.price - 1;
+
+              if (overEdge >= MIN_EDGE && bestOv.price >= 1.60)
+                mkP(`${hm} vs ${aw}`, league.name, `⚾ Over ${line} runs`, bestOv.price,
+                  `O/U: ${(overP*100).toFixed(1)}% over | ${bestOv.bookie}: ${bestOv.price}${sharedNotes} | ${ko}`,
+                  Math.round(overP*100), overEdge * 0.24, kickoffTime, bestOv.bookie, matchSignals);
+              if (underEdge >= MIN_EDGE && bestUn.price >= 1.60)
+                mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} runs`, bestUn.price,
+                  `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
+                  Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals);
+            }
+          }
+        }
+
+        // Run Line (spread, usually -1.5/+1.5)
+        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
+        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+        if (homeSpr.length) {
+          const best = bestFromArr(homeSpr);
+          if (best.price >= 1.60 && best.price <= 3.8) {
+            const sEdge = fpHome * best.price - 1;
+            if (sEdge >= MIN_EDGE + 0.01) {
+              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
+                `Run Line | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
+                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
+            }
+          }
+        }
+        if (awaySpr.length) {
+          const best = bestFromArr(awaySpr);
+          if (best.price >= 1.60 && best.price <= 3.8) {
+            const sEdge = fpAway * best.price - 1;
+            if (sEdge >= MIN_EDGE + 0.01) {
+              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
+                `Run Line | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
+                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
+            }
+          }
+        }
+      }
+      await sleep(200);
+    } catch (err) {
+      emit({ log: `⚠️ ⚾ ${league.name}: ${err.message}` });
+    }
+  }
+
+  // Tag picks
+  for (const p of picks)     { p.scanType = 'mlb'; p.sport = 'baseball'; }
+  for (const p of combiPool) { p.scanType = 'mlb'; p.sport = 'baseball'; }
+
+  emit({ log: `⚾ ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} baseball picks` });
+
+  if (picks.length) saveScanEntry(picks, 'mlb', totalEvents);
+
+  return picks;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NFL SCANNER · api-sports.io american-football
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runFootballUS(emit) {
+  if (!AF_KEY) { emit({ log: '🏈 NFL: geen API key' }); return []; }
+  emit({ log: `🏈 NFL scan · ${NFL_LEAGUES.length} competities` });
+
+  const calib = loadCalib();
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const MIN_EDGE = 0.055;
+  let totalEvents = 0;
+  let apiCallsUsed = 0;
+
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+
+  for (const league of NFL_LEAGUES) {
+    try {
+      // Fixtures today
+      const fixtures = await afGet('v1.american-football.api-sports.io', '/games', {
+        date: today, league: league.id, season: league.season
+      });
+      apiCallsUsed++;
+
+      const games = (fixtures || []).filter(f => {
+        const st = f.status?.short || '';
+        return st === 'NS' || st === 'SCH';
+      });
+
+      if (!games.length) { emit({ log: `📭 ${league.name}: geen wedstrijden` }); continue; }
+      emit({ log: `🏈 ${league.name}: ${games.length} wedstrijd(en)` });
+      totalEvents += games.length;
+
+      // Standings
+      await sleep(120);
+      const standings = await afGet('v1.american-football.api-sports.io', '/standings', {
+        league: league.id, season: league.season
+      });
+      apiCallsUsed++;
+
+      const standingsMap = {};
+      for (const group of (standings || [])) {
+        const teams = Array.isArray(group) ? group : [group];
+        for (const t of teams) {
+          const tid = t.team?.id;
+          if (!tid) continue;
+          standingsMap[tid] = {
+            rank: t.position || 99,
+            win: t.games?.win?.total || 0,
+            loss: t.games?.lose?.total || 0,
+            form: t.form || '',
+            teamName: t.team?.name || '',
+          };
+        }
+      }
+
+      for (const g of games) {
+        const gameId = g.id;
+        const hm = g.teams?.home?.name;
+        const aw = g.teams?.away?.name;
+        const hmId = g.teams?.home?.id;
+        const awId = g.teams?.away?.id;
+        if (!gameId || !hm || !aw) continue;
+
+        const kickoffMs = new Date(g.date || g.time || g.timestamp * 1000).getTime();
+        const ko = new Date(kickoffMs).toLocaleString('nl-NL', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
+        const kickoffTime = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
+
+        // Odds
+        await sleep(120);
+        const oddsResp = await afGet('v1.american-football.api-sports.io', '/odds', { game: gameId });
+        apiCallsUsed++;
+
+        const parsed = parseGameOdds(oddsResp, hm, aw);
+        if (!parsed.moneyline.length) continue;
+
+        const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
+        const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
+        if (!homeOdds.length || !awayOdds.length) continue;
+
+        const avgHomePrice = homeOdds.reduce((s,o)=>s+o.price,0) / homeOdds.length;
+        const avgAwayPrice = awayOdds.reduce((s,o)=>s+o.price,0) / awayOdds.length;
+        const totalIP = 1/avgHomePrice + 1/avgAwayPrice;
+        if (totalIP < 0.5) continue;
+        const fpHome = (1/avgHomePrice) / totalIP;
+        const fpAway = (1/avgAwayPrice) / totalIP;
+
+        const hmSt = hmId ? standingsMap[hmId] : null;
+        const awSt = awId ? standingsMap[awId] : null;
+
+        let posAdj = 0;
+        if (hmSt && awSt) {
+          posAdj = Math.max(-0.06, Math.min(0.06, (awSt.rank - hmSt.rank) * 0.002));
+        }
+
+        // Form (last 3-5 games - smaller sample in NFL)
+        let formAdj = 0;
+        if (hmSt?.form && awSt?.form) {
+          const fmScore = s => [...(s.slice(-5)||'')].reduce((a,c)=>a+(c==='W'?3:c==='L'?0:1),0);
+          formAdj = Math.max(-0.05, Math.min(0.05, (fmScore(hmSt.form) - fmScore(awSt.form)) / 15 * 0.04));
+        }
+
+        // Home advantage (~57% in NFL)
+        const ha = 0.057;
+        // Bye week advantage (+3% if coming off bye) — approximated via form gap
+        let byeAdj = 0, byeNote = '';
+        if (hmSt?.form && hmSt.form.length > 0 && hmSt.form.slice(-1) === 'B') { byeAdj += 0.03; byeNote += ` | 💤 ${hm.split(' ').pop()} off bye`; }
+        if (awSt?.form && awSt.form.length > 0 && awSt.form.slice(-1) === 'B') { byeAdj -= 0.03; byeNote += ` | 💤 ${aw.split(' ').pop()} off bye`; }
+
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5);
+
+        const bH = bestFromArr(homeOdds);
+        const bA = bestFromArr(awayOdds);
+
+        const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
+        const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
+
+        const matchSignals = [];
+        if (ha !== 0) matchSignals.push(`nfl_home:+${(ha*100).toFixed(1)}%`);
+        if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
+        if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
+        if (byeAdj !== 0) matchSignals.push(`bye:${byeAdj>0?'+':''}${(byeAdj*100).toFixed(1)}%`);
+
+        const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
+        const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
+        const sharedNotes = `${posStr}${formNote}${byeNote}`;
+
+        // Moneyline picks
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+          mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
+            `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
+
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+          mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
+            `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
+
+        // Over/Under total points
+        const overOdds = parsed.totals.filter(o => o.side === 'over');
+        const underOdds = parsed.totals.filter(o => o.side === 'under');
+        if (overOdds.length && underOdds.length) {
+          const pointCounts = {};
+          for (const o of [...overOdds, ...underOdds]) {
+            pointCounts[o.point] = (pointCounts[o.point] || 0) + 1;
+          }
+          const mainLine = Object.entries(pointCounts).sort((a,b)=>b[1]-a[1])[0]?.[0];
+          if (mainLine) {
+            const line = parseFloat(mainLine);
+            const ov = overOdds.filter(o => Math.abs(o.point - line) < 0.6);
+            const un = underOdds.filter(o => Math.abs(o.point - line) < 0.6);
+            if (ov.length && un.length) {
+              const avgOvIP = ov.reduce((s,o)=>s+1/o.price,0) / ov.length;
+              const avgUnIP = un.reduce((s,o)=>s+1/o.price,0) / un.length;
+              const totIP2 = avgOvIP + avgUnIP;
+              const overP = totIP2 > 0 ? avgOvIP / totIP2 : 0.5;
+              const bestOv = bestFromArr(ov);
+              const bestUn = bestFromArr(un);
+              const overEdge = overP * bestOv.price - 1;
+              const underEdge = (1-overP) * bestUn.price - 1;
+
+              if (overEdge >= MIN_EDGE && bestOv.price >= 1.60)
+                mkP(`${hm} vs ${aw}`, league.name, `🏈 Over ${line} pts`, bestOv.price,
+                  `O/U: ${(overP*100).toFixed(1)}% over | ${bestOv.bookie}: ${bestOv.price}${sharedNotes} | ${ko}`,
+                  Math.round(overP*100), overEdge * 0.24, kickoffTime, bestOv.bookie, matchSignals);
+              if (underEdge >= MIN_EDGE && bestUn.price >= 1.60)
+                mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} pts`, bestUn.price,
+                  `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
+                  Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals);
+            }
+          }
+        }
+
+        // Spread (e.g., Home -3.5)
+        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
+        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+        if (homeSpr.length) {
+          const best = bestFromArr(homeSpr);
+          if (best.price >= 1.60 && best.price <= 3.8) {
+            const sEdge = fpHome * best.price - 1;
+            if (sEdge >= MIN_EDGE + 0.01) {
+              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
+                `Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
+                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
+            }
+          }
+        }
+        if (awaySpr.length) {
+          const best = bestFromArr(awaySpr);
+          if (best.price >= 1.60 && best.price <= 3.8) {
+            const sEdge = fpAway * best.price - 1;
+            if (sEdge >= MIN_EDGE + 0.01) {
+              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
+                `Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
+                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
+            }
+          }
+        }
+      }
+      await sleep(200);
+    } catch (err) {
+      emit({ log: `⚠️ 🏈 ${league.name}: ${err.message}` });
+    }
+  }
+
+  // Tag picks
+  for (const p of picks)     { p.scanType = 'nfl'; p.sport = 'american-football'; }
+  for (const p of combiPool) { p.scanType = 'nfl'; p.sport = 'american-football'; }
+
+  emit({ log: `🏈 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} NFL picks` });
+
+  if (picks.length) saveScanEntry(picks, 'nfl', totalEvents);
+
+  return picks;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HANDBALL SCANNER · api-sports.io handball
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runHandball(emit) {
+  if (!AF_KEY) { emit({ log: '🤾 Handball: geen API key' }); return []; }
+  emit({ log: `🤾 Handball scan · ${HANDBALL_LEAGUES.length} competities` });
+
+  const calib = loadCalib();
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const MIN_EDGE = 0.055;
+  let totalEvents = 0;
+  let apiCallsUsed = 0;
+
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+
+  for (const league of HANDBALL_LEAGUES) {
+    try {
+      // Fixtures today
+      const fixtures = await afGet('v1.handball.api-sports.io', '/games', {
+        date: today, league: league.id, season: league.season
+      });
+      apiCallsUsed++;
+
+      const games = (fixtures || []).filter(f => {
+        const st = f.status?.short || '';
+        return st === 'NS' || st === 'SCH';
+      });
+
+      if (!games.length) { emit({ log: `📭 ${league.name}: geen wedstrijden` }); continue; }
+      emit({ log: `🤾 ${league.name}: ${games.length} wedstrijd(en)` });
+      totalEvents += games.length;
+
+      // Standings
+      await sleep(120);
+      const standings = await afGet('v1.handball.api-sports.io', '/standings', {
+        league: league.id, season: league.season
+      });
+      apiCallsUsed++;
+
+      const standingsMap = {};
+      for (const group of (standings || [])) {
+        const teams = Array.isArray(group) ? group : [group];
+        for (const t of teams) {
+          const tid = t.team?.id;
+          if (!tid) continue;
+          standingsMap[tid] = {
+            rank: t.position || 99,
+            win: t.games?.win?.total || 0,
+            loss: t.games?.lose?.total || 0,
+            form: t.form || '',
+            teamName: t.team?.name || '',
+          };
+        }
+      }
+
+      for (const g of games) {
+        const gameId = g.id;
+        const hm = g.teams?.home?.name;
+        const aw = g.teams?.away?.name;
+        const hmId = g.teams?.home?.id;
+        const awId = g.teams?.away?.id;
+        if (!gameId || !hm || !aw) continue;
+
+        const kickoffMs = new Date(g.date || g.time || g.timestamp * 1000).getTime();
+        const ko = new Date(kickoffMs).toLocaleString('nl-NL', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
+        const kickoffTime = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
+
+        // Odds
+        await sleep(120);
+        const oddsResp = await afGet('v1.handball.api-sports.io', '/odds', { game: gameId });
+        apiCallsUsed++;
+
+        const parsed = parseGameOdds(oddsResp, hm, aw);
+        if (!parsed.moneyline.length) continue;
+
+        const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
+        const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
+        if (!homeOdds.length || !awayOdds.length) continue;
+
+        const avgHomePrice = homeOdds.reduce((s,o)=>s+o.price,0) / homeOdds.length;
+        const avgAwayPrice = awayOdds.reduce((s,o)=>s+o.price,0) / awayOdds.length;
+        const totalIP = 1/avgHomePrice + 1/avgAwayPrice;
+        if (totalIP < 0.5) continue;
+        const fpHome = (1/avgHomePrice) / totalIP;
+        const fpAway = (1/avgAwayPrice) / totalIP;
+
+        const hmSt = hmId ? standingsMap[hmId] : null;
+        const awSt = awId ? standingsMap[awId] : null;
+
+        let posAdj = 0;
+        if (hmSt && awSt) {
+          posAdj = Math.max(-0.06, Math.min(0.06, (awSt.rank - hmSt.rank) * 0.002));
+        }
+
+        // Form (last 5)
+        let formAdj = 0;
+        if (hmSt?.form && awSt?.form) {
+          const fmScore = s => [...(s.slice(-5)||'')].reduce((a,c)=>a+(c==='W'?3:c==='L'?0:1),0);
+          formAdj = Math.max(-0.05, Math.min(0.05, (fmScore(hmSt.form) - fmScore(awSt.form)) / 15 * 0.04));
+        }
+
+        // Home advantage is STRONG in handball (~60%)
+        const ha = league.ha || 0.06;
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5);
+
+        const bH = bestFromArr(homeOdds);
+        const bA = bestFromArr(awayOdds);
+
+        const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
+        const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
+
+        const matchSignals = [];
+        if (ha !== 0) matchSignals.push(`handball_home:+${(ha*100).toFixed(1)}%`);
+        if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
+        if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
+
+        const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
+        const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
+        const sharedNotes = `${posStr}${formNote}`;
+
+        // Moneyline picks
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+          mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
+            `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
+
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+          mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
+            `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
+
+        // Over/Under total goals
+        const overOdds = parsed.totals.filter(o => o.side === 'over');
+        const underOdds = parsed.totals.filter(o => o.side === 'under');
+        if (overOdds.length && underOdds.length) {
+          const pointCounts = {};
+          for (const o of [...overOdds, ...underOdds]) {
+            pointCounts[o.point] = (pointCounts[o.point] || 0) + 1;
+          }
+          const mainLine = Object.entries(pointCounts).sort((a,b)=>b[1]-a[1])[0]?.[0];
+          if (mainLine) {
+            const line = parseFloat(mainLine);
+            const ov = overOdds.filter(o => Math.abs(o.point - line) < 0.6);
+            const un = underOdds.filter(o => Math.abs(o.point - line) < 0.6);
+            if (ov.length && un.length) {
+              const avgOvIP = ov.reduce((s,o)=>s+1/o.price,0) / ov.length;
+              const avgUnIP = un.reduce((s,o)=>s+1/o.price,0) / un.length;
+              const totIP2 = avgOvIP + avgUnIP;
+              const overP = totIP2 > 0 ? avgOvIP / totIP2 : 0.5;
+              const bestOv = bestFromArr(ov);
+              const bestUn = bestFromArr(un);
+              const overEdge = overP * bestOv.price - 1;
+              const underEdge = (1-overP) * bestUn.price - 1;
+
+              if (overEdge >= MIN_EDGE && bestOv.price >= 1.60)
+                mkP(`${hm} vs ${aw}`, league.name, `🤾 Over ${line} goals`, bestOv.price,
+                  `O/U: ${(overP*100).toFixed(1)}% over | ${bestOv.bookie}: ${bestOv.price}${sharedNotes} | ${ko}`,
+                  Math.round(overP*100), overEdge * 0.24, kickoffTime, bestOv.bookie, matchSignals);
+              if (underEdge >= MIN_EDGE && bestUn.price >= 1.60)
+                mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} goals`, bestUn.price,
+                  `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
+                  Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals);
+            }
+          }
+        }
+
+        // Handicap
+        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
+        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+        if (homeSpr.length) {
+          const best = bestFromArr(homeSpr);
+          if (best.price >= 1.60 && best.price <= 3.8) {
+            const sEdge = fpHome * best.price - 1;
+            if (sEdge >= MIN_EDGE + 0.01) {
+              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
+                `Handicap | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
+                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
+            }
+          }
+        }
+        if (awaySpr.length) {
+          const best = bestFromArr(awaySpr);
+          if (best.price >= 1.60 && best.price <= 3.8) {
+            const sEdge = fpAway * best.price - 1;
+            if (sEdge >= MIN_EDGE + 0.01) {
+              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
+                `Handicap | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
+                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
+            }
+          }
+        }
+      }
+      await sleep(200);
+    } catch (err) {
+      emit({ log: `⚠️ 🤾 ${league.name}: ${err.message}` });
+    }
+  }
+
+  // Tag picks
+  for (const p of picks)     { p.scanType = 'handball'; p.sport = 'handball'; }
+  for (const p of combiPool) { p.scanType = 'handball'; p.sport = 'handball'; }
+
+  emit({ log: `🤾 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} handball picks` });
+
+  if (picks.length) saveScanEntry(picks, 'handball', totalEvents);
 
   return picks;
 }
@@ -3186,17 +3857,20 @@ app.post('/api/prematch', (req, res) => {
 
   runPrematch(emit)
     .then(async footballPicks => {
-      // Also run basketball + hockey (errors don't break the scan)
-      emit({ log: '🏀🏒 Multi-sport scans starten...' });
-      const [nbaPicks, nhlPicks] = await Promise.all([
+      // Also run basketball + hockey + baseball + NFL + handball (errors don't break the scan)
+      emit({ log: '🏀🏒⚾🏈🤾 Multi-sport scans starten...' });
+      const [nbaPicks, nhlPicks, mlbPicks, nflPicks, handballPicks] = await Promise.all([
         runBasketball(emit).catch(err => { emit({ log: `⚠️ Basketball scan mislukt: ${err.message}` }); return []; }),
         runHockey(emit).catch(err => { emit({ log: `⚠️ Hockey scan mislukt: ${err.message}` }); return []; }),
+        runBaseball(emit).catch(err => { emit({ log: `⚠️ Baseball scan mislukt: ${err.message}` }); return []; }),
+        runFootballUS(emit).catch(err => { emit({ log: `⚠️ NFL scan mislukt: ${err.message}` }); return []; }),
+        runHandball(emit).catch(err => { emit({ log: `⚠️ Handball scan mislukt: ${err.message}` }); return []; }),
       ]);
 
-      const allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks];
+      const allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks, ...mlbPicks, ...nflPicks, ...handballPicks];
       allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
 
-      emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey = ${allPicks.length} picks` });
+      emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey + ${mlbPicks.length} baseball + ${nflPicks.length} NFL + ${handballPicks.length} handball = ${allPicks.length} picks` });
 
       // Non-admin: filter gevoelige model data uit picks
       const safePicks = allPicks.map(p => {
@@ -3774,9 +4448,12 @@ app.get('/api/status', (req, res) => {
         usedPct: Math.round((afRateLimit.callsToday || 0) / (afRateLimit.limit || 7500) * 100),
         updatedAt: afRateLimit.updatedAt,
         perSport: {
-          football:   { callsToday: sportRateLimits.football.callsToday   || 0, limit: 7500 },
-          basketball: { callsToday: sportRateLimits.basketball.callsToday || 0, limit: 7500 },
-          hockey:     { callsToday: sportRateLimits.hockey.callsToday     || 0, limit: 7500 },
+          football:            { callsToday: sportRateLimits.football.callsToday            || 0, limit: 7500 },
+          basketball:          { callsToday: sportRateLimits.basketball.callsToday          || 0, limit: 7500 },
+          hockey:              { callsToday: sportRateLimits.hockey.callsToday              || 0, limit: 7500 },
+          baseball:            { callsToday: sportRateLimits.baseball.callsToday            || 0, limit: 7500 },
+          'american-football': { callsToday: sportRateLimits['american-football'].callsToday || 0, limit: 7500 },
+          handball:            { callsToday: sportRateLimits.handball.callsToday            || 0, limit: 7500 },
         },
       },
       espn: { status: 'active', plan: 'Free', note: 'Onbeperkt · live scores auto-refresh' },
@@ -3791,9 +4468,12 @@ app.get('/api/status', (req, res) => {
       marketsTracked: Object.keys(c.markets || {}).filter(k => (c.markets[k]?.n || 0) > 0).length,
     },
     leagues: {
-      football:   AF_FOOTBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-      basketball: NBA_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-      hockey:     NHL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
+      football:            AF_FOOTBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
+      basketball:          NBA_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
+      hockey:              NHL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
+      baseball:            BASEBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
+      'american-football': NFL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
+      handball:            HANDBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
     },
   });
 });
@@ -4500,9 +5180,9 @@ app.get('/api/timing-analysis', requireAdmin, async (req, res) => {
 const PORT = 3000;
 app.listen(PORT, () => {
   console.log(`\n🚀 EdgePickr draait op http://localhost:${PORT}\n`);
-  console.log(`   Prematch scan : POST /api/prematch (football + basketball + hockey)`);
+  console.log(`   Prematch scan : POST /api/prematch (football + basketball + hockey + baseball + NFL + handball)`);
   console.log(`   Live scan     : POST /api/live`);
-  console.log(`   Sports        : ${AF_FOOTBALL_LEAGUES.length} football + ${NBA_LEAGUES.length} basketball + ${NHL_LEAGUES.length} hockey leagues`);
+  console.log(`   Sports        : ${AF_FOOTBALL_LEAGUES.length} football + ${NBA_LEAGUES.length} basketball + ${NHL_LEAGUES.length} hockey + ${BASEBALL_LEAGUES.length} baseball + ${NFL_LEAGUES.length} NFL + ${HANDBALL_LEAGUES.length} handball leagues`);
   console.log(`   Bet tracker   : GET/POST /api/bets\n`);
   seedAdminUser().catch(e => console.error('Seed admin fout:', e.message));
   loadCalibAsync().then(() => console.log('📊 Calibratie geladen')).catch(() => {});
