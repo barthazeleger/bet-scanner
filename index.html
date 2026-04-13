@@ -728,6 +728,7 @@ nav::-webkit-scrollbar { display: none; }
         <input type="date" id="f-to"   style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--text);font-family:inherit" onchange="applyPeriodFilter()">
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(1)">Vandaag</button>
         <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(7)">7d</button>
         <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(14)">14d</button>
         <button class="btn btn-ghost btn-sm period-btn" onclick="setPeriod(30)">30d</button>
