@@ -3089,6 +3089,18 @@ app.get('/api/notifications', async (req, res) => {
       });
     }
 
+    // Supabase database grootte check (free tier = 500MB)
+    try {
+      const { count: betCount } = await supabase.from('bets').select('*', { count: 'exact', head: true });
+      const { count: scanCount } = await supabase.from('scan_history').select('*', { count: 'exact', head: true });
+      const estMB = ((betCount || 0) * 0.002 + (scanCount || 0) * 0.05).toFixed(1); // rough estimate
+      if (parseFloat(estMB) > 400) {
+        alerts.push({ type: 'error', icon: '🗄️', msg: `Supabase database bijna vol: ~${estMB}MB / 500MB — upgrade naar Pro ($25/mnd) aanbevolen.` });
+      } else if (parseFloat(estMB) > 250) {
+        alerts.push({ type: 'warn', icon: '🗄️', msg: `Supabase database: ~${estMB}MB / 500MB gebruikt. Nog ruimte maar hou in de gaten.` });
+      }
+    } catch {}
+
     res.json({ alerts, totalSettled: c.totalSettled, lastUpdated: c.lastUpdated, modelLastUpdated: c.modelLastUpdated || null });
   } catch (e) { res.status(500).json({ alerts: [], error: e.message }); }
 });
