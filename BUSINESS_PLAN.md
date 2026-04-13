@@ -188,10 +188,86 @@ EdgePickr is een data-driven sportsbetting analytics platform dat AI en statisti
 | OddsJam | $49-149/mnd | US-focused, geen Europees model |
 | **EdgePickr** | €9,99-49,99/mnd | Zelflerende AI, CLV bewezen, betaalbaar |
 
+## Multi-Sport Roadmap
+
+### Universeel framework (werkt voor elke sport)
+- Odds consensus (no-vig fair probability)
+- Kelly criterion + half-Kelly sizing
+- CLV tracking
+- Form (laatste 5-10 wedstrijden)
+- H2H record
+- Home/away advantage
+- Blessures/afwezigen
+- Weer (outdoor sporten)
+- Drawdown protection
+- Signal auto-tuning PER SPORT
+
+### Sport-specifieke signalen
+
+**Basketball (NBA/Euroleague)**
+- Tempo stats (pace, possessions per game)
+- Totaal punten model (ipv Poisson)
+- Back-to-back games (vermoeidheid)
+- Rest days advantage
+- Roster/injury impact (star player gewicht)
+- Over/Under, Spread, Moneyline, Player props
+
+**Tennis**
+- Surface stats (clay/hard/grass win rates)
+- Service/return game percentages
+- Break point conversion
+- Fitness/vermoeidheid (toernooi fase)
+- Head-to-head per surface
+- Match winner, set handicap, total games
+
+**IJshockey (NHL)**
+- Goalie stats (save %, GAA)
+- Power play / penalty kill %
+- Shots on goal trends
+- Back-to-back games
+- Home ice advantage (sterker dan voetbal)
+- Moneyline, puck line, over/under
+
+**American Football (NFL)**
+- Offensive/defensive DVOA rankings
+- Red zone efficiency
+- Turnover differential
+- Weather impact (outdoor stadiums)
+- Bye week advantage
+- Spread, moneyline, totals
+
+**Overig (fase 3+)**
+- Baseball (MLB): pitcher stats, bullpen, park factors
+- MMA/Boxing: reach, takedown defense, style matchups
+- Cricket: pitch conditions, toss advantage
+
+### API Requirements
+| Sporten | API plan | Kosten | Calls/dag |
+|---|---|---|---|
+| Voetbal only | api-football Pro | €19/mnd | 7.500 |
+| + NBA + NHL | api-sports Ultra | $149/mnd | 75.000 |
+| Alle sporten | api-sports Mega | $499/mnd | 750.000 |
+
+### Implementatie volgorde
+1. **NBA** (meest data, grootste markt na voetbal)
+2. **Tennis** (individuele sport, andere dynamiek, goed voor diversificatie)
+3. **NHL** (vergelijkbaar met voetbal qua model)
+4. **NFL** (seizoensgebonden maar enorme markt)
+5. **Rest** (MLB, MMA, cricket op basis van vraag)
+
+### Voordeel van multi-sport
+- Grotere pool = hogere kwaliteit top picks
+- Diversificatie = stabielere resultaten
+- Meer markten = meer edge-kansen
+- Per sport apart leerbaar model
+- Rechtvaardigt hogere pricing
+
 ## Next Steps
 1. ✅ 30 dagen track record opbouwen (POTD posts)
-2. Landing page bouwen
-3. Terms of service + privacy policy
-4. Free tier implementeren (rate limiting per tier)
-5. Stripe/Mollie betalingen integreren
+2. Tier logic + Stripe integratie bouwen
+3. Landing page bouwen
+4. Terms of service + privacy policy
+5. Free tier implementeren (rate limiting per tier)
 6. Launch op Reddit + X
+7. Na 50+ users: NBA toevoegen (api-sports Ultra upgrade)
+8. Na 100+ users: Tennis + NHL toevoegen
