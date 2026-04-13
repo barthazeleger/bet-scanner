@@ -1643,11 +1643,16 @@ async function runBasketball(emit) {
       ]);
       apiCallsUsed += 2;
 
-      // Merge: tomorrow only before 10:00 Amsterdam
-      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+      // Merge: tomorrow only before 10:00 Amsterdam (strict date check)
+      const allFixtures = [...(todayFixtures || []).filter(g => {
         const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
+        return koDate === today;
+      }), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
         const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
-        return koH < 10;
+        return koDate === tomorrow && koH < 10;
       })];
 
       const games = allFixtures.filter(f => {
@@ -1975,11 +1980,16 @@ async function runHockey(emit) {
       ]);
       apiCallsUsed += 2;
 
-      // Merge: tomorrow only before 10:00 Amsterdam
-      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+      // Merge: tomorrow only before 10:00 Amsterdam (strict date check)
+      const allFixtures = [...(todayFixtures || []).filter(g => {
         const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
+        return koDate === today;
+      }), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
         const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
-        return koH < 10;
+        return koDate === tomorrow && koH < 10;
       })];
 
       const games = allFixtures.filter(f => {
@@ -2259,11 +2269,16 @@ async function runBaseball(emit) {
       ]);
       apiCallsUsed += 2;
 
-      // Merge: tomorrow only before 10:00 Amsterdam
-      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+      // Merge: tomorrow only before 10:00 Amsterdam (strict date check)
+      const allFixtures = [...(todayFixtures || []).filter(g => {
         const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
+        return koDate === today;
+      }), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
         const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
-        return koH < 10;
+        return koDate === tomorrow && koH < 10;
       })];
 
       const games = allFixtures.filter(f => {
@@ -2543,11 +2558,16 @@ async function runFootballUS(emit) {
       ]);
       apiCallsUsed += 2;
 
-      // Merge: tomorrow only before 10:00 Amsterdam
-      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+      // Merge: tomorrow only before 10:00 Amsterdam (strict date check)
+      const allFixtures = [...(todayFixtures || []).filter(g => {
         const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
+        return koDate === today;
+      }), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
         const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
-        return koH < 10;
+        return koDate === tomorrow && koH < 10;
       })];
 
       const games = allFixtures.filter(f => {
@@ -2820,11 +2840,16 @@ async function runHandball(emit) {
       ]);
       apiCallsUsed += 2;
 
-      // Merge: tomorrow only before 10:00 Amsterdam
-      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+      // Merge: tomorrow only before 10:00 Amsterdam (strict date check)
+      const allFixtures = [...(todayFixtures || []).filter(g => {
         const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
+        return koDate === today;
+      }), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
         const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
-        return koH < 10;
+        return koDate === tomorrow && koH < 10;
       })];
 
       const games = allFixtures.filter(f => {
@@ -3129,9 +3154,10 @@ async function runPrematch(emit) {
         const ko = new Date(f.fixture?.date);
         const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
         const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
-        // Vandaag: alles. Morgen: alleen vóór 10:00
+        // Vandaag: alles. Morgen: alleen vóór 10:00. Overmorgen+: skip
         if (koDate === today) return true;
-        return koH < cutoffHour;
+        if (koDate === tomorrow) return koH < cutoffHour;
+        return false;
       });
 
       if (!filtered.length) { emit({ log: `📭 ${league.name}: geen wedstrijden` }); continue; }
@@ -3730,7 +3756,7 @@ async function runPrematch(emit) {
   for (const msg of msgs) { if (msg.trim()) await tg(msg); }
 
   lastPrematchPicks = finalPicks;
-  saveScanEntry(finalPicks, 'prematch', totalEvents);
+  // saveScanEntry moved to POST /api/prematch handler after multi-sport merge
   emit({ log: `✅ Klaar! ${msgs.length} Telegram bericht(en) gestuurd.`, picks: finalPicks });
 
   // ── Upgrade / unit-size check na scan ────────────────────────────────────
@@ -3922,7 +3948,8 @@ function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
   const wlEur = bets.reduce((s, b) => s + (b.uitkomst !== 'Open' ? b.wl : 0), 0);
   const totalInzet = bets.filter(b => b.uitkomst !== 'Open').reduce((s, b) => s + b.inzet, 0);
   const roi   = totalInzet > 0 ? wlEur / totalInzet : 0;
-  const bankroll  = startBankroll + wlEur;
+  const openInzet = bets.filter(b => b.uitkomst === 'Open').reduce((s, b) => s + (b.inzet || 0), 0);
+  const bankroll  = +(startBankroll + wlEur - openInzet).toFixed(2);
   const avgOdds   = total > 0 ? +(bets.reduce((s,b)=>s+b.odds,0)/total).toFixed(3) : 0;
   const avgUnits  = total > 0 ? +(bets.reduce((s,b)=>s+b.units,0)/total).toFixed(2) : 0;
   const strikeRate = (W+L) > 0 ? Math.round(W/(W+L)*100) : 0;
@@ -4233,6 +4260,22 @@ app.post('/api/prematch', (req, res) => {
 
       emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey + ${mlbPicks.length} baseball + ${nflPicks.length} NFL + ${handballPicks.length} handball = ${allPicks.length} kandidaten` });
       if (droppedCount > 0) emit({ log: `🎯 Top ${MAX_PICKS} geselecteerd (${droppedCount} zwakkere kandidaten weggelaten)` });
+
+      // Save ALL combined picks to scan history (not just football)
+      const totalEventsAll = topPicks.length; // total picks across all sports
+      saveScanEntry(topPicks, 'prematch', totalEventsAll);
+
+      // Send Telegram for non-football picks that made the top
+      const nonFootballTop = topPicks.filter(p => p.sport && p.sport !== 'football');
+      if (nonFootballTop.length > 0) {
+        const sportEmoji = { basketball: '🏀', hockey: '🏒', baseball: '⚾', 'american-football': '🏈', handball: '🤾' };
+        let extraMsg = '🌐 MULTI-SPORT PICKS\n\n';
+        nonFootballTop.forEach((p, i) => {
+          const icon = sportEmoji[p.sport] || '🏆';
+          extraMsg += `${icon} ${p.match}\n${p.league}\n📌 ${p.label}\n💰 Odds: ${p.odd} | ${p.units}\n📈 Kans: ${p.prob}%\n\n`;
+        });
+        tg(extraMsg).catch(() => {});
+      }
 
       // Non-admin: filter gevoelige model data uit picks
       const safePicks = topPicks.map(p => {
@@ -4575,6 +4618,25 @@ app.post('/api/bets', async (req, res) => {
     if (isNaN(units) || units <= 0) return res.status(400).json({ error: 'Units moeten hoger zijn dan 0' });
     const VALID_OUTCOMES = new Set(['Open', 'W', 'L']);
     if (body.uitkomst && !VALID_OUTCOMES.has(body.uitkomst)) return res.status(400).json({ error: 'Uitkomst moet Open, W of L zijn' });
+    // Fix datum for late-night/early-morning kickoffs (00:00-09:59)
+    // If tijd is between 00:00 and 09:59 and datum is today, change datum to tomorrow
+    if (body.datum && body.tijd) {
+      const tijdH = parseInt(body.tijd.split(':')[0]);
+      if (!isNaN(tijdH) && tijdH >= 0 && tijdH < 10) {
+        const todayAms = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+        // Parse datum (DD-MM-YYYY format)
+        const datumParts = body.datum.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        if (datumParts) {
+          const datumISO = `${datumParts[3]}-${datumParts[2]}-${datumParts[1]}`;
+          if (datumISO === todayAms) {
+            const tomorrowAms = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+            const [y, m, d] = tomorrowAms.split('-');
+            body.datum = `${d}-${m}-${y}`;
+          }
+        }
+      }
+    }
+
     const { bets } = await readBets(userId);
     const nextId = bets.length > 0 ? Math.max(...bets.map(b => b.id)) + 1 : 1;
     const newBet = { ...body, id: nextId, odds, units, uitkomst: body.uitkomst || 'Open' };
@@ -4788,6 +4850,148 @@ app.get('/api/scan-history', async (req, res) => {
   }
   const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
   res.json(history);
+});
+
+// ── MATCH ANALYSER ENDPOINT ──────────────────────────────────────────────────
+app.post('/api/analyze', async (req, res) => {
+  try {
+    const query = (req.body?.query || '').trim();
+    if (!query) return res.status(400).json({ error: 'Voer een wedstrijd in' });
+
+    // Parse the query to extract teams and market
+    let teamA = null, teamB = null, market = null;
+
+    // Natural language patterns
+    // "speelt X tegen Y"
+    const speeltMatch = query.match(/speelt\s+(.+?)\s+tegen\s+(.+?)(?:[\s,\.!?]|$)/i);
+    // "X tegen Y"
+    const tegenMatch = query.match(/^(?:vanavond|morgen|vandaag|straks)?\s*(.+?)\s+tegen\s+(.+?)(?:[\s,\.!?]|$)/i);
+    // "X vs Y" or "X - Y"
+    const vsMatch = query.match(/(.+?)\s+(?:vs\.?|[-–])\s+(.+)/i);
+    // Simple "X Y" (two teams)
+    const simpleMatch = query.match(/^([A-Z][\w]+(?:\s+[A-Z][\w]+)?)\s+([A-Z][\w]+(?:\s+[A-Z][\w]+)?)/);
+
+    if (speeltMatch) {
+      teamA = speeltMatch[1].trim();
+      teamB = speeltMatch[2].trim();
+    } else if (tegenMatch) {
+      teamA = tegenMatch[1].trim();
+      teamB = tegenMatch[2].trim();
+    } else if (vsMatch) {
+      teamA = vsMatch[1].trim();
+      teamB = vsMatch[2].trim();
+    } else if (simpleMatch) {
+      teamA = simpleMatch[1].trim();
+      teamB = simpleMatch[2].trim();
+    }
+
+    // Clean up filler words from team names
+    const fillerWords = /^(vanavond|morgen|vandaag|straks|ik\s+denk\s+dat|misschien|volgens\s+mij|jij\??)\s*/gi;
+    if (teamA) teamA = teamA.replace(fillerWords, '').trim();
+    if (teamB) teamB = teamB.replace(fillerWords, '').replace(/[\s,\.!?]+$/, '').trim();
+
+    // Extract market from natural language
+    // "X wint" → home/away win
+    const wintMatch = query.match(/(\w+)\s+wint/i);
+    const overMatch = query.match(/over\s*([\d.]+)/i);
+    const underMatch = query.match(/under\s*([\d.]+)/i);
+    const bttsMatch = query.match(/btts|beide\s+teams?\s+scoren/i);
+    const gelijkMatch = query.match(/gelijkspel|gelijk|draw/i);
+
+    if (overMatch) market = `Over ${overMatch[1]}`;
+    else if (underMatch) market = `Under ${underMatch[1]}`;
+    else if (bttsMatch) market = 'BTTS';
+    else if (gelijkMatch) market = 'Gelijkspel';
+    else if (wintMatch) market = `${wintMatch[1]} wint`;
+
+    if (!teamA) {
+      // Fallback: use the whole query as search terms
+      const words = query.replace(fillerWords, '').replace(/[,\.!?]+/g, '').trim();
+      if (words.length < 2) return res.status(400).json({ error: 'Kon geen teams herkennen. Probeer: "Ajax vs PSV" of "Ajax PSV over 2.5"' });
+      teamA = words;
+    }
+
+    // Search in lastPrematchPicks and scan history
+    const searchTerms = [teamA, teamB].filter(Boolean).map(t => t.toLowerCase());
+    const allPicks = [...lastPrematchPicks];
+
+    // Also load from scan history
+    try {
+      const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
+      if (history && history.length) {
+        for (const entry of history) {
+          if (entry.picks) allPicks.push(...entry.picks);
+        }
+      }
+    } catch {}
+
+    // Find matching picks
+    const matches = allPicks.filter(p => {
+      const matchStr = (p.match || '').toLowerCase();
+      return searchTerms.some(t => matchStr.includes(t));
+    });
+
+    if (!matches.length) {
+      // Try to find upcoming fixtures via API
+      const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+      const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+      let foundFixtures = [];
+      try {
+        const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', {
+          from: today, to: tomorrow, status: 'NS', search: teamA,
+        });
+        if (fixtures && fixtures.length) {
+          foundFixtures = fixtures.map(f => ({
+            match: `${f.teams?.home?.name} vs ${f.teams?.away?.name}`,
+            league: f.league?.name || '',
+            kickoff: f.fixture?.date ? new Date(f.fixture.date).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' }) : '',
+          }));
+        }
+      } catch {}
+      return res.json({ error: `Geen analyse beschikbaar voor "${query}". Start een scan om deze wedstrijd te analyseren.`, matches: foundFixtures });
+    }
+
+    // If market specified, filter
+    if (market) {
+      const marketLc = market.toLowerCase();
+      const marketMatches = matches.filter(p => (p.label || '').toLowerCase().includes(marketLc.split(' ')[0]));
+      if (marketMatches.length) {
+        const best = marketMatches[0];
+        return res.json({
+          match: best.match, league: best.league, label: best.label, odd: best.odd,
+          prob: best.prob, units: best.units, reason: best.reason, edge: best.edge,
+          score: best.score || (best.kelly ? Math.min(10, Math.max(5, Math.round((best.kelly - 0.015) / 0.135 * 5) + 5)) : null),
+          kickoff: best.kickoff, bookie: best.bookie, signals: best.signals,
+          sport: best.sport || 'football',
+        });
+      }
+    }
+
+    // Return all markets for this match
+    if (matches.length === 1) {
+      const best = matches[0];
+      return res.json({
+        match: best.match, league: best.league, label: best.label, odd: best.odd,
+        prob: best.prob, units: best.units, reason: best.reason, edge: best.edge,
+        score: best.score || (best.kelly ? Math.min(10, Math.max(5, Math.round((best.kelly - 0.015) / 0.135 * 5) + 5)) : null),
+        kickoff: best.kickoff, bookie: best.bookie, signals: best.signals,
+        sport: best.sport || 'football',
+      });
+    }
+
+    // Multiple results: return multi
+    const results = matches.map(p => ({
+      match: p.match, league: p.league, label: p.label, odd: p.odd,
+      prob: p.prob, units: p.units, reason: p.reason, edge: p.edge,
+      score: p.score || (p.kelly ? Math.min(10, Math.max(5, Math.round((p.kelly - 0.015) / 0.135 * 5) + 5)) : null),
+      kickoff: p.kickoff, bookie: p.bookie, signals: p.signals,
+      sport: p.sport || 'football',
+    }));
+    return res.json({ multi: true, results });
+  } catch (e) {
+    console.error('Analyze error:', e.message);
+    res.status(500).json({ error: 'Analyse mislukt' });
+  }
 });
 
 // API status · rate limits + service health

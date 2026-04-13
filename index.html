@@ -1836,7 +1836,7 @@ function renderPicks(el, picks) {
       : `<span style="font-size:10px;font-weight:700;background:rgba(59,130,246,0.15);color:#93c5fd;padding:1px 6px;border-radius:4px;margin-left:6px">PRE</span>`;
     div.innerHTML = `
       <div style="flex:1;min-width:0">
-        <div class="pick-name">${i===0?'⭐ ':i===1?'🔵 ':'• '}${escHtml(p.label||'')}${scanBadge}</div>
+        <div class="pick-name">${i===0?'⭐ ':i===1?'🔵 ':'• '}${(sportIcons[p.sport]||'🏆')+' '}${escHtml(p.label||'')}${scanBadge}</div>
         <div class="pick-meta">${escHtml(p.match||'')}${p.league?' · '+escHtml(p.league):''}${p.kickoff ? ` · <span style="color:#fbbf24;font-weight:600">⏰ ${escHtml(p.kickoff)}</span>` : p.scanType==='live' ? ` · <span style="color:#f87171;font-weight:600">● nu bezig</span>` : ''}${p.referee ? ` · <span style="color:#fbbf24;font-size:11px">🟨 ${escHtml(p.referee)}</span>` : ''}</div>
         <div class="prob-row" style="margin-top:7px">
           <div class="prob-bar"><div class="prob-fill" style="width:${Math.min(prob,100)}%;background:${pc}"></div></div>
@@ -2579,7 +2579,7 @@ async function redrawCharts(data) {
 // ── LIVE SCORES ───────────────────────────────────────────────────────────────
 let liveEvts = [];
 let livePrevState = new Map(); // id → { scoreH, scoreA, live, notified }
-const sportIcons = { football:'⚽', tennis:'🎾', basketball:'🏀', 'ice-hockey':'🏒', volleyball:'🏐', handball:'🤾', snooker:'🎱', darts:'🎯', 'table-tennis':'🏓', rugby:'🏉', 'american-football':'🏈', baseball:'⚾', mma:'🥊', boxing:'🥊', futsal:'🥅' };
+const sportIcons = { football:'⚽', tennis:'🎾', basketball:'🏀', 'ice-hockey':'🏒', hockey:'🏒', volleyball:'🏐', handball:'🤾', snooker:'🎱', darts:'🎯', 'table-tennis':'🏓', rugby:'🏉', 'american-football':'🏈', baseball:'⚾', mma:'🥊', boxing:'🥊', futsal:'🥅' };
 
 // ── NOTIFICATIES ──────────────────────────────────────────────────────────────
 function requestNotifPermission() {
@@ -2739,9 +2739,45 @@ function filterLive() {
   });
 
   let evts = [...liveEvts];
+
+  // Add non-football open bets as scheduled events if not already in liveEvts
+  if (!onlyLive) {
+    const nonFootballBets = myBetsList.filter(b => {
+      const sport = (b.sport || '').toLowerCase();
+      return sport && sport !== 'voetbal' && sport !== 'football';
+    });
+    for (const b of nonFootballBets) {
+      const parts = b.wedstrijd.split(' vs ').map(t => t.trim());
+      if (parts.length < 2) continue;
+      // Check if already in liveEvts
+      const alreadyIn = evts.some(e => {
+        const h = e.home.toLowerCase(), a = e.away.toLowerCase();
+        return (h.includes(parts[0].toLowerCase()) || parts[0].toLowerCase().includes(h.split(' ').pop())) &&
+               (a.includes(parts[1].toLowerCase()) || parts[1].toLowerCase().includes(a.split(' ').pop()));
+      });
+      if (!alreadyIn) {
+        const sportMap = { basketball: 'basketball', ijshockey: 'ice-hockey', honkbal: 'baseball', 'american football': 'american-football', volleybal: 'volleyball', handball: 'handball', tennis: 'tennis', rugby: 'rugby' };
+        const sportKey = sportMap[(b.sport || '').toLowerCase()] || (b.sport || '').toLowerCase();
+        evts.push({
+          id: 'bet-' + b.id,
+          sport: sportKey,
+          league: '',
+          home: parts[0],
+          away: parts[1],
+          scoreH: null,
+          scoreA: null,
+          minute: '',
+          status: '',
+          startTime: b.tijd || '',
+          live: false,
+        });
+      }
+    }
+  }
+
   if (onlyLive) evts = evts.filter(e => e.live);
   if (onlyMine) {
-    evts = evts.filter(e => matchesBet(e));
+    evts = evts.filter(e => matchesBet(e) || String(e.id).startsWith('bet-'));
   }
 
   // Sorteer: live wedstrijden bovenaan, daarna op starttijd (vroegst eerst)
@@ -3219,8 +3255,21 @@ function openModal(idx, labelHint) {
   document.getElementById('m-markt').value = modalPick.label || labelHint || '';
   document.getElementById('m-odds').value  = modalPick.odd || modalPick.odds || '';
   document.getElementById('m-units').value = parseFloat(String(modalPick.units||'1').replace('U','')) || 1;
-  document.getElementById('m-datum').value = pad(now.getDate())+'-'+pad(now.getMonth()+1)+'-'+now.getFullYear();
+  // If kickoff is between 00:00-09:59, the match is tomorrow
+  let datumDate = now;
+  if (modalPick.kickoff) {
+    const kickH = parseInt(modalPick.kickoff.split(':')[0]);
+    if (!isNaN(kickH) && kickH >= 0 && kickH < 10) {
+      datumDate = new Date(now.getTime() + 86400000);
+    }
+  }
+  document.getElementById('m-datum').value = pad(datumDate.getDate())+'-'+pad(datumDate.getMonth()+1)+'-'+datumDate.getFullYear();
   document.getElementById('m-tijd').value  = modalPick.kickoff || '';
+  // Sport uit pick data
+  const sportSel = document.getElementById('m-sport');
+  const sportNameMap = { football: 'Voetbal', basketball: 'Basketball', hockey: 'IJshockey', baseball: 'Honkbal', 'american-football': 'American Football', handball: 'Handball', tennis: 'Tennis' };
+  const sportLabel = sportNameMap[modalPick.sport] || 'Voetbal';
+  for (const opt of sportSel.options) { if (opt.value === sportLabel) { opt.selected = true; break; } }
   // Bookmaker uit pick data
   const bkSel = document.getElementById('m-bookie');
   const bkName = (modalPick.bookie || 'Bet365').toLowerCase();
