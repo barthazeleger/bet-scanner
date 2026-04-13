@@ -1434,10 +1434,10 @@ nav::-webkit-scrollbar { display: none; }
       <div class="field">
         <label>Sport</label>
         <select id="m-sport">
-          <option>Voetbal</option><option>Tennis</option><option>Basketball</option>
-          <option>IJshockey</option><option>Honkbal</option><option>Rugby</option>
-          <option>American Football</option><option>Volleybal</option>
-          <option>Snooker</option><option>Darts</option><option>Anders</option>
+          <option>Voetbal</option><option>Basketball</option><option>IJshockey</option>
+          <option>Honkbal</option><option>American Football</option><option>Handball</option>
+          <option>Tennis</option><option>Rugby</option><option>Volleybal</option>
+          <option>Anders</option>
         </select>
       </div>
       <div class="field">
@@ -2163,7 +2163,7 @@ function renderBetsTable(bets) {
       <td style="color:var(--muted);font-size:11px">${b.id}</td>
       <td>${escHtml(b.datum)}</td>
       <td style="color:var(--muted)">${escHtml(b.tijd||'—')}</td>
-      <td>${escHtml(b.sport)}</td>
+      <td style="cursor:pointer" onclick="editBetField(${b.id},'sport','${escHtml(b.sport)}')" title="Klik om aan te passen">${escHtml(b.sport)}</td>
       <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(b.wedstrijd)}">${escHtml(b.wedstrijd)}</td>
       <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(b.markt)}">${escHtml(b.markt)}</td>
       <td><strong style="cursor:pointer" onclick="editBetField(${parseInt(b.id)||0},'odds',${parseFloat(b.odds)||0})" title="Klik om aan te passen">${b.odds}</strong></td>

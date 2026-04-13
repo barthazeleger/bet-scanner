@@ -4979,7 +4979,7 @@ app.post('/api/bets', async (req, res) => {
 app.put('/api/bets/:id', async (req, res) => {
   try {
     const userId = req.user?.id;
-    const { uitkomst, odds, units, tip } = req.body || {};
+    const { uitkomst, odds, units, tip, sport } = req.body || {};
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
     if (uitkomst && !['Open', 'W', 'L'].includes(uitkomst)) return res.status(400).json({ error: 'Uitkomst moet Open, W of L zijn' });
@@ -4987,6 +4987,7 @@ app.put('/api/bets/:id', async (req, res) => {
     if (odds != null) updates.odds = parseFloat(odds);
     if (units != null) { updates.units = parseFloat(units); updates.inzet = +(parseFloat(units) * UNIT_EUR).toFixed(2); }
     if (tip) updates.tip = tip;
+    if (sport) updates.sport = sport;
     if (Object.keys(updates).length) {
       let updateQuery = supabase.from('bets').update(updates).eq('bet_id', id);
       if (userId) updateQuery = updateQuery.eq('user_id', userId);
