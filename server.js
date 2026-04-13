@@ -22,8 +22,8 @@ const ADMIN_EMAIL  = (process.env.ADMIN_EMAIL || '').toLowerCase();
 const ADMIN_PASSW  = process.env.ADMIN_PASSWORD || '';
 
 // ── WEB PUSH CONFIG ────────────────────────────────────────────────────────
-const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BEIocmzc02XFhLvUUDPcZyWAA1Vw3bJGDckDYzIyoqqh0pv1qOOPNF9C2SRvnEISxkjXGOOqStrrtpNn8Z4INqI';
-const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || 'ko_u-RBo2io-Cdl6K6Ah0_d8zgOg72pIr_erb0iOEgw';
+const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || '';
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
 if (VAPID_PUBLIC && VAPID_PRIVATE) {
   webpush.setVapidDetails('mailto:noreply@edgepickr.com', VAPID_PUBLIC, VAPID_PRIVATE);
 }
