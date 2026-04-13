@@ -3360,18 +3360,21 @@ function updatePayout() {
   const kelly = Math.max(0, (prob * (odds - 1) - (1 - prob)) / (odds - 1));
   const hk = kelly * 0.5;
   let recUnits = hk < 0.015 ? 0 : hk < 0.04 ? 0.3 : hk < 0.08 ? 0.5 : hk < 0.12 ? 1.0 : 2.0;
-  // Cap: nooit hoger dan scanner's originele advies (modal mist model-dampings)
-  if (recUnits > origUnits && diff <= 0) recUnits = origUnits;
-  // Bij lagere odds: units mogen niet omhoog
-  if (diff < 0 && recUnits > origUnits) recUnits = origUnits;
+  // Cap: nooit hoger dan scanner advies (modal mist model-dampings)
+  recUnits = Math.min(recUnits, origUnits);
   const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
   const diffCol = diff >= 0 ? '#34d399' : '#f87171';
+
+  // Score: gebruik originele scanner score als basis, pas aan bij lagere edge
+  const origScore = modalPick.score || (modalPick.kelly ? Math.min(10, Math.max(5, Math.round((modalPick.kelly - 0.015) / 0.135 * 5) + 5)) : 7);
 
   if (recUnits === 0) {
     edgeEl.innerHTML = `<div style="color:#f87171;font-size:12px;font-weight:600;margin-top:4px">⚠️ Odds ${odds.toFixed(2)} (${diffStr}) — edge onvoldoende, overweeg niet te plaatsen</div>`;
     document.getElementById('m-units').value = 0;
   } else {
-    const scoreVal = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
+    // Score: lagere odds dan scanner = zelfde of lager, hogere odds = zelfde of hoger
+    const scoreVal = diff <= 0 ? Math.min(origScore, Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5)))
+                               : Math.max(origScore, Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5)));
     edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <span style="color:${diffCol};font-weight:700">Odds: ${origOdds} → ${odds.toFixed(2)} (${diffStr})</span>
       <span style="color:var(--muted)">Edge: ${edge.toFixed(1)}%</span>
