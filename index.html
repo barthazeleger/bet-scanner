@@ -2106,8 +2106,8 @@ function renderPicks(el, picks) {
       : `<span style="font-size:10px;font-weight:700;background:rgba(59,130,246,0.15);color:#93c5fd;padding:1px 6px;border-radius:4px;margin-left:6px">PRE</span>`;
     div.innerHTML = `
       <div style="flex:1;min-width:0">
-        <div class="pick-name">${i===0?'⭐ ':i===1?'🔵 ':'• '}${p.label}${scanBadge}</div>
-        <div class="pick-meta">${p.match||''}${p.league?' · '+p.league:''}${p.kickoff ? ` · <span style="color:#fbbf24;font-weight:600">⏰ ${p.kickoff}</span>` : p.scanType==='live' ? ` · <span style="color:#f87171;font-weight:600">● nu bezig</span>` : ''}${p.referee ? ` · <span style="color:#fbbf24;font-size:11px">🟨 ${p.referee}</span>` : ''}</div>
+        <div class="pick-name">${i===0?'⭐ ':i===1?'🔵 ':'• '}${escHtml(p.label||'')}${scanBadge}</div>
+        <div class="pick-meta">${escHtml(p.match||'')}${p.league?' · '+escHtml(p.league):''}${p.kickoff ? ` · <span style="color:#fbbf24;font-weight:600">⏰ ${escHtml(p.kickoff)}</span>` : p.scanType==='live' ? ` · <span style="color:#f87171;font-weight:600">● nu bezig</span>` : ''}${p.referee ? ` · <span style="color:#fbbf24;font-size:11px">🟨 ${escHtml(p.referee)}</span>` : ''}</div>
         <div class="prob-row" style="margin-top:7px">
           <div class="prob-bar"><div class="prob-fill" style="width:${Math.min(prob,100)}%;background:${pc}"></div></div>
           <span class="prob-pct">${prob}% kans</span>
@@ -2141,7 +2141,7 @@ function renderPicks(el, picks) {
         secDiv.style.cssText = 'opacity:0.55;border-left:2px dashed rgba(255,255,255,0.15);padding:8px 14px;margin-bottom:4px;font-size:12px';
         secDiv.innerHTML = `
           <div style="flex:1;min-width:0">
-            <div style="font-size:11px;color:rgba(255,255,255,0.4);font-weight:600">${t('picks_see_also')} ${sp.label}</div>
+            <div style="font-size:11px;color:rgba(255,255,255,0.4);font-weight:600">${t('picks_see_also')} ${escHtml(sp.label||'')}</div>
             <div style="font-size:10.5px;color:rgba(255,255,255,0.35);margin-top:2px">${sp.odd||sp.odds||'?'} · ${sp.units} · ${sp.prob||0}%</div>
           </div>`;
         el.appendChild(secDiv);
@@ -2391,18 +2391,18 @@ function renderBetsTable(bets) {
     if (b.uitkomst === 'W') tr.style.background = 'rgba(52,211,153,0.07)';
     tr.innerHTML = `
       <td style="color:var(--muted);font-size:11px">${b.id}</td>
-      <td>${b.datum}</td>
-      <td style="color:var(--muted)">${b.tijd||'—'}</td>
-      <td>${b.sport}</td>
-      <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis" title="${b.wedstrijd}">${b.wedstrijd}</td>
-      <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${b.markt}">${b.markt}</td>
-      <td><strong style="cursor:pointer" onclick="editBetField(${b.id},'odds',${b.odds})" title="Klik om aan te passen">${b.odds}</strong></td>
-      <td style="cursor:pointer" onclick="editBetField(${b.id},'units',${b.units})" title="Klik om aan te passen">${b.units}U</td>
-      <td style="cursor:pointer;font-size:11px;color:var(--muted)" onclick="editBookie(${b.id},'${(b.tip||'Bet365').replace(/'/g,"\\'")}')" title="Klik om aan te passen">${b.tip||'—'}</td>
+      <td>${escHtml(b.datum)}</td>
+      <td style="color:var(--muted)">${escHtml(b.tijd||'—')}</td>
+      <td>${escHtml(b.sport)}</td>
+      <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(b.wedstrijd)}">${escHtml(b.wedstrijd)}</td>
+      <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(b.markt)}">${escHtml(b.markt)}</td>
+      <td><strong style="cursor:pointer" onclick="editBetField(${parseInt(b.id)||0},'odds',${parseFloat(b.odds)||0})" title="Klik om aan te passen">${b.odds}</strong></td>
+      <td style="cursor:pointer" onclick="editBetField(${parseInt(b.id)||0},'units',${parseFloat(b.units)||0})" title="Klik om aan te passen">${b.units}U</td>
+      <td style="cursor:pointer;font-size:11px;color:var(--muted)" onclick="editBookie(${parseInt(b.id)||0},'${escHtml((b.tip||'Bet365').replace(/'/g,"\\'"))}')" title="Klik om aan te passen">${escHtml(b.tip||'—')}</td>
       <td>€${b.inzet}</td>
       <td style="text-align:center">${b.score != null ? `<span style="font-size:11px;font-weight:700;color:${b.score>=8?'#34d399':b.score>=6?'#fbbf24':'#94a3b8'}">${b.score}/10</span>` : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
       <td>
-        <select class="sel-outcome" onchange="setOutcome(${b.id}, this.value)">
+        <select class="sel-outcome" onchange="setOutcome(${parseInt(b.id)||0}, this.value)">
           <option ${b.uitkomst==='Open'?'selected':''}>Open</option>
           <option ${b.uitkomst==='W'?'selected':''}>W</option>
           <option ${b.uitkomst==='L'?'selected':''}>L</option>
@@ -2410,7 +2410,7 @@ function renderBetsTable(bets) {
       </td>
       <td class="${wCls}">${b.wl !== 0 ? (b.wl>0?'+':'')+'€'+b.wl : b.uitkomst==='Open' ? `<span style="color:var(--muted);font-size:11px" title="Potentiële winst">+€${+((b.odds-1)*b.inzet).toFixed(2)}</span>` : '—'}</td>
       <td>${b.clvPct != null && b.clvPct !== 0 ? `<span style="font-size:11px;font-weight:700;color:${b.clvPct>0?'#34d399':'#f87171'}">${b.clvPct>0?'+':''}${b.clvPct}%</span>` : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
-      <td><button class="del-btn" onclick="removeBet(${b.id})" title="Verwijderen">🗑</button></td>`;
+      <td><button class="del-btn" onclick="removeBet(${parseInt(b.id)||0})" title="Verwijderen">🗑</button></td>`;
     tbody.appendChild(tr);
   });
 }
@@ -3107,8 +3107,8 @@ function filterLive() {
     }
 
     div.innerHTML = `
-      <div class="live-sport">${icon} ${e.league}</div>
-      <div class="live-teams">${e.home} <span style="color:var(--muted);font-weight:400">vs</span> ${e.away}</div>
+      <div class="live-sport">${icon} ${escHtml(e.league)}</div>
+      <div class="live-teams">${escHtml(e.home)} <span style="color:var(--muted);font-weight:400">vs</span> ${escHtml(e.away)}</div>
       <div class="live-score-row">
         ${scoreRow}
         <div class="live-time">${liveIndicator}${timeStr}</div>
@@ -3116,7 +3116,7 @@ function filterLive() {
       ${ouBar}
       ${isMine ? `<div style="margin-top:9px;padding:7px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.18);border-radius:7px">
         <div style="font-size:10px;color:var(--accent);font-weight:700;margin-bottom:3px">⭐ JOUW BET</div>
-        <div style="font-size:12px;font-weight:600;line-height:1.4">${myBet.markt}</div>
+        <div style="font-size:12px;font-weight:600;line-height:1.4">${escHtml(myBet.markt)}</div>
         <div style="display:flex;gap:10px;margin-top:4px;font-size:11px;color:var(--muted)">
           <span>@ <strong style="color:var(--text)">${myBet.odds}</strong></span>
           <span>${myBet.units}U</span>
@@ -3211,8 +3211,8 @@ function renderInlineMatchcast(panel, d) {
       return `<div class="live-event-row">
         <span class="live-event-min">${ev.minute ? ev.minute+"'" : ''}</span>
         <span class="live-event-ico">${m.ico}</span>
-        <span class="live-event-txt" style="${m.color?'color:'+m.color:''}">${ev.player || ev.text}${m.label?' <span style="opacity:.6;font-size:10px">('+m.label+')</span>':''}</span>
-        ${ev.team ? `<span class="live-event-team">${ev.team.split(' ').pop()}</span>` : ''}
+        <span class="live-event-txt" style="${m.color?'color:'+m.color:''}">${escHtml(ev.player || ev.text || '')}${m.label?' <span style="opacity:.6;font-size:10px">('+m.label+')</span>':''}</span>
+        ${ev.team ? `<span class="live-event-team">${escHtml(ev.team.split(' ').pop())}</span>` : ''}
       </div>`;
     }).join('');
   }
@@ -3227,7 +3227,7 @@ async function generatePOTD() {
   btn.disabled = true; btn.textContent = '⏳ Genereren...';
   try {
     const d = await api('/api/potd').then(r => r?.json());
-    if (!d || d.error) { out.style.display = 'block'; out.innerHTML = `<div style="color:var(--red);font-size:13px">${d?.error || 'Fout'}</div>`; return; }
+    if (!d || d.error) { out.style.display = 'block'; out.innerHTML = `<div style="color:var(--red);font-size:13px">${escHtml(d?.error || 'Fout')}</div>`; return; }
     out.style.display = 'block';
     out.innerHTML = `
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
@@ -3543,7 +3543,7 @@ async function loadNotifications() {
         return `<div class="notif-item ${a.type}" style="${isNew ? 'border-left:3px solid var(--accent)' : ''}">
           <span style="font-size:16px;line-height:1.3;flex-shrink:0">${a.icon}</span>
           <div>
-            <div>${isNew ? '<strong>' : ''}${a.msg}${isNew ? '</strong>' : ''}</div>
+            <div>${isNew ? '<strong>' : ''}${escHtml(a.msg||'')}${isNew ? '</strong>' : ''}</div>
             ${dateStr}
             ${a.link ? `<a href="${a.link}" target="_blank" class="notif-link">${t('notif_more_info')}</a>` : ''}
           </div>
@@ -3596,7 +3596,7 @@ async function loadModelLog() {
       return `<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)${isNew?';background:rgba(99,102,241,0.04);margin:0 -4px;padding:10px 4px':''}">
         <span style="font-size:18px;flex-shrink:0">${dir}</span>
         <div style="flex:1">
-          <div style="font-weight:${isNew?'600':'400'};color:var(--text)">${e.note}${isNew?' <span style="font-size:10px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:10px;vertical-align:middle">nieuw</span>':''}</div>
+          <div style="font-weight:${isNew?'600':'400'};color:var(--text)">${escHtml(e.note||'')}${isNew?' <span style="font-size:10px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:10px;vertical-align:middle">nieuw</span>':''}</div>
           <div style="font-size:11px;color:var(--muted);margin-top:3px">
             Multiplier: <span style="color:${dirClr};font-weight:600">${e.oldMult.toFixed(2)} → ${e.newMult.toFixed(2)}</span>
             &nbsp;·&nbsp; ${e.n} bets &nbsp;·&nbsp; ${e.winRate}% winrate &nbsp;·&nbsp; ${dateStr}
@@ -3813,8 +3813,8 @@ async function loadAdminUsers() {
     list.innerHTML = users.map(u => `
       <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
         <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.email}</div>
-          <div style="font-size:11px;color:var(--muted)">${u.role} · aangemeld ${u.createdAt ? u.createdAt.slice(0,10) : '?'}</div>
+          <div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(u.email)}</div>
+          <div style="font-size:11px;color:var(--muted)">${escHtml(u.role)} · aangemeld ${u.createdAt ? escHtml(u.createdAt.slice(0,10)) : '?'}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
           ${u.status === 'pending' ? `<button onclick="adminAction('${u.id}','approved')" style="padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">✓ Goed</button>` : ''}
@@ -3899,7 +3899,7 @@ function renderInboxFeed(log) {
           <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--accent)">${label}</span>
           <span style="font-size:11px;color:var(--muted)">${ago}</span>
         </div>
-        <div style="line-height:1.6;color:var(--text)">${e.note || '—'}</div>
+        <div style="line-height:1.6;color:var(--text)">${escHtml(e.note || '—')}</div>
         ${e.oldMult != null ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">${e.oldMult} → ${e.newMult} ${e.winRate != null ? `· ${e.winRate}% win rate` : ''} ${e.n ? `· ${e.n} bets` : ''}</div>` : ''}
       </div>
     </div>`;

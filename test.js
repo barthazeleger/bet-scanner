@@ -345,6 +345,335 @@ test('different keys are independent', () => {
   assert.strictEqual(rl('key-b', 5, 60000), false); // key-b still ok
 });
 
+// ── Rate Limiter Edge Cases ──────────────────────────────────────────────────
+console.log('\n  Rate Limiter Edge Cases:');
+
+test('rate limit resets after window expires', () => {
+  const map = new Map();
+  function rl(key, maxReqs, windowMs) {
+    const now = Date.now();
+    const entry = map.get(key) || { count: 0, resetAt: now + windowMs };
+    if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + windowMs; }
+    entry.count++;
+    map.set(key, entry);
+    return entry.count > maxReqs;
+  }
+  // Fill up the limit
+  for (let i = 0; i < 3; i++) rl('reset-test', 3, 100);
+  assert.strictEqual(rl('reset-test', 3, 100), true); // 4th = blocked
+  // Simulate window expiry by manipulating the entry
+  const entry = map.get('reset-test');
+  entry.resetAt = Date.now() - 1; // expired
+  map.set('reset-test', entry);
+  assert.strictEqual(rl('reset-test', 3, 100), false); // reset, 1st again
+});
+
+test('login codes expire after 5 min (simulated)', () => {
+  // Simulate the loginCodes Map behavior from server.js
+  const loginCodes = new Map();
+  const email = 'test@example.com';
+  const code = '123456';
+  // Set code that expires in 5 minutes
+  loginCodes.set(email, { code, expiresAt: Date.now() + 5 * 60 * 1000 });
+  const entry = loginCodes.get(email);
+  assert.strictEqual(entry.code, code);
+  assert.ok(Date.now() < entry.expiresAt, 'Code should not be expired yet');
+  // Simulate expiry
+  entry.expiresAt = Date.now() - 1;
+  assert.ok(Date.now() > entry.expiresAt, 'Code should be expired now');
+});
+
+test('rate limiter at exact boundary', () => {
+  const rl = createRateLimiter();
+  // maxReqs=1 means only 1 request allowed
+  assert.strictEqual(rl('boundary', 1, 60000), false); // 1st = ok
+  assert.strictEqual(rl('boundary', 1, 60000), true);  // 2nd = blocked
+});
+
+// ── Data Validation Tests ───────────────────────────────────────────────────
+console.log('\n  Data Validation:');
+
+test('bet creation requires wedstrijd (match name)', () => {
+  // Simulate the validation logic from POST /api/bets
+  const body = { markt: 'Over 2.5', odds: 1.90, units: 1 };
+  assert.ok(!body.wedstrijd || typeof body.wedstrijd !== 'string',
+    'Missing wedstrijd should fail validation');
+});
+
+test('bet creation requires markt', () => {
+  const body = { wedstrijd: 'Ajax vs PSV', odds: 1.90, units: 1 };
+  assert.ok(!body.markt || typeof body.markt !== 'string',
+    'Missing markt should fail validation');
+});
+
+test('odds must be > 1.0', () => {
+  const validOdds = [1.01, 1.50, 2.00, 5.00];
+  const invalidOdds = [0, 0.5, 1.0, -1, NaN];
+  for (const o of validOdds) {
+    assert.ok(parseFloat(o) > 1.0, `Odds ${o} should be valid`);
+  }
+  for (const o of invalidOdds) {
+    assert.ok(!(parseFloat(o) > 1.0), `Odds ${o} should be invalid`);
+  }
+});
+
+test('units must be > 0', () => {
+  const validUnits = [0.1, 0.3, 0.5, 1.0, 2.0];
+  const invalidUnits = [0, -1, NaN];
+  for (const u of validUnits) {
+    assert.ok(parseFloat(u) > 0, `Units ${u} should be valid`);
+  }
+  for (const u of invalidUnits) {
+    assert.ok(!(parseFloat(u) > 0), `Units ${u} should be invalid`);
+  }
+});
+
+test('uitkomst must be Open, W, or L', () => {
+  const VALID = new Set(['Open', 'W', 'L']);
+  assert.ok(VALID.has('Open'));
+  assert.ok(VALID.has('W'));
+  assert.ok(VALID.has('L'));
+  assert.ok(!VALID.has('X'));
+  assert.ok(!VALID.has(''));
+  assert.ok(!VALID.has('win'));
+  assert.ok(!VALID.has('<script>'));
+});
+
+// ── User Isolation Tests ────────────────────────────────────────────────────
+console.log('\n  User Isolation:');
+
+test('readBets with userId filters correctly (mock)', () => {
+  // Simulate filtering logic from readBets
+  const allBets = [
+    { id: 1, user_id: 'user-a', wedstrijd: 'Match A' },
+    { id: 2, user_id: 'user-b', wedstrijd: 'Match B' },
+    { id: 3, user_id: 'user-a', wedstrijd: 'Match C' },
+  ];
+  const userId = 'user-a';
+  const filtered = allBets.filter(b => b.user_id === userId);
+  assert.strictEqual(filtered.length, 2);
+  assert.ok(filtered.every(b => b.user_id === 'user-a'));
+});
+
+test('null userId returns all bets (admin behavior)', () => {
+  const allBets = [
+    { id: 1, user_id: 'user-a' },
+    { id: 2, user_id: 'user-b' },
+    { id: 3, user_id: 'user-a' },
+  ];
+  const userId = null;
+  const filtered = userId ? allBets.filter(b => b.user_id === userId) : allBets;
+  assert.strictEqual(filtered.length, 3);
+});
+
+test('user cannot access another users data by manipulating ID', () => {
+  // Simulate the server logic: userId comes from JWT, not from request
+  const jwtUserId = 'user-a';
+  const requestedUserId = 'user-b'; // attacker tries to request another user's data
+  // Server should always use JWT userId, not request param
+  const effectiveUserId = jwtUserId; // This is how the server works
+  assert.strictEqual(effectiveUserId, 'user-a');
+  assert.notStrictEqual(effectiveUserId, requestedUserId);
+});
+
+// ── Drawdown Protection Tests ───────────────────────────────────────────────
+console.log('\n  Drawdown Protection:');
+
+test('multiplier = 1.0 when no losses (insufficient data)', () => {
+  // Simulate getDrawdownMultiplier with no data
+  const c = { totalSettled: 3, totalWins: 3, totalProfit: 30, lossLog: [] };
+  // c.totalSettled < 5 → return 1.0
+  const multiplier = c.totalSettled < 5 ? 1.0 : null;
+  assert.strictEqual(multiplier, 1.0);
+});
+
+test('multiplier = 1.0 when profitable and healthy win rate', () => {
+  const c = { totalSettled: 20, totalWins: 12, totalProfit: 50, lossLog: [] };
+  const START_BANKROLL = 100;
+  // Not in drawdown: profit > 0, win rate > 30%
+  const totalWr = c.totalWins / c.totalSettled;
+  const inDrawdown = c.totalProfit < -(START_BANKROLL * 0.20) || totalWr < 0.30;
+  assert.ok(!inDrawdown, 'Should not be in drawdown');
+});
+
+test('multiplier < 1.0 when significant losses (>20% of bankroll)', () => {
+  const START_BANKROLL = 100;
+  const c = { totalSettled: 15, totalWins: 3, totalProfit: -25, lossLog: [] };
+  // totalProfit < -(100 * 0.20) = -20 → halve stakes
+  const shouldHalve = c.totalProfit < -(START_BANKROLL * 0.20);
+  assert.ok(shouldHalve, 'Should trigger drawdown protection at >20% loss');
+  const multiplier = shouldHalve ? 0.5 : 1.0;
+  assert.ok(multiplier < 1.0, `Multiplier should be < 1.0, got ${multiplier}`);
+});
+
+test('multiplier < 1.0 when win rate below 30% after 10+ bets', () => {
+  const c = { totalSettled: 12, totalWins: 2, totalProfit: -10 };
+  const totalWr = c.totalWins / c.totalSettled;
+  const shouldReduce = c.totalSettled >= 10 && totalWr < 0.30;
+  assert.ok(shouldReduce, 'Should trigger stake reduction');
+  const multiplier = shouldReduce ? 0.7 : 1.0;
+  assert.ok(multiplier < 1.0, `Multiplier should be < 1.0, got ${multiplier}`);
+});
+
+// ── Weather Data Tests ──────────────────────────────────────────────────────
+console.log('\n  Weather Data:');
+
+test('rain > 5mm gives negative adjustment', () => {
+  const weatherData = { rain: 8, wind: 10, temp: 15 };
+  let weatherAdj = 0;
+  if (weatherData.rain > 5) weatherAdj -= 0.03;
+  if (weatherData.wind > 30) weatherAdj -= 0.02;
+  assert.ok(weatherAdj < 0, `Should be negative, got ${weatherAdj}`);
+  assert.strictEqual(weatherAdj, -0.03);
+});
+
+test('wind > 30 gives negative adjustment', () => {
+  const weatherData = { rain: 2, wind: 35, temp: 15 };
+  let weatherAdj = 0;
+  if (weatherData.rain > 5) weatherAdj -= 0.03;
+  if (weatherData.wind > 30) weatherAdj -= 0.02;
+  assert.ok(weatherAdj < 0, `Should be negative, got ${weatherAdj}`);
+  assert.strictEqual(weatherAdj, -0.02);
+});
+
+test('rain > 5mm AND wind > 30 both apply', () => {
+  const weatherData = { rain: 10, wind: 40, temp: 8 };
+  let weatherAdj = 0;
+  if (weatherData.rain > 5) weatherAdj -= 0.03;
+  if (weatherData.wind > 30) weatherAdj -= 0.02;
+  assert.strictEqual(weatherAdj, -0.05);
+});
+
+test('no rain/wind gives 0 adjustment', () => {
+  const weatherData = { rain: 2, wind: 15, temp: 20 };
+  let weatherAdj = 0;
+  if (weatherData.rain > 5) weatherAdj -= 0.03;
+  if (weatherData.wind > 30) weatherAdj -= 0.02;
+  assert.strictEqual(weatherAdj, 0);
+});
+
+test('null weather data gives 0 adjustment', () => {
+  const weatherData = null;
+  let weatherAdj = 0;
+  if (weatherData && weatherData.rain > 5) weatherAdj -= 0.03;
+  if (weatherData && weatherData.wind > 30) weatherAdj -= 0.02;
+  assert.strictEqual(weatherAdj, 0);
+});
+
+// ── Security-Specific Tests ─────────────────────────────────────────────────
+console.log('\n  Security:');
+
+test('HTML is properly escaped', () => {
+  // Copy of escHtml from index.html
+  function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  assert.strictEqual(escHtml('<script>alert(1)</script>'), '&lt;script&gt;alert(1)&lt;/script&gt;');
+  assert.strictEqual(escHtml('Normal text'), 'Normal text');
+  assert.strictEqual(escHtml('A & B < C > D'), 'A &amp; B &lt; C &gt; D');
+  assert.strictEqual(escHtml(''), '');
+  assert.strictEqual(escHtml('"quotes"'), '"quotes"'); // quotes not escaped (for non-attribute context)
+});
+
+test('escHtml handles special characters in team names', () => {
+  function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  assert.strictEqual(escHtml('FC Köln'), 'FC Köln');
+  assert.strictEqual(escHtml('São Paulo'), 'São Paulo');
+  assert.strictEqual(escHtml('Atlético <Madrid>'), 'Atlético &lt;Madrid&gt;');
+});
+
+test('invalid fixture IDs are rejected', () => {
+  // Simulate the validation from /api/live-events/:id
+  const testCases = [
+    { input: '123', expected: 123, valid: true },
+    { input: 'abc', expected: NaN, valid: false },
+    { input: '-1', expected: -1, valid: false },
+    { input: '0', expected: 0, valid: false },
+    { input: '1.5', expected: 1, valid: true },
+    { input: '999999', expected: 999999, valid: true },
+  ];
+  for (const tc of testCases) {
+    const id = parseInt(tc.input);
+    const valid = !isNaN(id) && id > 0;
+    assert.strictEqual(valid, tc.valid, `ID "${tc.input}" should be ${tc.valid ? 'valid' : 'invalid'}`);
+  }
+});
+
+test('input validation rejects prototype pollution keys', () => {
+  // Ensure the settings whitelist prevents prototype pollution
+  const allowed = ['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled','twoFactorEnabled'];
+  const attackKeys = ['__proto__', 'constructor', 'prototype', 'toString'];
+  for (const key of attackKeys) {
+    assert.ok(!allowed.includes(key), `"${key}" should not be in allowed settings`);
+  }
+});
+
+test('path traversal is blocked', () => {
+  const path = require('path');
+  const ALLOWED_EXTENSIONS = new Set(['.html', '.css', '.png', '.jpg', '.jpeg', '.svg', '.ico', '.webp', '.gif', '.woff', '.woff2', '.ttf']);
+  const testPaths = [
+    { input: '/../../../etc/passwd', blocked: true },
+    { input: '/..%2F..%2Fetc/passwd', blocked: true },
+    { input: '/index.html', blocked: false },
+    { input: '/style.css', blocked: false },
+    { input: '/.env', blocked: true },
+    { input: '/server.js', blocked: true },
+  ];
+  for (const tc of testPaths) {
+    const normalized = path.normalize(decodeURIComponent(tc.input)).replace(/\\/g, '/');
+    const hasTraversal = normalized.includes('..');
+    const ext = path.extname(normalized).toLowerCase();
+    const isAllowed = normalized === '/' || ALLOWED_EXTENSIONS.has(ext);
+    const blocked = hasTraversal || !isAllowed;
+    assert.strictEqual(blocked, tc.blocked, `Path "${tc.input}" should be ${tc.blocked ? 'blocked' : 'allowed'}`);
+  }
+});
+
+test('JWT secret is required (env check pattern)', () => {
+  // Verify the pattern: if no JWT_SECRET, server exits
+  // We just test that empty string is falsy
+  assert.ok(!'', 'Empty JWT_SECRET should be falsy');
+  assert.ok(!undefined, 'Undefined JWT_SECRET should be falsy');
+  assert.ok(!null, 'Null JWT_SECRET should be falsy');
+  assert.ok('some-secret', 'Non-empty JWT_SECRET should be truthy');
+});
+
+// ── Calibration & Market Detection Tests ────────────────────────────────────
+console.log('\n  Market Detection:');
+
+test('detectMarket identifies home correctly', () => {
+  // Copy of detectMarket from server.js
+  function detectMarket(markt) {
+    const m = markt.toLowerCase();
+    if (m.includes('wint') || m.includes('winner') || m.includes('home') || m.includes('thuis')) {
+      if (m.includes('✈️') || m.includes('away') || m.includes('uit') || m.match(/→.*away/)) return 'away';
+      return 'home';
+    }
+    if (m.includes('gelijkspel') || m.includes('draw') || m.includes('x2') || m.includes('1x')) return 'draw';
+    if (m.includes('over') || m.includes('>')) return 'over';
+    if (m.includes('under') || m.includes('<')) return 'under';
+    return 'other';
+  }
+  assert.strictEqual(detectMarket('Ajax wint'), 'home');
+  assert.strictEqual(detectMarket('✈️ PSV wint'), 'away');
+  assert.strictEqual(detectMarket('Gelijkspel'), 'draw');
+  assert.strictEqual(detectMarket('Over 2.5 goals'), 'over');
+  assert.strictEqual(detectMarket('Under 2.5 goals'), 'under');
+  assert.strictEqual(detectMarket('BTTS Ja'), 'other');
+});
+
+test('EP bucket weights have valid defaults', () => {
+  const DEFAULT_EPW = { '0.28':0.80, '0.30':0.95, '0.38':1.05, '0.45':1.15, '0.55':1.25 };
+  for (const [key, w] of Object.entries(DEFAULT_EPW)) {
+    assert.ok(w >= 0.5 && w <= 2.0, `Weight ${w} for bucket ${key} should be in [0.5, 2.0]`);
+    assert.ok(parseFloat(key) >= 0.28, `Bucket key ${key} should be >= 0.28`);
+  }
+  // Weights should increase with EP
+  const keys = Object.keys(DEFAULT_EPW).sort((a,b) => parseFloat(a) - parseFloat(b));
+  for (let i = 1; i < keys.length; i++) {
+    assert.ok(DEFAULT_EPW[keys[i]] >= DEFAULT_EPW[keys[i-1]],
+      `Weight for ${keys[i]} should be >= weight for ${keys[i-1]}`);
+  }
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);

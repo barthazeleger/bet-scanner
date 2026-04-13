@@ -40,7 +40,7 @@ function rateLimit(key, maxReqs, windowMs) {
   return entry.count > maxReqs;
 }
 
-// Scan lock — voorkom concurrent scans
+// Scan lock · voorkom concurrent scans
 let scanRunning = false;
 
 // ── AUTH CONFIG ────────────────────────────────────────────────────────────────
@@ -150,8 +150,11 @@ const ALLOWED_EXTENSIONS = new Set(['.html', '.css', '.png', '.jpg', '.jpeg', '.
 const ALLOWED_FILES = new Set(['/manifest.json', '/sw.js']);
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
-  const ext = path.extname(req.path).toLowerCase();
-  if (req.path === '/' || ALLOWED_EXTENSIONS.has(ext) || ALLOWED_FILES.has(req.path)) return next();
+  // Normalize path to prevent traversal via URL encoding or double slashes
+  const normalized = path.normalize(decodeURIComponent(req.path)).replace(/\\/g, '/');
+  if (normalized.includes('..')) return res.status(400).send('Bad request');
+  const ext = path.extname(normalized).toLowerCase();
+  if (normalized === '/' || ALLOWED_EXTENSIONS.has(ext) || ALLOWED_FILES.has(normalized)) return next();
   return res.status(404).send('Not found');
 });
 app.use(express.static(path.join(__dirname)));
@@ -241,7 +244,7 @@ function rescheduleUserScans(user) {
   userScanTimers[user.id] = times.map(h => scheduleScanAtHour(h));
 }
 
-// ── CALIBRATIE — leren van resultaten ────────────────────────────────────────
+// ── CALIBRATIE · leren van resultaten ────────────────────────────────────────
 // ep-bucket sleutels: de ranges die overeenkomen met de epW bonuses in mkP
 const EP_BUCKETS = ['0.28','0.30','0.38','0.45','0.55'];
 function epBucketKey(ep) {
@@ -305,8 +308,14 @@ function detectMarket(markt = '') {
   return 'other';
 }
 
-function updateCalibration(bet) {
+function updateCalibration(bet, userId = null) {
   if (!bet || !['W','L'].includes(bet.uitkomst)) return;
+  // Model alleen trainen op admin data (voorkomt vervuiling door andere users)
+  if (userId) {
+    const users = _usersCache || [];
+    const user = users.find(u => u.id === userId);
+    if (user && user.role !== 'admin') return; // skip non-admin bets
+  }
   const c    = loadCalib();
   const mKey = detectMarket(bet.markt || '');
   const lg   = bet.wedstrijd?.split(' vs ')?.[0] ? (bet.league || 'Unknown') : 'Unknown';
@@ -354,7 +363,7 @@ function updateCalibration(bet) {
 
   // ── ep-bucket tracking (voor dynamische epW kalibratie) ──────────────────
   // Sla ep op per bet zodat we kunnen terugkijken welk bucket dit was.
-  // ep zit niet in de bet-record — we reconstrueren het uit kans (prob) veld als fallback.
+  // ep zit niet in de bet-record · we reconstrueren het uit kans (prob) veld als fallback.
   const epEst = bet.ep ? parseFloat(bet.ep) : (bet.prob ? parseFloat(bet.prob) / 100 : null);
   if (epEst && epEst >= 0.28) {
     const bk = epBucketKey(epEst);
@@ -383,7 +392,7 @@ function updateCalibration(bet) {
           newMult: +eb.weight.toFixed(3),
           n:       eb.n,
           winRate: +(actualWr*100).toFixed(1),
-          note:    `epW [${bk}+] ${dir} bijgesteld — werkelijke hitrate ${(actualWr*100).toFixed(0)}% vs verwacht ${(expectedWr*100).toFixed(0)}% (${eb.n} bets)`,
+          note:    `epW [${bk}+] ${dir} bijgesteld · werkelijke hitrate ${(actualWr*100).toFixed(0)}% vs verwacht ${(expectedWr*100).toFixed(0)}% (${eb.n} bets)`,
         };
         c.modelLog = [entry, ...(c.modelLog || [])].slice(0, 50);
         c.modelLastUpdated = entry.date;
@@ -421,9 +430,9 @@ function updateCalibration(bet) {
     c.modelLog = [entry, ...(c.modelLog || [])].slice(0, 50);
     let msg = `🏆 MILESTONE: ${c.totalSettled} BETS\n📊 Win rate: ${wr.toFixed(0)}%\n💰 ROI: ${roi.toFixed(1)}%\n💵 P/L: €${c.totalProfit.toFixed(2)}`;
     if (c.totalSettled === 50 && roi > 10) {
-      msg += `\n\n✅ ROI > 10% na 50 bets — overweeg unit verhoging naar €20`;
+      msg += `\n\n✅ ROI > 10% na 50 bets · overweeg unit verhoging naar €20`;
     } else if (c.totalSettled === 50 && roi < 0) {
-      msg += `\n\n⚠️ Negatieve ROI — model review aanbevolen. Check signal attribution.`;
+      msg += `\n\n⚠️ Negatieve ROI · model review aanbevolen. Check signal attribution.`;
     }
     tg(msg).catch(() => {});
   }
@@ -461,7 +470,9 @@ async function saveSignalWeights(w) {
 
 async function autoTuneSignals() {
   try {
-    const { bets } = await readBets();
+    // Alleen admin bets voor model training
+    const adminUser = (_usersCache || []).find(u => u.role === 'admin');
+    const { bets } = await readBets(adminUser?.id || null);
     const settled = bets.filter(b => b.uitkomst === 'W' || b.uitkomst === 'L');
     if (settled.length < 20) return; // te weinig data
 
@@ -527,7 +538,7 @@ async function runPortfolioAnalysis() {
   const profit   = bankroll - START_BANKROLL;
   const lines    = [];
 
-  lines.push(`📊 PORTFOLIO ANALYSE — ${new Date().toLocaleDateString('nl-NL')}`);
+  lines.push(`📊 PORTFOLIO ANALYSE · ${new Date().toLocaleDateString('nl-NL')}`);
   lines.push(`Settled: ${c.totalSettled} bets | W/L: ${c.totalWins}/${c.totalSettled - c.totalWins} | ROI: ${(roi*100).toFixed(1)}%`);
   lines.push(`Bankroll: €${bankroll} (${profit >= 0 ? '+' : ''}€${profit.toFixed(2)} t.o.v. start)`);
   lines.push('');
@@ -550,7 +561,7 @@ async function runPortfolioAnalysis() {
     }
     const worst = Object.entries(byMarket).sort((a,b) => b[1]-a[1])[0];
     if (worst?.[1] >= 3) {
-      lines.push(`⚠️ Verliespatroon: ${worst[1]}x verlies in "${worst[0]}" picks — model drempel verhoogd`);
+      lines.push(`⚠️ Verliespatroon: ${worst[1]}x verlies in "${worst[0]}" picks · model drempel verhoogd`);
     }
   }
   lines.push('');
@@ -561,9 +572,9 @@ async function runPortfolioAnalysis() {
 
   // api-sports all-sports upgrade aanbeveling (ROI-gebaseerd)
   if (c.totalSettled >= 30 && roi > 0.10) {
-    lines.push(`🚀 UPGRADE AANBEVOLEN: ROI ${(roi*100).toFixed(1)}% over ${c.totalSettled} bets — api-sports All Sports ($99/mnd) rechtvaardigt zich`);
+    lines.push(`🚀 UPGRADE AANBEVOLEN: ROI ${(roi*100).toFixed(1)}% over ${c.totalSettled} bets · api-sports All Sports ($99/mnd) rechtvaardigt zich`);
   } else if (c.totalSettled >= 20 && roi > 0.05) {
-    lines.push(`💡 Winstgevend (ROI ${(roi*100).toFixed(1)}%) — wacht tot 30+ bets voor All Sports upgrade`);
+    lines.push(`💡 Winstgevend (ROI ${(roi*100).toFixed(1)}%) · wacht tot 30+ bets voor All Sports upgrade`);
   } else if (c.totalSettled < 20) {
     lines.push(`⏳ Nog ${20 - c.totalSettled} settled bets nodig voor upgrade-aanbeveling`);
   }
@@ -590,25 +601,25 @@ async function runPortfolioAnalysis() {
   if (bankrollGrowth >= START_BANKROLL) {
     inboxEntries.push({
       date: new Date().toISOString(), type: 'upgrade_advice',
-      note: `💰 Bankroll +100% (€${bankroll.toFixed(0)}) — unit verhoging naar €${currentUnit*2} aanbevolen`
+      note: `💰 Bankroll +100% (€${bankroll.toFixed(0)}) · unit verhoging naar €${currentUnit*2} aanbevolen`
     });
   } else if (bankrollGrowth >= START_BANKROLL * 0.5) {
     inboxEntries.push({
       date: new Date().toISOString(), type: 'upgrade_advice',
-      note: `💰 Bankroll +50% (€${bankroll.toFixed(0)}) — overweeg unit van €${currentUnit} naar €${Math.round(currentUnit*1.5)}`
+      note: `💰 Bankroll +50% (€${bankroll.toFixed(0)}) · overweeg unit van €${currentUnit} naar €${Math.round(currentUnit*1.5)}`
     });
   }
   if (c.totalSettled >= 30 && roi > 0.10) {
     inboxEntries.push({
       date: new Date().toISOString(), type: 'recommendation',
-      note: `ROI ${(roi*100).toFixed(1)}% na ${c.totalSettled} bets — overwegen: unit verhoging, of api-sports All Sports upgrade`
+      note: `ROI ${(roi*100).toFixed(1)}% na ${c.totalSettled} bets · overwegen: unit verhoging, of api-sports All Sports upgrade`
     });
   }
   // CLV inzicht
   if (s.clvTotal >= 5) {
     const clvMsg = s.avgCLV > 0
-      ? `CLV gemiddeld +${s.avgCLV.toFixed(1)}% — je pakt betere odds dan de markt bij aftrap. Dit is bewijs van edge.`
-      : `CLV gemiddeld ${s.avgCLV.toFixed(1)}% — je odds zijn slechter dan de slotlijn. Probeer eerder te loggen.`;
+      ? `CLV gemiddeld +${s.avgCLV.toFixed(1)}% · je pakt betere odds dan de markt bij aftrap. Dit is bewijs van edge.`
+      : `CLV gemiddeld ${s.avgCLV.toFixed(1)}% · je odds zijn slechter dan de slotlijn. Probeer eerder te loggen.`;
     inboxEntries.push({ date: new Date().toISOString(), type: 'clv_insight', note: clvMsg });
   }
   // Timing inzicht
@@ -618,10 +629,10 @@ async function runPortfolioAnalysis() {
     const late = bets.filter(b => b.clvPct < 0 && b.clvPct != null);
     if (early.length > late.length * 1.5) {
       inboxEntries.push({ date: new Date().toISOString(), type: 'timing_insight',
-        note: `${early.length} van ${early.length+late.length} bets met CLV data verslaan de closing line — je timing is goed.` });
+        note: `${early.length} van ${early.length+late.length} bets met CLV data verslaan de closing line · je timing is goed.` });
     } else if (late.length > early.length * 1.5) {
       inboxEntries.push({ date: new Date().toISOString(), type: 'timing_insight',
-        note: `Maar ${early.length} van ${early.length+late.length} bets verslaan de closing line — overweeg bets eerder te plaatsen.` });
+        note: `Maar ${early.length} van ${early.length+late.length} bets verslaan de closing line · overweeg bets eerder te plaatsen.` });
     }
   }
   // Verliespatroon waarschuwing
@@ -669,7 +680,7 @@ const CURRENT_SEASON = new Date().getMonth() < 7
 
 // Voetbal competities via api-football.com (league ID, thuisvoordeel)
 const AF_FOOTBALL_LEAGUES = [
-  // ── Europa — Tier 1 ────────────────────────────────────────────────────────
+  // ── Europa · Tier 1 ────────────────────────────────────────────────────────
   { id:39,  key:'epl',          name:'Premier League',      ha:0.05, season:CURRENT_SEASON },
   { id:140, key:'laliga',       name:'La Liga',             ha:0.05, season:CURRENT_SEASON },
   { id:78,  key:'bundesliga',   name:'Bundesliga',          ha:0.05, season:CURRENT_SEASON },
@@ -680,7 +691,7 @@ const AF_FOOTBALL_LEAGUES = [
   { id:203, key:'superlig',     name:'Süper Lig',           ha:0.06, season:CURRENT_SEASON },
   { id:144, key:'jupiler',      name:'Jupiler Pro League',  ha:0.05, season:CURRENT_SEASON },
   { id:179, key:'scottish',     name:'Scottish Prem',       ha:0.05, season:CURRENT_SEASON },
-  // ── Europa — Tier 2 ────────────────────────────────────────────────────────
+  // ── Europa · Tier 2 ────────────────────────────────────────────────────────
   { id:40,  key:'championship', name:'Championship',        ha:0.04, season:CURRENT_SEASON },
   { id:41,  key:'league1',      name:'League One',          ha:0.04, season:CURRENT_SEASON },
   { id:42,  key:'league2',      name:'League Two',          ha:0.04, season:CURRENT_SEASON },
@@ -740,7 +751,7 @@ const AF_FOOTBALL_LEAGUES = [
   { id:325, key:'slovakia',      name:'Slovak Super Liga',     ha:0.05, season:CURRENT_SEASON },
 ];
 
-// (ESPN standings removed — api-football standings used exclusively)
+// (ESPN standings removed · api-football standings used exclusively)
 
 // ── LAST PICKS (in-memory voor analyse tab) ──────────────────────────────────
 let lastPrematchPicks = [];
@@ -802,13 +813,12 @@ const sleep  = ms => new Promise(r => setTimeout(r, ms));
 const tgRaw  = async (text) => fetch(TG_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ chat_id: CHAT, text }) }).catch(() => {});
 
 // Stuur naar Telegram EN sla op in Supabase notifications tabel
-const tg = async (text, type = 'info') => {
+const tg = async (text, type = 'info', userId = null) => {
   tgRaw(text).catch(() => {});
-  // Bepaal titel uit eerste regel
   const lines = text.split('\n');
   const title = lines[0].replace(/[^\w\s€%·:→←↑↓+\-.,!?()]/g, '').trim().slice(0, 100);
   supabase.from('notifications').insert({
-    type, title, body: text, read: false
+    type, title, body: text, read: false, user_id: userId
   }).then(() => {}).catch(() => {});
 };
 
@@ -884,7 +894,7 @@ const TOP_FB = new Set([
 // ── PICK FACTORY ──────────────────────────────────────────────────────────────
 const MAX_WINNER_ODDS  = 4.0;   // geen winnaar-bets boven deze koers (Wharton: >4.0 = variance ruin)
 const BLOWOUT_OPP_MAX  = 1.35;  // tegenstander ≤ 1.35 = mismatched wedstrijd
-const MIN_EP           = 0.52;  // minimale geschatte kans (~52%) — boven 50% = meer wins dan losses structureel
+const MIN_EP           = 0.52;  // minimale geschatte kans (~52%) · boven 50% = meer wins dan losses structureel
 const KELLY_FRACTION   = 0.50;  // half-Kelly: veiligst voor kleine bankroll (aanbevolen door Wharton)
 
 // ── DRAWDOWN PROTECTION ──────────────────────────────────────────────────────
@@ -904,7 +914,7 @@ function getDrawdownMultiplier() {
   const recentLossRate = losses.slice(0, recentN).length / recentN;
 
   // Gebruik de werkelijke streak uit de calibratie data
-  // lossLog is gesorteerd nieuwste eerst — tel aaneengesloten verliezen
+  // lossLog is gesorteerd nieuwste eerst · tel aaneengesloten verliezen
   // Maar we hebben ook wins nodig. Simpelste: check de bets direct.
   try {
     // Sync check via calibration data
@@ -914,7 +924,7 @@ function getDrawdownMultiplier() {
     // Als we meer dan 20% van startbankroll verloren hebben: halveer stakes
     if (recentProfit < -(START_BANKROLL * 0.20)) {
       console.log('⚠️ Drawdown protection: stakes gehalveerd (>20% loss)');
-      tg(`🛡️ DRAWDOWN PROTECTION\nStakes gehalveerd — bankroll >20% onder start.\nHuidige P/L: €${recentProfit.toFixed(2)}`).catch(() => {});
+      tg(`🛡️ DRAWDOWN PROTECTION\nStakes gehalveerd · bankroll >20% onder start.\nHuidige P/L: €${recentProfit.toFixed(2)}`).catch(() => {});
       return 0.5;
     }
     // Als win rate onder 30% na 10+ bets: verlaag stakes met 30%
@@ -1039,10 +1049,10 @@ function analyseTotal(bookmakers, outcomeName, point) {
   return { best, avgIP: prices.length ? prices.reduce((s,p)=>s+1/p,0)/prices.length : 0 };
 }
 
-// (fetchEspnStandings removed — api-football standings provide rank/form/goals)
+// (fetchEspnStandings removed · api-football standings provide rank/form/goals)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// API-SPORTS.IO ENRICHMENT — vorm, H2H, blessures, scheidsrechter, team-stats
+// API-SPORTS.IO ENRICHMENT · vorm, H2H, blessures, scheidsrechter, team-stats
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Session-caches (worden éénmaal per scan gevuld)
@@ -1283,7 +1293,7 @@ async function enrichWithApiSports(emit) {
   }
   emit({ log: `✅ Scheidsrechters: ${Object.keys(afCache.referees).length} wedstrijden (${callsUsed} calls)` });
   const tier = callsUsed <= 100 ? 'free (100/dag)' : 'Pro (7500/dag)';
-  emit({ log: `📊 api-football.com klaar — ${callsUsed} calls gebruikt (${tier})` });
+  emit({ log: `📊 api-football.com klaar · ${callsUsed} calls gebruikt (${tier})` });
 }
 
 // Haal H2H op voor twee teams (lazy-loaded, max 5x per scan)
@@ -1324,7 +1334,7 @@ async function fetchTeamStats(teamId, leagueId, season) {
     const data = await afGet('v3.football.api-sports.io', '/teams/statistics', {
       team: teamId, league: leagueId, season
     });
-    // data is a single object (not array) — afGet returns response.response which
+    // data is a single object (not array) · afGet returns response.response which
     // for this endpoint is an object, not array. Handle both cases.
     const stats = Array.isArray(data) ? data[0] : data;
     if (!stats) return null;
@@ -1351,7 +1361,7 @@ async function fetchTeamStats(teamId, leagueId, season) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WEATHER DATA — Open-Meteo API (gratis, geen API key)
+// WEATHER DATA · Open-Meteo API (gratis, geen API key)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Simpele city→lat/lon mapping voor grote voetbalsteden
@@ -1437,7 +1447,7 @@ function getVenueCoords(fixture) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// POISSON GOAL MODEL — supplementair op het bestaande model
+// POISSON GOAL MODEL · supplementair op het bestaande model
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function factorial(n) {
@@ -1481,11 +1491,11 @@ function calcGoalProbs(homeAttack, homeDefense, awayAttack, awayDefense, leagueA
   };
 }
 
-// European cup league IDs — teams in these play midweek, risico op vermoeidheid
+// European cup league IDs · teams in these play midweek, risico op vermoeidheid
 const EUROPEAN_CUP_IDS = new Set([2, 3, 848]); // UCL, UEL, UECL
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PREMATCH SCAN — api-football.com
+// PREMATCH SCAN · api-football.com
 // ═══════════════════════════════════════════════════════════════════════════════
 async function runPrematch(emit) {
   if (!AF_KEY) {
@@ -1493,9 +1503,9 @@ async function runPrematch(emit) {
     return [];
   }
 
-  emit({ log: `🎯 Prematch scan — api-football.com (${AF_FOOTBALL_LEAGUES.length} competities, bet365 odds, lineups, predictions)` });
+  emit({ log: `🎯 Prematch scan · api-football.com (${AF_FOOTBALL_LEAGUES.length} competities, bet365 odds, lineups, predictions)` });
 
-  // ── STAP 1: (ESPN removed — standings komen via enrichWithApiSports) ────
+  // ── STAP 1: (ESPN removed · standings komen via enrichWithApiSports) ────
 
   // ── STAP 2: Team stats, blessures, scheidsrechters ───────────────────────
   h2hCallsThisScan = 0;
@@ -1567,7 +1577,7 @@ async function runPrematch(emit) {
 
         const rawBks = oddsResp[0]?.bookmakers || [];
 
-        // Alleen Bet365 en Unibet — andere bookmakers hebben onbetrouwbare odds
+        // Alleen Bet365 en Unibet · andere bookmakers hebben onbetrouwbare odds
         const ALLOWED_BKMS = ['bet365', 'unibet'];
         const filteredBks = rawBks.filter(b =>
           ALLOWED_BKMS.some(name => b.name?.toLowerCase().includes(name))
@@ -1724,11 +1734,11 @@ async function runPrematch(emit) {
         let congestionAdj = 0, congestionNote = '';
         // Check of een team in UCL/UEL/UECL speelt (=extra wedstrijden, vermoeidheid)
         if (EUROPEAN_CUP_IDS.has(league.id)) {
-          // Dit IS een Europese cupwedstrijd — teams kunnen vermoeid zijn van weekendcompetitie
+          // Dit IS een Europese cupwedstrijd · teams kunnen vermoeid zijn van weekendcompetitie
           congestionAdj = -0.02;
           congestionNote = ' | ⚠️ Europees duel: vermoeidheidsrisico';
         } else {
-          // Domestic wedstrijd — check of een van de teams in Europese cups zit
+          // Domestic wedstrijd · check of een van de teams in Europese cups zit
           const hmId2 = hmSt?.teamId, awId2 = awSt?.teamId;
           // Zoek in vandaag's fixtures of dit team ook in een cup-competitie speelt
           // Simpele benadering: we weten welke teams in top competitions spelen
@@ -2025,7 +2035,7 @@ async function runPrematch(emit) {
 
   // ── STAP 2b: LIVE PICKS mengen ───────────────────────────────────────────
   // Haalt live wedstrijden op met xG + live odds. Picks getagd als scanType:'live'.
-  // Geen eigen Telegram — alles gaat samen in de finale pool.
+  // Geen eigen Telegram · alles gaat samen in de finale pool.
   emit({ log: '🔴 Live wedstrijden checken...' });
   try {
     const livePicks = await getLivePicks(emit, calib.epBuckets || {});
@@ -2043,7 +2053,7 @@ async function runPrematch(emit) {
   // ── STAP 3: COMBI'S (2-beners + 3-beners) ───────────────────────────────
   // Alle EV+ picks (ook odds < 1.60) komen in de combiPool.
   // Singles (>= 1.60), 2-beners en 3-beners worden in één pool gegooid.
-  // Sortering op hitrate (ep) — hoogste kans wint, ongeacht of het single/combi is.
+  // Sortering op hitrate (ep) · hoogste kans wint, ongeacht of het single/combi is.
   // Eindkoers altijd 1.60–MAX_WINNER_ODDS. Geen leg-minimum voor combis.
   const combiLegs = combiPool.filter(p => p.kelly > 0.02 && !p.label.startsWith('🎯'));
 
@@ -2167,7 +2177,7 @@ async function runPrematch(emit) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LIVE PICKS HELPER — haalt live wedstrijden op + analyseert met xG + live odds
+// LIVE PICKS HELPER · haalt live wedstrijden op + analyseert met xG + live odds
 // Stille functie: geen eigen Telegram. Geeft picks terug getagd als scanType:'live'.
 // Wordt aangeroepen vanuit runPrematch (gecombineerde scan) én vanuit runLive (dagelijks).
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2245,7 +2255,7 @@ async function getLivePicks(emit, calibEpBuckets = {}) {
     const reason  = (xg, sot, dom) =>
       `xG: ${xg.toFixed(1)} | SoT: ${sot} | Bezit: ${dom}% | ${score} in ${min}' · ${lg}`;
 
-    // Scenario 1: xG-dominantie vs. score — value op dominerend team dat verliest/gelijkspeelt
+    // Scenario 1: xG-dominantie vs. score · value op dominerend team dat verliest/gelijkspeelt
     if (hG <= aG && xgEdge > 0.8 && min < 70 && liveH) {
       const boost = clamp(xgEdge * 0.10, 0, 0.18);
       mkP(`${hm} vs ${aw}`, `🔴 Live · ${lg}`, `🔄 ${hm} keert terug`, liveH,
@@ -2292,18 +2302,18 @@ async function getLivePicks(emit, calibEpBuckets = {}) {
 
 // ── DAGELIJKSE LIVE CHECK (vanuit cron) ──────────────────────────────────────
 async function runLive(emit) {
-  emit({ log: '🔴 Live scan — xG + live odds + balbezit' });
+  emit({ log: '🔴 Live scan · xG + live odds + balbezit' });
   const calib = loadCalib();
   const livePicks = await getLivePicks(emit, calib.epBuckets || {});
 
   if (!livePicks.length) {
-    await tg(`🔴 Live check — geen kwalificerende situaties op dit moment.`).catch(()=>{});
+    await tg(`🔴 Live check · geen kwalificerende situaties op dit moment.`).catch(()=>{});
     emit({ log: '📭 Geen picks.', picks: [] });
     return [];
   }
 
   const time = new Date().toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
-  let msgs = [`🔴 LIVE — ${time}\n${livePicks.length} pick(s)\n\n`], cur = 0;
+  let msgs = [`🔴 LIVE · ${time}\n${livePicks.length} pick(s)\n\n`], cur = 0;
   for (const [i, p] of livePicks.entries()) {
     const star = i === 0 ? '⭐' : '🔵';
     const line = `${star} ${p.match}\n${p.league}\n📌 ${p.label}\n💰 ${p.odd} | ${p.units} | ${p.prob}% kans\n📊 ${p.reason}\n\n`;
@@ -2318,7 +2328,7 @@ async function runLive(emit) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BET TRACKER — GOOGLE SHEETS
+// BET TRACKER · GOOGLE SHEETS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
@@ -2421,14 +2431,14 @@ async function deleteBet(id, userId = null) {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
-    if (rateLimit('login:' + ip, 10, 15 * 60 * 1000)) return res.status(429).json({ error: 'Te veel pogingen — probeer over 15 minuten opnieuw' });
+    if (rateLimit('login:' + ip, 10, 15 * 60 * 1000)) return res.status(429).json({ error: 'Te veel pogingen · probeer over 15 minuten opnieuw' });
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'E-mail en wachtwoord verplicht' });
     const users = await loadUsers();
     const user  = users.find(u => u.email === email.toLowerCase());
     if (!user)                        return res.status(401).json({ error: 'E-mail of wachtwoord onjuist' });
-    if (user.status === 'blocked')    return res.status(403).json({ error: 'Account geblokkeerd — neem contact op' });
-    if (user.status === 'pending')    return res.status(403).json({ error: 'Account wacht op goedkeuring' });
+    if (user.status === 'blocked')    return res.status(403).json({ error: 'Account geblokkeerd · neem contact op' });
+    if (user.status === 'pending')    return res.status(403).json({ error: 'Je account wacht nog op goedkeuring. Check je email.' });
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: 'E-mail of wachtwoord onjuist' });
     // 2FA: if enabled, send code via email instead of token
@@ -2447,7 +2457,7 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/verify-code', async (req, res) => {
   try {
     const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
-    if (rateLimit('verify2fa:' + ip, 5, 15 * 60 * 1000)) return res.status(429).json({ error: 'Te veel pogingen — probeer over 15 minuten opnieuw' });
+    if (rateLimit('verify2fa:' + ip, 5, 15 * 60 * 1000)) return res.status(429).json({ error: 'Te veel pogingen · probeer over 15 minuten opnieuw' });
     const { email, code } = req.body || {};
     if (!email || !code) return res.status(400).json({ error: 'E-mail en code verplicht' });
     const entry = loginCodes.get(email.toLowerCase());
@@ -2466,13 +2476,13 @@ app.post('/api/auth/verify-code', async (req, res) => {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
-    if (rateLimit('register:' + ip, 5, 60 * 60 * 1000)) return res.status(429).json({ error: 'Te veel registraties — probeer over een uur' });
+    if (rateLimit('register:' + ip, 5, 60 * 60 * 1000)) return res.status(429).json({ error: 'Te veel registraties · probeer over een uur' });
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'E-mail en wachtwoord verplicht' });
     if (password.length < 8)  return res.status(400).json({ error: 'Wachtwoord minimaal 8 tekens' });
     const users = await loadUsers(true);
     if (users.find(u => u.email === email.toLowerCase()))
-      return res.status(200).json({ message: 'Registratie ontvangen — wacht op goedkeuring van admin' }); // generic to prevent enumeration
+      return res.status(200).json({ message: 'Registratie ontvangen. Je krijgt een email zodra je account is goedgekeurd.' }); // generic to prevent enumeration
     const hash = await bcrypt.hash(password, 10);
     await saveUser({
       id: crypto.randomUUID(), email: email.toLowerCase(), passwordHash: hash,
@@ -2480,7 +2490,7 @@ app.post('/api/auth/register', async (req, res) => {
       settings: defaultSettings(), createdAt: new Date().toISOString()
     });
     tg(`🆕 Nieuwe registratie: ${email}\nGoedkeuren via Admin-panel`).catch(() => {});
-    res.json({ message: 'Registratie ontvangen — wacht op goedkeuring van admin' });
+    res.json({ message: 'Registratie ontvangen. Je krijgt een email zodra je account is goedgekeurd.' });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
@@ -2581,6 +2591,8 @@ app.get('/api/push/vapid-key', (req, res) => {
 });
 
 app.post('/api/push/subscribe', async (req, res) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  if (rateLimit('push:' + ip, 10, 60 * 60 * 1000)) return res.status(429).json({ error: 'Te veel verzoeken' });
   const sub = req.body;
   if (!sub?.endpoint) return res.status(400).json({ error: 'Geen subscription' });
   await savePushSub(sub);
@@ -2594,23 +2606,45 @@ app.delete('/api/push/subscribe', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Prematch scan — SSE streaming (inclusief live check op moment van draaien)
+// Prematch scan · SSE streaming (inclusief live check op moment van draaien)
 app.post('/api/prematch', (req, res) => {
-  if (scanRunning) return res.status(429).json({ error: 'Scan al bezig — wacht tot de huidige scan klaar is' });
+  if (scanRunning) return res.status(429).json({ error: 'Scan al bezig · wacht tot de huidige scan klaar is' });
   scanRunning = true;
+  const isAdmin = req.user?.role === 'admin';
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
-  const emit = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  // Non-admin: alleen voortgang tonen, geen model details
+  let stepCount = 0;
+  const emit = (data) => {
+    if (!isAdmin && data.log) {
+      stepCount++;
+      // Stuur alleen voortgangspercentage
+      const pct = Math.min(95, Math.round(stepCount * 1.5));
+      res.write(`data: ${JSON.stringify({ progress: pct })}\n\n`);
+      return;
+    }
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
 
   runPrematch(emit)
-    .then(picks => { emit({ done: true, picks: picks.map(p => ({ match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, reason: p.reason, kelly: p.kelly, ep: p.ep, edge: p.edge, strength: p.strength, expectedEur: p.expectedEur, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie, signals: p.signals || [] })) }); res.end(); scanRunning = false; })
+    .then(picks => {
+      // Non-admin: filter gevoelige model data uit picks
+      const safePicks = picks.map(p => {
+        const pick = { match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie };
+        if (isAdmin) { pick.reason = p.reason; pick.kelly = p.kelly; pick.ep = p.ep; pick.edge = p.edge; pick.strength = p.strength; pick.expectedEur = p.expectedEur; pick.signals = p.signals || []; }
+        return pick;
+      });
+      emit({ done: true, picks: safePicks }); res.end(); scanRunning = false;
+    })
     .catch(err  => { emit({ error: 'Scan mislukt' }); res.end(); scanRunning = false; });
 });
 
-// Live scan — SSE streaming
+// Live scan · SSE streaming
 app.post('/api/live', (req, res) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  if (rateLimit('live:' + ip, 5, 10 * 60 * 1000)) return res.status(429).json({ error: 'Te veel live scans · wacht even' });
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -2637,7 +2671,7 @@ app.get('/api/bets', async (req, res) => {
   catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Correlated bets — groepen open bets op dezelfde wedstrijd
+// Correlated bets · groepen open bets op dezelfde wedstrijd
 app.get('/api/bets/correlations', async (req, res) => {
   try {
     const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
@@ -2655,18 +2689,18 @@ app.get('/api/bets/correlations', async (req, res) => {
         match,
         bets: g.map(b => ({ id: b.id, markt: b.markt, odds: b.odds, units: b.units })),
         totalExposure: g.reduce((s, b) => s + b.inzet, 0),
-        warning: `${g.length} bets op dezelfde wedstrijd — gecorreleerd risico €${g.reduce((s,b) => s + b.inzet, 0).toFixed(2)}`
+        warning: `${g.length} bets op dezelfde wedstrijd · gecorreleerd risico €${g.reduce((s,b) => s + b.inzet, 0).toFixed(2)}`
       }));
     res.json({ correlations: correlated });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Bet toevoegen
-// ── PRE-KICKOFF CHECK — 30 min voor aftrap ───────────────────────────────────
+// ── PRE-KICKOFF CHECK · 30 min voor aftrap ───────────────────────────────────
 // Haalt huidige odds op voor het specifieke event en vergelijkt met gelogde odds.
 // Stuurt Telegram ping als: odds gedrift >8%, of als aftrap veranderd is.
 async function schedulePreKickoffCheck(bet) {
-  // Live bets zijn al bezig — geen pre-kickoff check nodig
+  // Live bets zijn al bezig · geen pre-kickoff check nodig
   if (bet.scanType === 'live') return;
 
   // Probeer aftrap-tijdstip uit de bet te halen (veld 'datum' = datum, 'tijd' = HH:MM)
@@ -2678,7 +2712,7 @@ async function schedulePreKickoffCheck(bet) {
     if (tijdStr.includes('T') || tijdStr.includes('-')) {
       kickoffMs = new Date(tijdStr).getTime();
     } else {
-      // "HH:MM" in Amsterdam-tijd — converteer naar UTC
+      // "HH:MM" in Amsterdam-tijd · converteer naar UTC
       const [h, m] = tijdStr.split(':').map(Number);
       const nowAms = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
       // Maak een ISO-string in Amsterdam-tijd en parse die correct
@@ -2738,7 +2772,7 @@ async function schedulePreKickoffCheck(bet) {
             let val = null;
 
             if (marktLc.includes('over') || marktLc.includes('under')) {
-              // Over/Under goals — bet id 5
+              // Over/Under goals · bet id 5
               const ou = bk.bets?.find(b => b.id === 5) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('over'));
               if (ou) {
                 // Zoek de juiste lijn (bijv. "Over 2.5" of "Under 2.5")
@@ -2750,14 +2784,14 @@ async function schedulePreKickoffCheck(bet) {
                 }
               }
             } else if (marktLc.includes('wint') || marktLc.includes('winner')) {
-              // Match Winner — bet id 1
+              // Match Winner · bet id 1
               const mw = bk.bets?.find(b => b.id === 1);
               if (mw) {
                 const isHome = marktLc.includes('🏠') || !marktLc.includes('✈️');
                 val = mw.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
               }
             } else if (marktLc.includes('btts') || marktLc.includes('beide')) {
-              // Both Teams To Score — bet id 8
+              // Both Teams To Score · bet id 8
               const btts = bk.bets?.find(b => b.id === 8) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('both'));
               if (btts) val = btts.values?.find(v => v.value === 'Yes');
             }
@@ -2778,13 +2812,13 @@ async function schedulePreKickoffCheck(bet) {
 
         if (Math.abs(drift) >= 0.08) {
           lines.push(`\n⚠️ ODDS GEDRIFT: ${loggedOdds} → ${currentOdds} (${driftStr})`);
-          if (drift < -0.08) lines.push(`📉 Odds gedaald — markt wordt zekerder van het ANDERE resultaat. Overweeg de bet te annuleren.`);
-          else lines.push(`📈 Odds gestegen — meer waarde dan verwacht. Bet ziet er goed uit.`);
+          if (drift < -0.08) lines.push(`📉 Odds gedaald · markt wordt zekerder van het ANDERE resultaat. Overweeg de bet te annuleren.`);
+          else lines.push(`📈 Odds gestegen · meer waarde dan verwacht. Bet ziet er goed uit.`);
         } else {
-          lines.push(`\n✅ Odds stabiel: ${loggedOdds} → ${currentOdds} (${driftStr}) — geen significante marktbeweging.`);
+          lines.push(`\n✅ Odds stabiel: ${loggedOdds} → ${currentOdds} (${driftStr}) · geen significante marktbeweging.`);
         }
       } else {
-        lines.push(`\n⚠️ Kon geen huidige odds ophalen — controleer odds handmatig.`);
+        lines.push(`\n⚠️ Kon geen huidige odds ophalen · controleer odds handmatig.`);
       }
 
       lines.push(`\n🟢 Succes! (automatische check 30 min voor aftrap)`);
@@ -2797,7 +2831,7 @@ async function schedulePreKickoffCheck(bet) {
   console.log(`⏱  Pre-kickoff check gepland voor "${bet.wedstrijd}" over ${Math.round(delayMs/60000)} min`);
 }
 
-// ── CLV CHECK — 2 min voor aftrap ─────────────────────────────────────────
+// ── CLV CHECK · 2 min voor aftrap ─────────────────────────────────────────
 // Haalt slotlijn-odds op vlak voor kickoff en berekent CLV%.
 async function scheduleCLVCheck(bet) {
   if (bet.scanType === 'live') return;
@@ -2924,9 +2958,19 @@ async function scheduleCLVCheck(bet) {
 app.post('/api/bets', async (req, res) => {
   try {
     const userId = req.user?.id;
+    const body = req.body || {};
+    // Input validation
+    if (!body.wedstrijd || typeof body.wedstrijd !== 'string') return res.status(400).json({ error: 'Wedstrijd is verplicht' });
+    if (!body.markt || typeof body.markt !== 'string') return res.status(400).json({ error: 'Markt is verplicht' });
+    const odds = parseFloat(body.odds);
+    if (isNaN(odds) || odds <= 1.0) return res.status(400).json({ error: 'Odds moeten hoger zijn dan 1.0' });
+    const units = parseFloat(body.units);
+    if (isNaN(units) || units <= 0) return res.status(400).json({ error: 'Units moeten hoger zijn dan 0' });
+    const VALID_OUTCOMES = new Set(['Open', 'W', 'L']);
+    if (body.uitkomst && !VALID_OUTCOMES.has(body.uitkomst)) return res.status(400).json({ error: 'Uitkomst moet Open, W of L zijn' });
     const { bets } = await readBets(userId);
     const nextId = bets.length > 0 ? Math.max(...bets.map(b => b.id)) + 1 : 1;
-    const newBet = { ...req.body, id: nextId };
+    const newBet = { ...body, id: nextId, odds, units, uitkomst: body.uitkomst || 'Open' };
     await writeBet(newBet, userId);
     schedulePreKickoffCheck(newBet).catch(() => {}); // niet-blokkerend
     scheduleCLVCheck(newBet).catch(() => {}); // niet-blokkerend
@@ -2946,7 +2990,7 @@ app.post('/api/bets', async (req, res) => {
           count: allOnMatch.length,
           bets: allOnMatch.map(b => ({ id: b.id, markt: b.markt || '', odds: b.odds || b.odd || 0 })),
           totalExposure,
-          message: `${allOnMatch.length} bets op ${newBet.wedstrijd} — gecorreleerd risico €${totalExposure.toFixed(2)}`
+          message: `${allOnMatch.length} bets op ${newBet.wedstrijd} · gecorreleerd risico €${totalExposure.toFixed(2)}`
         };
       }
     }
@@ -2958,8 +3002,10 @@ app.post('/api/bets', async (req, res) => {
 app.put('/api/bets/:id', async (req, res) => {
   try {
     const userId = req.user?.id;
-    const { uitkomst, odds, units, tip } = req.body;
-    const id = parseFloat(req.params.id);
+    const { uitkomst, odds, units, tip } = req.body || {};
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
+    if (uitkomst && !['Open', 'W', 'L'].includes(uitkomst)) return res.status(400).json({ error: 'Uitkomst moet Open, W of L zijn' });
     const updates = {};
     if (odds != null) updates.odds = parseFloat(odds);
     if (units != null) { updates.units = parseFloat(units); updates.inzet = +(parseFloat(units) * UNIT_EUR).toFixed(2); }
@@ -3014,7 +3060,9 @@ app.get('/api/debug/wl', requireAdmin, async (req, res) => {
 app.delete('/api/bets/:id', async (req, res) => {
   try {
     const userId = req.user?.id;
-    await deleteBet(req.params.id, userId);
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
+    await deleteBet(id, userId);
     res.json(await readBets(userId));
   }
   catch (e) { res.status(500).json({ error: 'Interne fout' }); }
@@ -3026,7 +3074,7 @@ app.get('/api/picks', (req, res) => {
 });
 
 // POTD (Pick of the Day) post generator voor Reddit + X
-app.get('/api/potd', async (req, res) => {
+app.get('/api/potd', requireAdmin, async (req, res) => {
   try {
     let allPicks = [...lastPrematchPicks, ...lastLivePicks];
     // Fallback: laad uit scan history als geheugen leeg is (na deploy)
@@ -3034,7 +3082,7 @@ app.get('/api/potd', async (req, res) => {
       const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
       if (history.length) allPicks = history[0].picks || [];
     }
-    if (!allPicks.length) return res.json({ error: 'Geen picks beschikbaar — draai eerst een scan' });
+    if (!allPicks.length) return res.json({ error: 'Geen picks beschikbaar · draai eerst een scan' });
 
     // #1 pick = hoogste expectedEur
     const pick = [...allPicks].sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0))[0];
@@ -3116,7 +3164,7 @@ app.get('/api/potd', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Scan history — laatste N scans met picks
+// Scan history · laatste N scans met picks
 app.get('/api/scan-history', async (req, res) => {
   const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
   if (userId) {
@@ -3135,7 +3183,7 @@ app.get('/api/scan-history', async (req, res) => {
   res.json(history);
 });
 
-// API status — rate limits + service health
+// API status · rate limits + service health
 app.get('/api/status', (req, res) => {
   const uptime = process.uptime();
   const c = loadCalib();
@@ -3155,7 +3203,7 @@ app.get('/api/status', (req, res) => {
         usedPct: Math.round((afRateLimit.callsToday || 0) / (afRateLimit.limit || 7500) * 100),
         updatedAt: afRateLimit.updatedAt,
       },
-      espn: { status: 'active', plan: 'Free', note: 'Onbeperkt — live scores auto-refresh' },
+      espn: { status: 'active', plan: 'Free', note: 'Onbeperkt · live scores auto-refresh' },
       supabase: { status: 'active', plan: 'Free', note: 'Database voor bets + users + calibratie' },
       telegram: { status: 'active', plan: 'Free', note: 'Picks, alerts, model updates' },
       render: { status: 'active', plan: 'Free', note: 'Hosting + keep-alive elke 14 min' },
@@ -3180,8 +3228,8 @@ app.get('/api/version', (req, res) => {
   });
 });
 
-// Model activity feed — alle automatische wijzigingen
-app.get('/api/model-feed', (req, res) => {
+// Model activity feed · alle automatische wijzigingen
+app.get('/api/model-feed', requireAdmin, (req, res) => {
   const c = loadCalib();
   const sw = loadSignalWeights();
   res.json({
@@ -3194,12 +3242,15 @@ app.get('/api/model-feed', (req, res) => {
   });
 });
 
-// Notifications — API alerts + calibratie inzichten
+// Notifications · API alerts + calibratie inzichten
 // In-app notifications (opgeslagen in Supabase)
 app.get('/api/inbox-notifications', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('notifications')
+    let query = supabase.from('notifications')
       .select('*').order('created_at', { ascending: false }).limit(50);
+    // Filter: user's own notifications + global (null user_id)
+    query = query.or(`user_id.eq.${req.user.id},user_id.is.null`);
+    const { data, error } = await query;
     if (error) throw error;
     const unread = (data || []).filter(n => !n.read).length;
     res.json({ notifications: data || [], unread });
@@ -3208,7 +3259,8 @@ app.get('/api/inbox-notifications', async (req, res) => {
 
 app.put('/api/inbox-notifications/read', async (req, res) => {
   try {
-    await supabase.from('notifications').update({ read: true }).eq('read', false);
+    await supabase.from('notifications').update({ read: true })
+      .eq('read', false).or(`user_id.eq.${req.user.id},user_id.is.null`);
     res.json({ ok: true });
   } catch { res.status(500).json({ error: 'Interne fout' }); }
 });
@@ -3225,16 +3277,16 @@ app.get('/api/notifications', async (req, res) => {
 
     // Unit size aanbeveling op basis van bankroll groei
     if (bankrollGrowth >= START_BANKROLL) {
-      alerts.push({ type: 'success', icon: '💰', msg: `Bankroll +100% (€${bankroll.toFixed(0)}) — unit verhoging aanbevolen: €${UNIT_EUR} → €${UNIT_EUR*2}`, unitAdvice: true });
+      alerts.push({ type: 'success', icon: '💰', msg: `Bankroll +100% (€${bankroll.toFixed(0)}) · unit verhoging aanbevolen: €${UNIT_EUR} → €${UNIT_EUR*2}`, unitAdvice: true });
     } else if (bankrollGrowth >= START_BANKROLL * 0.5) {
-      alerts.push({ type: 'info', icon: '💰', msg: `Bankroll +50% (€${bankroll.toFixed(0)}) — overweeg unit van €${UNIT_EUR} naar €${Math.round(UNIT_EUR*1.5)}`, unitAdvice: true });
+      alerts.push({ type: 'info', icon: '💰', msg: `Bankroll +50% (€${bankroll.toFixed(0)}) · overweeg unit van €${UNIT_EUR} naar €${Math.round(UNIT_EUR*1.5)}`, unitAdvice: true });
     }
 
     // All Sports ($99/mnd) upgrade aanbeveling
     if (c.totalSettled >= 30 && roi > 0.10) {
-      alerts.push({ type: 'success', icon: '🚀', msg: `ROI ${(roi*100).toFixed(1)}% over ${c.totalSettled} bets — api-sports All Sports ($99/mnd) betaalt zich terug.` });
+      alerts.push({ type: 'success', icon: '🚀', msg: `ROI ${(roi*100).toFixed(1)}% over ${c.totalSettled} bets · api-sports All Sports ($99/mnd) betaalt zich terug.` });
     } else if (c.totalSettled >= 20 && roi > 0.05) {
-      alerts.push({ type: 'info', icon: '💡', msg: `ROI ${(roi*100).toFixed(1)}% — winstgevend! Wacht tot 30+ bets voor All Sports upgrade.` });
+      alerts.push({ type: 'info', icon: '💡', msg: `ROI ${(roi*100).toFixed(1)}% · winstgevend! Wacht tot 30+ bets voor All Sports upgrade.` });
     }
 
     if (c.lossLog?.length >= 5) {
@@ -3242,15 +3294,15 @@ app.get('/api/notifications', async (req, res) => {
       for (const l of c.lossLog.slice(0, 20)) byMarket[l.market] = (byMarket[l.market]||0) + 1;
       const worst = Object.entries(byMarket).sort((a,b) => b[1]-a[1])[0];
       if (worst?.[1] >= 3) {
-        alerts.push({ type: 'warn', icon: '⚠️', msg: `${worst[1]}x verlies in "${worst[0]}" picks (laatste 20 bets) — model drempel verhoogd.` });
+        alerts.push({ type: 'warn', icon: '⚠️', msg: `${worst[1]}x verlies in "${worst[0]}" picks (laatste 20 bets) · model drempel verhoogd.` });
       }
     }
 
     for (const [mk, v] of Object.entries(c.markets)) {
       if (v.n >= 8 && v.multiplier <= 0.75) {
-        alerts.push({ type: 'warn', icon: '📉', msg: `"${mk}" picks: ${v.w}/${v.n} gewonnen — model filtert strenger.` });
+        alerts.push({ type: 'warn', icon: '📉', msg: `"${mk}" picks: ${v.w}/${v.n} gewonnen · model filtert strenger.` });
       } else if (v.n >= 10 && v.multiplier >= 1.15) {
-        alerts.push({ type: 'success', icon: '📈', msg: `"${mk}" picks presteren goed (${v.w}/${v.n}) — model vertrouwt dit signaal meer.` });
+        alerts.push({ type: 'success', icon: '📈', msg: `"${mk}" picks presteren goed (${v.w}/${v.n}) · model vertrouwt dit signaal meer.` });
       }
     }
 
@@ -3274,17 +3326,17 @@ app.get('/api/notifications', async (req, res) => {
       const { count: scanCount } = await supabase.from('scan_history').select('*', { count: 'exact', head: true });
       const estMB = ((betCount || 0) * 0.002 + (scanCount || 0) * 0.05).toFixed(1); // rough estimate
       if (parseFloat(estMB) > 400) {
-        alerts.push({ type: 'error', icon: '🗄️', msg: `Supabase database bijna vol: ~${estMB}MB / 500MB — upgrade naar Pro ($25/mnd) aanbevolen.` });
+        alerts.push({ type: 'error', icon: '🗄️', msg: `Supabase database bijna vol: ~${estMB}MB / 500MB · upgrade naar Pro ($25/mnd) aanbevolen.` });
       } else if (parseFloat(estMB) > 250) {
         alerts.push({ type: 'warn', icon: '🗄️', msg: `Supabase database: ~${estMB}MB / 500MB gebruikt. Nog ruimte maar hou in de gaten.` });
       }
     } catch {}
 
     res.json({ alerts, totalSettled: c.totalSettled, lastUpdated: c.lastUpdated, modelLastUpdated: c.modelLastUpdated || null });
-  } catch (e) { res.status(500).json({ alerts: [], error: e.message }); }
+  } catch (e) { res.status(500).json({ alerts: [], error: 'Interne fout' }); }
 });
 
-// ── CHECK UITSLAGEN — standalone functie (gebruikt door route én dagelijkse cron) ──
+// ── CHECK UITSLAGEN · standalone functie (gebruikt door route én dagelijkse cron) ──
 async function checkOpenBetResults(userId = null) {
   const { bets } = await readBets(userId);
   const openBets = bets.filter(b => b.uitkomst === 'Open');
@@ -3338,7 +3390,7 @@ async function checkOpenBetResults(userId = null) {
     else if (markt.includes('dnb ') || markt.includes('draw no bet')) {
       // Draw No Bet: draw = void (no result)
       if (ev.scoreH === ev.scoreA) {
-        uitkomst = null; // void / push — skip
+        uitkomst = null; // void / push · skip
       } else {
         // Find which team was picked
         const dnbTeam = markt.replace(/.*dnb\s*/i, '').replace(/draw no bet\s*/i, '').trim().toLowerCase();
@@ -3373,7 +3425,7 @@ async function checkOpenBetResults(userId = null) {
     }
     results.push({ id: bet.id, wedstrijd: bet.wedstrijd, markt: bet.markt,
                    score: `${ev.scoreH}-${ev.scoreA}`, uitkomst,
-                   note: uitkomst ? null : 'Score gevonden — update handmatig' });
+                   note: uitkomst ? null : 'Score gevonden · update handmatig' });
   }
 
   return { checked: openBets.length, updated: results.filter(r => r.uitkomst).length, results };
@@ -3390,7 +3442,7 @@ app.get('/api/check-results', async (req, res) => {
 });
 
 // Live scores via api-football
-// Lightweight live poll via ESPN (gratis, onbeperkt — voor auto-refresh)
+// Lightweight live poll via ESPN (gratis, onbeperkt · voor auto-refresh)
 app.get('/api/live-poll', async (req, res) => {
   try {
     const espnGet = url => fetch(url, { headers: { Accept: 'application/json' } }).then(r => r.json()).catch(() => ({}));
@@ -3426,7 +3478,7 @@ app.get('/api/live-poll', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Live scores via api-football (rijkere data, kost API calls — voor eerste load + details)
+// Live scores via api-football (rijkere data, kost API calls · voor eerste load + details)
 app.get('/api/live-scores', async (req, res) => {
   try {
     const knownLeagueIds = new Set(AF_FOOTBALL_LEAGUES.map(l => l.id));
@@ -3593,7 +3645,7 @@ app.get('/api/live-events/:id', async (req, res) => {
     }
 
     res.json({ events, home: homeT, away: awayT, scoreH, scoreA, status, minute, stats });
-  } catch (e) { res.status(500).json({ error: e.message, events: [] }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout', events: [] }); }
 });
 
 // Eenmalig: kickofftijden invullen voor bets zonder tijd
@@ -3613,7 +3665,7 @@ app.post('/api/backfill-times', requireAdmin, async (req, res) => {
       await sleep(200);
 
       const [tA, tB] = b.wedstrijd.toLowerCase().split(' vs ').map(t => t.trim());
-      // Zoek fixture waar BEIDE teams (deels) matchen — voorkomt jeugd/reserve wedstrijden
+      // Zoek fixture waar BEIDE teams (deels) matchen · voorkomt jeugd/reserve wedstrijden
       let match = fixtures.find(f => {
         const home = f.teams?.home?.name?.toLowerCase() || '';
         const away = f.teams?.away?.name?.toLowerCase() || '';
@@ -3663,7 +3715,7 @@ function scheduleOddsMonitor() {
 
       const now = Date.now();
       let checksRun = 0;
-      const MAX_CHECKS = 15; // max 15 fixtures per run (conservatief — ~30 API calls max)
+      const MAX_CHECKS = 15; // max 15 fixtures per run (conservatief · ~30 API calls max)
 
       for (const bet of openBets) {
         if (checksRun >= MAX_CHECKS) break;
@@ -3761,7 +3813,7 @@ function scheduleOddsMonitor() {
           if (drift < 0) {
             await tg(`📉 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (${driftPct}%) | Scherp geld bevestigt jouw kant`).catch(() => {});
           } else {
-            await tg(`📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait — overweeg cashout`).catch(() => {});
+            await tg(`📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`).catch(() => {});
           }
         }
 
@@ -3780,7 +3832,7 @@ function scheduleOddsMonitor() {
 }
 
 // ── SIGNAL ANALYSIS ENDPOINT ─────────────────────────────────────────────────
-app.get('/api/signal-analysis', async (req, res) => {
+app.get('/api/signal-analysis', requireAdmin, async (req, res) => {
   try {
     const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
     const { bets } = await readBets(userId);
@@ -3817,8 +3869,8 @@ app.get('/api/signal-analysis', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Timing analyse — CLV per timing bucket (uren voor aftrap)
-app.get('/api/timing-analysis', async (req, res) => {
+// Timing analyse · CLV per timing bucket (uren voor aftrap)
+app.get('/api/timing-analysis', requireAdmin, async (req, res) => {
   try {
     const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
     const { bets } = await readBets(userId);
@@ -3957,7 +4009,7 @@ function scheduleDailyResultsCheck() {
     try {
       const { checked, updated, results } = await checkOpenBetResults();
       const { stats } = await readBets();
-      const lines = [`📋 DAGELIJKSE CHECK — ${new Date().toLocaleDateString('nl-NL', { weekday:'long', day:'numeric', month:'long' })}`];
+      const lines = [`📋 DAGELIJKSE CHECK · ${new Date().toLocaleDateString('nl-NL', { weekday:'long', day:'numeric', month:'long' })}`];
       lines.push(`${checked} open bet${checked !== 1 ? 's' : ''} gecontroleerd | ${updated} auto-bijgewerkt\n`);
       for (const r of results) {
         const ico = r.uitkomst === 'W' ? '✅' : r.uitkomst === 'L' ? '❌' : '⚠️';
