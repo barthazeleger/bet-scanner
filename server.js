@@ -9,15 +9,43 @@ const bcrypt         = require('bcryptjs');
 const webpush        = require('web-push');
 
 // ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mntfhhzanoyhgfavozhg.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY; // service_role key
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+if (!SUPABASE_URL || !SUPABASE_KEY) { console.error('FATAL: SUPABASE_URL and SUPABASE_KEY required'); process.exit(1); }
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50kb' }));
+
+// ── SECURITY HEADERS ──────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+// ── RATE LIMITING ─────────────────────────────────────────────────────────────
+const rateLimitMap = new Map();
+function rateLimit(key, maxReqs, windowMs) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(key) || { count: 0, resetAt: now + windowMs };
+  if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + windowMs; }
+  entry.count++;
+  rateLimitMap.set(key, entry);
+  return entry.count > maxReqs;
+}
+
+// Scan lock — voorkom concurrent scans
+let scanRunning = false;
 
 // ── AUTH CONFIG ────────────────────────────────────────────────────────────────
-const JWT_SECRET   = process.env.JWT_SECRET || 'edgepickr-dev-secret-change-in-prod';
+const JWT_SECRET   = process.env.JWT_SECRET;
+if (!JWT_SECRET) { console.error('FATAL: JWT_SECRET env var is required'); process.exit(1); }
 const ADMIN_EMAIL  = (process.env.ADMIN_EMAIL || '').toLowerCase();
 const ADMIN_PASSW  = process.env.ADMIN_PASSWORD || '';
 
@@ -92,20 +120,14 @@ app.use((req, res, next) => {
   requireAuth(req, res, next);
 });
 
-// Blokkeer toegang tot server code en gevoelige bestanden
-const BLOCKED_FILES = new Set([
-  'server.js', 'package.json', 'package-lock.json', 'render.yaml',
-  'migrate-to-supabase.js', 'gsheets-key.json', 'calibration.json',
-  'signal_weights.json', 'af-usage.json', 'push-subs.json',
-  'scan-history.json', '.gitignore', '.git', 'README.md', 'node_modules'
-]);
+// Whitelist: alleen deze extensies/bestanden serveren als statische files
+const ALLOWED_EXTENSIONS = new Set(['.html', '.css', '.png', '.jpg', '.jpeg', '.svg', '.ico', '.webp', '.gif', '.woff', '.woff2', '.ttf']);
+const ALLOWED_FILES = new Set(['/manifest.json', '/sw.js']);
 app.use((req, res, next) => {
-  const file = req.path.split('/').pop().toLowerCase();
-  const dir = req.path.split('/')[1]?.toLowerCase();
-  if (BLOCKED_FILES.has(file) || BLOCKED_FILES.has(dir)) {
-    return res.status(404).send('Not found');
-  }
-  next();
+  if (req.path.startsWith('/api/')) return next();
+  const ext = path.extname(req.path).toLowerCase();
+  if (req.path === '/' || ALLOWED_EXTENSIONS.has(ext) || ALLOWED_FILES.has(req.path)) return next();
+  return res.status(404).send('Not found');
 });
 app.use(express.static(path.join(__dirname)));
 
@@ -610,7 +632,7 @@ const H = {
 };
 
 // ── API CONFIG ─────────────────────────────────────────────────────────────────
-const AF_KEY = process.env.API_FOOTBALL_KEY || 'c154e5166a368537e38675f46ce4340f';
+const AF_KEY = process.env.API_FOOTBALL_KEY || '';
 
 // Seizoen berekening: Europese competities lopen aug–mei, dus in jan–jul = vorig jaar
 const CURRENT_SEASON = new Date().getMonth() < 7
@@ -2347,28 +2369,32 @@ async function deleteBet(id) {
 // ── AUTH ROUTES ────────────────────────────────────────────────────────────────
 app.post('/api/auth/login', async (req, res) => {
   try {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    if (rateLimit('login:' + ip, 10, 15 * 60 * 1000)) return res.status(429).json({ error: 'Te veel pogingen — probeer over 15 minuten opnieuw' });
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'E-mail en wachtwoord verplicht' });
     const users = await loadUsers();
     const user  = users.find(u => u.email === email.toLowerCase());
-    if (!user)                        return res.status(401).json({ error: 'Onbekend e-mailadres' });
+    if (!user)                        return res.status(401).json({ error: 'E-mail of wachtwoord onjuist' });
     if (user.status === 'blocked')    return res.status(403).json({ error: 'Account geblokkeerd — neem contact op' });
     if (user.status === 'pending')    return res.status(403).json({ error: 'Account wacht op goedkeuring' });
     const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ error: 'Onjuist wachtwoord' });
+    if (!ok) return res.status(401).json({ error: 'E-mail of wachtwoord onjuist' });
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id: user.id, email: user.email, role: user.role, settings: user.settings } });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 app.post('/api/auth/register', async (req, res) => {
   try {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    if (rateLimit('register:' + ip, 5, 60 * 60 * 1000)) return res.status(429).json({ error: 'Te veel registraties — probeer over een uur' });
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'E-mail en wachtwoord verplicht' });
     if (password.length < 8)  return res.status(400).json({ error: 'Wachtwoord minimaal 8 tekens' });
     const users = await loadUsers(true);
     if (users.find(u => u.email === email.toLowerCase()))
-      return res.status(409).json({ error: 'E-mailadres al in gebruik' });
+      return res.status(200).json({ message: 'Registratie ontvangen — wacht op goedkeuring van admin' }); // generic to prevent enumeration
     const hash = await bcrypt.hash(password, 10);
     await saveUser({
       id: crypto.randomUUID(), email: email.toLowerCase(), passwordHash: hash,
@@ -2377,7 +2403,7 @@ app.post('/api/auth/register', async (req, res) => {
     });
     tg(`🆕 Nieuwe registratie: ${email}\nGoedkeuren via Admin-panel`).catch(() => {});
     res.json({ message: 'Registratie ontvangen — wacht op goedkeuring van admin' });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 app.get('/api/auth/me', async (req, res) => {
@@ -2386,7 +2412,7 @@ app.get('/api/auth/me', async (req, res) => {
     const user  = users.find(u => u.id === req.user.id);
     if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
     res.json({ id: user.id, email: user.email, role: user.role, settings: user.settings });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // ── USER SETTINGS ──────────────────────────────────────────────────────────────
@@ -2395,7 +2421,7 @@ app.get('/api/user/settings', async (req, res) => {
     const users = await loadUsers();
     const user  = users.find(u => u.id === req.user.id);
     res.json(user?.settings || defaultSettings());
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 app.put('/api/user/settings', async (req, res) => {
@@ -2409,7 +2435,7 @@ app.put('/api/user/settings', async (req, res) => {
     // Herplan scans als admin
     if (user.role === 'admin') rescheduleUserScans(user);
     res.json({ settings: user.settings });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 app.put('/api/auth/password', async (req, res) => {
@@ -2425,7 +2451,7 @@ app.put('/api/auth/password', async (req, res) => {
     user.passwordHash = await bcrypt.hash(newPassword, 10);
     await saveUser(user);
     res.json({ message: 'Wachtwoord gewijzigd' });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // ── ADMIN ROUTES ───────────────────────────────────────────────────────────────
@@ -2433,7 +2459,7 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
   try {
     const users = await loadUsers(true);
     res.json(users.map(u => ({ id: u.id, email: u.email, role: u.role, status: u.status, createdAt: u.createdAt })));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
@@ -2441,13 +2467,17 @@ app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
     const users = await loadUsers(true);
     const user  = users.find(u => u.id === req.params.id);
     if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    const VALID_STATUSES = new Set(['pending', 'approved', 'blocked']);
+    const VALID_ROLES = new Set(['user', 'admin']);
+    if (req.body.status && !VALID_STATUSES.has(req.body.status)) return res.status(400).json({ error: 'Ongeldige status' });
+    if (req.body.role && !VALID_ROLES.has(req.body.role)) return res.status(400).json({ error: 'Ongeldige rol' });
     if (req.body.status) user.status = req.body.status;
     if (req.body.role)   user.role   = req.body.role;
     await saveUser(user);
     if (req.body.status === 'approved')
       tg(`✅ Account goedgekeurd: ${user.email}`).catch(() => {});
     res.json({ id: user.id, email: user.email, role: user.role, status: user.status });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
@@ -2460,7 +2490,7 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
     await supabase.from('users').delete().eq('id', req.params.id);
     _usersCache = null;
     res.json({ deleted: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // ── PUSH NOTIFICATIONS ─────────────────────────────────────────────────────
@@ -2484,6 +2514,8 @@ app.delete('/api/push/subscribe', async (req, res) => {
 
 // Prematch scan — SSE streaming (inclusief live check op moment van draaien)
 app.post('/api/prematch', (req, res) => {
+  if (scanRunning) return res.status(429).json({ error: 'Scan al bezig — wacht tot de huidige scan klaar is' });
+  scanRunning = true;
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -2491,8 +2523,8 @@ app.post('/api/prematch', (req, res) => {
   const emit = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   runPrematch(emit)
-    .then(picks => { emit({ done: true, picks: picks.map(p => ({ match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, reason: p.reason, kelly: p.kelly, ep: p.ep, edge: p.edge, strength: p.strength, expectedEur: p.expectedEur, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie, signals: p.signals || [] })) }); res.end(); })
-    .catch(err  => { emit({ error: err.message }); res.end(); });
+    .then(picks => { emit({ done: true, picks: picks.map(p => ({ match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, reason: p.reason, kelly: p.kelly, ep: p.ep, edge: p.edge, strength: p.strength, expectedEur: p.expectedEur, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie, signals: p.signals || [] })) }); res.end(); scanRunning = false; })
+    .catch(err  => { emit({ error: 'Scan mislukt' }); res.end(); scanRunning = false; });
 });
 
 // Live scan — SSE streaming
@@ -2518,7 +2550,7 @@ app.get('/api/bets', async (req, res) => {
     const ue = user?.settings?.unitEur       ?? UNIT_EUR;
     res.json({ bets, stats: calcStats(bets, sb, ue), _raw });
   }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Correlated bets — groepen open bets op dezelfde wedstrijd
@@ -2541,7 +2573,7 @@ app.get('/api/bets/correlations', async (req, res) => {
         warning: `${g.length} bets op dezelfde wedstrijd — gecorreleerd risico €${g.reduce((s,b) => s + b.inzet, 0).toFixed(2)}`
       }));
     res.json({ correlations: correlated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Bet toevoegen
@@ -2833,7 +2865,7 @@ app.post('/api/bets', async (req, res) => {
       }
     }
     res.json(result);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Uitkomst updaten
@@ -2848,11 +2880,11 @@ app.put('/api/bets/:id', async (req, res) => {
     if (Object.keys(updates).length) await supabase.from('bets').update(updates).eq('bet_id', id);
     if (uitkomst) await updateBetOutcome(id, uitkomst);
     res.json(await readBets());
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // W/L herberekenen voor alle settled bets (fix na inzet-bug)
-app.post('/api/bets/recalculate', async (req, res) => {
+app.post('/api/bets/recalculate', requireAdmin, async (req, res) => {
   try {
     let fixed = 0;
     const { data: settledBets } = await supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
@@ -2870,7 +2902,7 @@ app.post('/api/bets/recalculate', async (req, res) => {
     const sb = user?.settings?.startBankroll ?? START_BANKROLL;
     const ue = user?.settings?.unitEur       ?? UNIT_EUR;
     res.json({ fixed, bets, stats: calcStats(bets, sb, ue) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Debug: settled bets data (voor bankroll diagnose)
@@ -2879,13 +2911,13 @@ app.get('/api/debug/wl', requireAdmin, async (req, res) => {
     const { bets } = await readBets();
     const settled = bets.filter(b => b.uitkomst === 'W' || b.uitkomst === 'L');
     res.json({ settledCount: settled.length, bets: settled, stats: calcStats(bets) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Bet verwijderen
 app.delete('/api/bets/:id', async (req, res) => {
   try { await deleteBet(req.params.id); res.json(await readBets()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Laatste picks ophalen (voor analyse tab)
@@ -2980,7 +3012,7 @@ app.get('/api/potd', async (req, res) => {
     ].join('\n');
 
     res.json({ pick, reddit, x, record: { W, L, P, profitU, last5 } });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Scan history — laatste N scans met picks
@@ -3211,7 +3243,7 @@ app.get('/api/check-results', async (req, res) => {
     const result = await checkOpenBetResults();
     const { bets, stats } = await readBets();
     res.json({ ...result, bets, stats });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Live scores via api-football
@@ -3248,7 +3280,7 @@ app.get('/api/live-poll', async (req, res) => {
     }));
     const events = raw.flat();
     res.json({ events, liveCount: events.filter(e => e.live).length, ts: Date.now() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Live scores via api-football (rijkere data, kost API calls — voor eerste load + details)
@@ -3326,13 +3358,14 @@ app.get('/api/live-scores', async (req, res) => {
     });
 
     res.json({ events, liveCount: events.filter(e => e.live).length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Live wedstrijd events + stats via api-football (rijkere data dan ESPN)
 app.get('/api/live-events/:id', async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
 
     const [eventsData, statsData, fixtureData] = await Promise.all([
       afGet('v3.football.api-sports.io', '/fixtures/events',     { fixture: id }),
@@ -3421,7 +3454,7 @@ app.get('/api/live-events/:id', async (req, res) => {
 });
 
 // Eenmalig: kickofftijden invullen voor bets zonder tijd
-app.post('/api/backfill-times', async (req, res) => {
+app.post('/api/backfill-times', requireAdmin, async (req, res) => {
   try {
     const { bets } = await readBets();
     const results = [];
@@ -3469,7 +3502,7 @@ app.post('/api/backfill-times', async (req, res) => {
     }
 
     res.json({ results });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // ── ODDS MOVEMENT ALERTS ─────────────────────────────────────────────────────
@@ -3636,7 +3669,7 @@ app.get('/api/signal-analysis', async (req, res) => {
     })).sort((a, b) => b.betsCount - a.betsCount);
 
     res.json({ signals: signalAnalysis });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // Timing analyse — CLV per timing bucket (uren voor aftrap)
@@ -3682,7 +3715,7 @@ app.get('/api/timing-analysis', async (req, res) => {
       avgCLV: betsInBucket.length ? +(betsInBucket.reduce((s, b) => s + b.clvPct, 0) / betsInBucket.length).toFixed(2) : 0,
       hitRate: betsInBucket.length ? +(betsInBucket.filter(b => b.uitkomst === 'W').length / betsInBucket.length).toFixed(3) : 0
     }))});
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
 // ── START ───────────────────────────────────────────────────────────────────
