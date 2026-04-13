@@ -2163,7 +2163,7 @@ function renderBetsTable(bets) {
       <td style="color:var(--muted);font-size:11px">${b.id}</td>
       <td>${escHtml(b.datum)}</td>
       <td style="color:var(--muted)">${escHtml(b.tijd||'—')}</td>
-      <td style="cursor:pointer" onclick="editBetField(${b.id},'sport','${escHtml(b.sport)}')" title="Klik om aan te passen">${escHtml(b.sport)}</td>
+      <td style="cursor:pointer" onclick="editSport(${b.id},'${escHtml(b.sport)}')" title="Klik om aan te passen">${escHtml(b.sport)}</td>
       <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(b.wedstrijd)}">${escHtml(b.wedstrijd)}</td>
       <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(b.markt)}">${escHtml(b.markt)}</td>
       <td><strong style="cursor:pointer" onclick="editBetField(${parseInt(b.id)||0},'odds',${parseFloat(b.odds)||0})" title="Klik om aan te passen">${b.odds}</strong></td>
@@ -2200,6 +2200,18 @@ function editBetField(id, field, currentVal) {
   api('/api/bets/' + id, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ [field]: num })
+  }).then(r => r?.json()).then(d => {
+    if (d) { betData = d; renderStats(d.stats); renderBetsTable(d.bets); }
+  });
+}
+
+function editSport(id, currentVal) {
+  const sports = ['Voetbal', 'Basketball', 'IJshockey', 'Honkbal', 'American Football', 'Handball'];
+  const val = prompt(`Sport (was ${currentVal}):\n${sports.join(', ')}`, currentVal);
+  if (val === null || val === '') return;
+  api('/api/bets/' + id, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ sport: val })
   }).then(r => r?.json()).then(d => {
     if (d) { betData = d; renderStats(d.stats); renderBetsTable(d.bets); }
   });
