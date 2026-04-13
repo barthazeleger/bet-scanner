@@ -95,7 +95,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '5.1.0';
+const APP_VERSION    = '6.0.5';
 const TOKEN      = '8722733522:AAGuQiuENAwHYrW21wXD-W5drNAxJHSiYMw';
 const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
