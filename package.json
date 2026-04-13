@@ -1,10 +1,11 @@
 {
-  "name": "toto-scanner-web",
-  "version": "1.0.0",
-  "description": "Web dashboard voor Toto betting scanner + bet tracker",
+  "name": "edgepickr",
+  "version": "6.2.1",
+  "description": "EdgePickr · Outsmart the bookmaker",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",
