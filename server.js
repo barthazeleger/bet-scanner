@@ -97,7 +97,7 @@ app.use(express.static(path.join(__dirname)));
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
 const APP_VERSION    = '6.0.5';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
-const CHAT       = '12272422';
+const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
 const UNIT_EUR   = 10;
 const START_BANKROLL = 100;

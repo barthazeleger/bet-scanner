@@ -1,5 +1,14 @@
 node_modules/
-gsheets-key.json
-calibration.json
 *.env
 .env
+
+# Sensitive files
+gsheets-key.json
+calibration.json
+signal_weights.json
+af-usage.json
+push-subs.json
+scan-history.json
+
+# OS
+.DS_Store
