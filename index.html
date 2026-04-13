@@ -472,7 +472,7 @@ nav::-webkit-scrollbar { display: none; }
     <button class="tab-btn" onclick="go('data')">📊 <span data-i18n="nav_data">Data</span></button>
     <button class="tab-btn" onclick="go('live')">🎯 <span data-i18n="nav_bets">Mijn Bets</span></button>
     <button class="tab-btn" onclick="go('analyse')">🔍 <span data-i18n="nav_analyse">Analyse</span></button>
-    <button class="tab-btn" onclick="go('inbox')">📬 <span data-i18n="nav_inbox">Inbox</span></button>
+    <button class="tab-btn admin-only" onclick="go('inbox')" style="display:none">📬 <span data-i18n="nav_inbox">Inbox</span></button>
     <button class="tab-btn" onclick="go('status')">🟢 <span data-i18n="nav_status">Status</span></button>
     <button class="tab-btn" onclick="go('info')">📖 <span data-i18n="nav_info">Info</span></button>
   </nav>
@@ -828,15 +828,15 @@ nav::-webkit-scrollbar { display: none; }
       <div id="variance-analysis" style="padding:8px 0"></div>
     </div>
 
-    <!-- Signal Attribution -->
-    <div class="chart-card" style="grid-column:span 2">
-      <div class="chart-title">🧠 Signal Attribution <span style="font-size:11px;color:var(--muted);font-weight:400">— welke signalen werken?</span></div>
+    <!-- Signal Attribution (admin only) -->
+    <div class="chart-card admin-only" style="grid-column:span 2;display:none">
+      <div class="chart-title">🧠 Signal Attribution</div>
       <div id="signal-analysis" style="padding:8px 0"></div>
     </div>
 
-    <!-- Timing Analyse -->
-    <div class="chart-card" style="grid-column:span 2">
-      <div class="chart-title">&#9200; Timing analyse <span style="font-size:11px;color:var(--muted);font-weight:400">— CLV per timing bucket</span></div>
+    <!-- Timing Analyse (admin only) -->
+    <div class="chart-card admin-only" style="grid-column:span 2;display:none">
+      <div class="chart-title">&#9200; Timing analyse</div>
       <div id="timing-analysis" style="padding:8px 0"></div>
     </div>
   </div>
@@ -879,7 +879,21 @@ nav::-webkit-scrollbar { display: none; }
 <!-- ══ ANALYSE ══════════════════════════════════════════════════════════════ -->
 <section class="page" id="page-analyse">
   <div class="card" style="margin-bottom:16px">
-    <div class="card-title" style="margin-bottom:12px">🔍 Zoek in laatste scan resultaten</div>
+    <div class="card-title" style="margin-bottom:12px" data-i18n="analyze_title">&#128270; Wedstrijd Analyser</div>
+    <div style="display:flex;gap:8px">
+      <input type="text" id="analyze-input" data-i18n-placeholder="analyze_placeholder" placeholder="Bijv: Ajax PSV over 2.5"
+             style="flex:1;padding:12px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);color:var(--text);font-size:14px"
+             onkeydown="if(event.key==='Enter')runAnalysis()">
+      <button class="btn btn-primary" onclick="runAnalysis()" id="analyze-btn" data-i18n="analyze_btn">Analyseer</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:8px" data-i18n="analyze_help">
+      Typ een wedstrijd + markt. Voorbeelden: "Feyenoord NEC gelijkspel", "Liverpool Arsenal over 2.5", "Bayern btts"
+    </div>
+  </div>
+  <div id="analyze-result"></div>
+
+  <div class="card" style="margin-bottom:16px;margin-top:24px">
+    <div class="card-title" style="margin-bottom:12px">&#128270; Zoek in laatste scan resultaten</div>
     <div class="search-bar">
       <div class="field">
         <input type="text" id="q-input" placeholder="Zoek op team, markt of competitie... (bijv. 'Bayern', 'Over 2.5', 'Premier League')" oninput="doSearch()">
@@ -889,12 +903,12 @@ nav::-webkit-scrollbar { display: none; }
     <div style="font-size:12px;color:var(--muted);margin-top:6px">Toont alle picks uit de laatste prematch scan inclusief volledige redenering. Start een scan om data te laden.</div>
   </div>
   <div id="analyse-out">
-    <div class="empty-state"><div class="ico">🔍</div><div>Geen scandata beschikbaar. Start eerst een prematch scan.</div></div>
+    <div class="empty-state"><div class="ico">&#128270;</div><div>Geen scandata beschikbaar. Start eerst een prematch scan.</div></div>
   </div>
 </section>
 
 <!-- ══ INBOX ═══════════════════════════════════════════════════════════════ -->
-<section class="page" id="page-inbox">
+<section class="page admin-only" id="page-inbox" style="display:none">
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
       <div class="card-title">📬 Inbox</div>
@@ -941,11 +955,11 @@ nav::-webkit-scrollbar { display: none; }
     </div>
     <div id="status-services"></div>
   </div>
-  <div class="card" style="margin-bottom:16px">
+  <div class="card admin-only" style="margin-bottom:16px;display:none">
     <div class="card-title" style="margin-bottom:14px">📊 API Budget</div>
     <div id="status-api-budget"></div>
   </div>
-  <div class="card" style="margin-bottom:16px">
+  <div class="card admin-only" style="margin-bottom:16px;display:none">
     <div class="card-title" style="margin-bottom:14px">🧠 Model Status</div>
     <div id="status-model"></div>
   </div>
@@ -977,8 +991,8 @@ nav::-webkit-scrollbar { display: none; }
   </div>
 
   <div class="grid2" style="margin-bottom:16px">
-    <!-- Model uitleg -->
-    <div class="card">
+    <!-- Model uitleg (admin only) -->
+    <div class="card admin-only" style="display:none">
       <div class="card-title" style="margin-bottom:14px">🧠 Het model uitgelegd</div>
       <div style="font-size:13px;color:var(--muted);line-height:1.9">
         <div style="margin-bottom:10px"><strong style="color:var(--text)">1. No-vig kans berekening</strong><br>
@@ -1051,8 +1065,8 @@ nav::-webkit-scrollbar { display: none; }
     </div>
   </div>
 
-  <!-- Inzet strategie -->
-  <div class="card" style="margin-bottom:16px">
+  <!-- Inzet strategie (admin only) -->
+  <div class="card admin-only" style="margin-bottom:16px;display:none">
     <div class="card-title" style="margin-bottom:12px">💰 Inzetstrategie</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
@@ -1077,8 +1091,8 @@ nav::-webkit-scrollbar { display: none; }
     </div>
   </div>
 
-  <!-- Abonnementen -->
-  <div class="card" style="margin-bottom:16px">
+  <!-- Abonnementen (admin only) -->
+  <div class="card admin-only" style="margin-bottom:16px;display:none">
     <div class="card-title" style="margin-bottom:14px">💳 Abonnementen</div>
     <div style="font-size:13px">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
@@ -1155,8 +1169,8 @@ nav::-webkit-scrollbar { display: none; }
     </div>
   </div>
 
-  <!-- Model updates (dynamisch) -->
-  <div class="card" style="margin-bottom:16px" id="model-log-card">
+  <!-- Model updates (admin only) -->
+  <div class="card admin-only" style="margin-bottom:16px;display:none" id="model-log-card">
     <div class="card-hd" style="margin-bottom:12px">
       <div class="card-title">🧠 Model updates</div>
       <span id="model-log-badge" style="display:none;background:var(--accent);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700">nieuw</span>
@@ -1180,37 +1194,30 @@ nav::-webkit-scrollbar { display: none; }
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v7.0</span><br>
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v7.1</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
-          <div style="font-weight:600;margin-bottom:5px">Multi-user, onboarding tour, help systeem, mobile redesign</div>
-          <div style="color:var(--muted);line-height:1.7">👥 User isolatie: elke gebruiker ziet alleen eigen bets en data<br>
-          🎓 Onboarding tour: interactieve rondleiding bij eerste login met spotlights<br>
-          ❓ Help tooltips: uitleg bij elke metric (hover over het ? icoon)<br>
-          📱 Mobile redesign: data tab, notifications en settings volledig responsive<br>
-          ⚙️ Settings naar eigen pagina (modal vervangen)<br>
-          🔔 Notificatie detail modal: klik voor volledige tekst<br>
-          🔗 Gecorreleerde picks: sterkste bovenaan, duplicaten gedimd met "Zie ook"<br>
-          📅 Datum picker gecombineerd + active state fix op periode knoppen<br>
-          📲 Push bij wedstrijd resultaat: Win/Loss melding op je telefoon<br>
-          💬 Telegram per-user voorbereid in user settings</div>
+          <div style="font-weight:600;margin-bottom:5px">Wedstrijd analyser, privacy, verbeterd model</div>
+          <div style="color:var(--muted);line-height:1.7">🔍 Wedstrijd analyser: typ een wedstrijd en krijg direct een analyse<br>
+          🔒 Verbeterde privacy: gevoelige data alleen voor beheerders<br>
+          📊 Model verbeterd: betere voorspellingen door meer databronnen<br>
+          🛡️ Security hardening: uitgebreide beveiligingsaudit</div>
         </div>
       </div>
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v6.3</span><br>
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v7.0</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
-          <div style="font-weight:600;margin-bottom:5px">Email, 2FA, notificaties, vertaling, security</div>
-          <div style="color:var(--muted);line-height:1.7">📧 Email via Resend: goedkeuringsmail bij account activatie<br>
-          🔐 2FA: optionele email-verificatie bij login (6-cijferige code, 5 min geldig)<br>
-          🔔 Notificatie dropdown: alle Telegram meldingen nu ook in-app zichtbaar<br>
-          🌍 Volledige EN/NL vertaling: 200+ teksten, taalwissel in profiel + login<br>
-          🛡️ Security audit: 22 kwetsbaarheden gefixt (rate limiting, whitelist, input validatie)<br>
-          🧪 31 unit tests: Kelly, Poisson, scoring, rate limiter (npm test)</div>
+          <div style="font-weight:600;margin-bottom:5px">Multi-user, help systeem, mobile redesign</div>
+          <div style="color:var(--muted);line-height:1.7">👥 Meerdere gebruikers: eigen account, eigen data<br>
+          ❓ Help tooltips bij elke metric<br>
+          📱 Volledig responsive op mobiel<br>
+          ⚙️ Verbeterde instellingenpagina<br>
+          📲 Push notificaties bij wedstrijd resultaten</div>
         </div>
       </div>
 
@@ -1220,371 +1227,46 @@ nav::-webkit-scrollbar { display: none; }
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
-          <div style="font-weight:600;margin-bottom:5px">Supabase, EdgePickr rebrand, logo, domein</div>
-          <div style="color:var(--muted);line-height:1.7">🗄️ Google Sheets → Supabase (PostgreSQL): alles persistent en snel<br>
-          🎨 Rebrand naar EdgePickr met eigen logo en tagline<br>
-          🌐 edgepickr.com live met SSL via Render + TransIP<br>
-          📊 API usage tracking persistent in database<br>
-          🔔 Supabase grootte monitoring met upgrade-advies</div>
+          <div style="font-weight:600;margin-bottom:5px">Eigen domein, database upgrade, rebrand</div>
+          <div style="color:var(--muted);line-height:1.7">🌐 edgepickr.com met SSL<br>
+          🗄️ Snellere database (Supabase)<br>
+          🎨 Nieuw merk: EdgePickr<br>
+          📧 Email notificaties + 2FA<br>
+          🌍 NL/EN taalondersteuning</div>
         </div>
       </div>
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v5.1</span><br>
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v5.0</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
-          <div style="font-weight:600;margin-bottom:5px">59 competities, weer/Poisson/congestion, drawdown, bookmaker tracking</div>
-          <div style="color:var(--muted);line-height:1.7">⚽ 59 competities (was 41) — Azië, Zuid-Amerika, Afrika, meer EU 2e divisies<br>
-          🌧️ Weer data (Open-Meteo, gratis) — regen/wind beïnvloedt Over/Under<br>
-          📐 Poisson goal model — wiskundige doelpuntsverdeling als extra signaal<br>
-          ⚡ Fixture congestion — vermoeidheidspenalty bij Europees voetbal<br>
-          🛡️ Drawdown protection — stakes automatisch verlaagd bij losing streak<br>
-          🏦 Bookmaker tracking — kies per bet je bookmaker, CLV meet bij jouw bookie<br>
-          📋 Tracker: sorteerbare headers, editable odds/units/bookmaker<br>
-          🌙 Scan kijkt tot 10:00 volgende ochtend (nachtwedstrijden meepakken)<br>
-          📝 POTD generator, modal herberekening, push fix, notifications fix</div>
+          <div style="font-weight:600;margin-bottom:5px">Meer competities, verbeterd model</div>
+          <div style="color:var(--muted);line-height:1.7">⚽ 59 competities wereldwijd<br>
+          📊 Verbeterd voorspellingsmodel<br>
+          🏦 Bookmaker keuze per bet<br>
+          📋 Sorteerbare tracker</div>
         </div>
       </div>
 
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;gap:14px;margin-bottom:16px">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v4.10</span><br>
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v4.0</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
-          <div style="font-weight:600;margin-bottom:5px">POTD generator, modal herberekening, push fix</div>
-          <div style="color:var(--muted);line-height:1.7">📝 POTD generator — Reddit + X post genereren vanuit #1 pick met record<br>
-          📊 Modal odds herberekening — live edge, Kelly en unit advies bij odds aanpassing<br>
-          🔔 Push notificatie fix — 06:00 nu Amsterdam-tijd, subs persistent in Sheets<br>
-          ⏰ Scan scheduling fix — alle tijden nu correct in Amsterdam-tijdzone<br>
-          📅 "Vandaag" filter in tracker, standaard actief<br>
-          📡 Mijn Bets: ESPN enige bron, 10s refresh, geen duplicaten</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v4.8</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">PWA, push notificaties, status pagina, mobile-first</div>
-          <div style="color:var(--muted);line-height:1.7">📱 PWA — installeerbaar op homescreen met app-icoon<br>
-          🔔 Push notificaties — dagelijks overzicht om 06:00 bij het opstaan<br>
-          🟢 Status pagina — alle services, API budget, model status<br>
-          📱 Bottom nav bar (iOS-style) met glasmorfisme<br>
-          📜 Scan history persistent in Google Sheets (overleeft deploys)<br>
-          🔍 Info tab bijgewerkt — 11 signalen, 6 markten, databronnen actueel<br>
-          🖥 Content area verbreed voor MacBook Pro</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v4.5</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Mijn Bets tab, correlatie-check, live ESPN, self-learning</div>
-          <div style="color:var(--muted);line-height:1.7">🎯 "Mijn Bets" tab — live + aankomende bets, gesorteerd op starttijd<br>
-          📡 Auto-refresh elke 30s via ESPN (gratis, onbeperkt)<br>
-          ⚠️ Correlatie-check — waarschuwing bij meerdere bets op dezelfde wedstrijd<br>
-          🟨 Scheidsrechter data in pick cards en Telegram<br>
-          ⏰ Timing analyse — CLV per timing bucket (vroeg/medium/laat)<br>
-          🧠 Signal auto-tuning — dagelijkse gewichtsaanpassing op basis van hit rates<br>
-          🏆 Milestone notificaties (10/25/50/100/200 bets) via Telegram<br>
-          📬 Inbox tab met model activity feed, signal weights en markt multipliers</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v4.2</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">CLV tracking, signal attribution, variance tracker</div>
-          <div style="color:var(--muted);line-height:1.7">📉 Closing Line Value — slotodds ophalen bij aftrap, CLV% per bet en gemiddeld<br>
-          🧠 Signal attribution — welke modelsignalen dragen bij aan winnende picks?<br>
-          🎲 Variance tracker — geluk vs. skill meter (sigma-afwijking van verwachting)<br>
-          📈 Odds movement alerts — elk uur Telegram-waarschuwing bij >5% drift<br>
-          ⚽ BTTS + Draw No Bet markten toegevoegd aan de scanner<br>
-          🏠 Home/away splits + team seizoensstatistieken in het model</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v4.1</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Login systeem + account instellingen</div>
-          <div style="color:var(--muted);line-height:1.7">🔐 Eigen login pagina met JWT authenticatie<br>
-          👤 Account-instellingen: bankroll, unit, tijdzone, taal<br>
-          ⏰ Configureerbare scan-tijden per account (10:00, 16:00, 20:00, ...)<br>
-          🔑 Admin panel: gebruikers beheren, goedkeuren en blokkeren<br>
-          📝 Registratieformulier met Telegram-notificatie aan admin</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.6</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Score & markt analyse + bankroll fix</div>
-          <div style="color:var(--muted);line-height:1.7">📊 Score analyse — hit rate per confidence score (5–10) in data-tab<br>
-          🎯 Markt analyse — hit rate + €WL per markttype (Over/Under/Winnaar/Draw/BTTS)<br>
-          🔧 Herbereken W/L knop — corrigeert historische bets na inzet-bug<br>
-          💰 Bankroll fix — wl nu correct berekend als inzet-kolom leeg is</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.5</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Periode filter + vergelijken</div>
-          <div style="color:var(--muted);line-height:1.7">📅 Date picker in tracker — filter op datumbereik (7d / 14d / 30d / alles of eigen periode)<br>
-          📊 Stats panel update automatisch op geselecteerd bereik<br>
-          🔁 Vergelijkfunctie — huidige periode vs. identieke vorige periode (a la Google Ads)</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.4</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">api-football live scores + 40 competities</div>
-          <div style="color:var(--muted);line-height:1.7">📡 Live scores, events en stats volledig via api-football (rijkere data)<br>
-          🏟️ 40 voetbalcompetities — alle Europese topcompetities + 2e divisies + cups + rest van de wereld<br>
-          ⚡ Events panel (goals/kaarten/wissels) direct uit api-football — inclusief minuut + speler + assist<br>
-          📊 xG direct uit api-football indien beschikbaar, anders schatting<br>
-          🔴 Live scan dekt nu alle 40 competities</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.3</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Render deploy + dagelijkse scan + bugs + meer competities</div>
-          <div style="color:var(--muted);line-height:1.7">🚀 Live op Render — wachtwoordbeveiliging, altijd bereikbaar<br>
-          📡 Dagelijkse pre-match scan om 10:00 — picks automatisch via Telegram<br>
-          🔁 Pre-kickoff checks herplanned na server-herstart<br>
-          💰 Bankroll bug gefixed — W/L correct berekend bij lege inzet-kolom<br>
-          🟢 Scan cards: ✓ Gelogd indicator als bet al in tracker staat<br>
-          🔴 Tracker: verloren bets rood, gewonnen bets groen gemarkeerd<br>
-          📊 Score (bijv. 7/10) opgeslagen in tracker voor data-analyse later<br>
-          🏟️ Meer competities: Serie B, League One, League Two, Ligue 2<br>
-          🔴 Live scan: max 12 wedstrijden (was 8)</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v3.2</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">EdgePickr — volledig herontworpen scanlogica + live dashboard</div>
-          <div style="color:var(--muted);line-height:1.7">🎯 Unified scanner: pre-match + live picks in één pool, gesorteerd op verwachte €-winst<br>
-          📊 Score 5–10 op Kelly-basis — 10/10 alleen bij uitzonderlijke pick (2U)<br>
-          💰 +€X.XX verwachte winst per pick zichtbaar op elke card<br>
-          🏦 Bet365 &amp; Unibet only — bookmaker badge op elke pick<br>
-          ⏰ Aftrap-tijd op pick cards + auto-invullen in log modal + kolom in tracker<br>
-          🔴 Live tab: gebeurtenissen (goals/kaarten/wissels), stats + xG, resultaat-kleur, Over/Under balkje<br>
-          📋 Dashboard: live filter op recente bets met live score erbij<br>
-          🗂️ Scan history (10 scans, auto-restore na refresh)<br>
-          📈 MIN_EP 52% floor — alleen picks met >50% trefkans<br>
-          🔧 Tracker: aftrap kolom, potentiële winst bij open bets, notities verwijderd</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.1</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Live tab — gebeurtenissen, stats &amp; xG</div>
-          <div style="color:var(--muted);line-height:1.7">⚡ Gebeurtenissen panel per live wedstrijd (goals, kaarten, wissels met minuut)<br>
-          📊 Live stats: balbezit, schoten, hoekschoppen, reddingen + xG schatting (SoT × 0.33)<br>
-          🟢 Resultaat-kleur op score: groen bij winst, rood bij verlies, grijs bij gelijk<br>
-          📈 Over/Under voortgangsbalk — toont goals gescoord t.o.v. lijn in realtime</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v3.0</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Scanlogica herschreven — expectedEur + score + history</div>
-          <div style="color:var(--muted);line-height:1.7">💰 Sortering op verwachte €-winst per bet (units × inzet × edge%)<br>
-          📊 Score 5–10 op Kelly-basis zichtbaar op elke pick card<br>
-          🗂️ Scan history: laatste 10 scans opgeslagen, auto-restore na refresh<br>
-          📈 MIN_EP verhoogd naar 52% — structureel meer wins dan losses</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.9</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Pick cards uitgebreid — bookmaker, kickoff, payout</div>
-          <div style="color:var(--muted);line-height:1.7">🏦 Alleen Bet365 &amp; Unibet odds — badge per pick welke bookmaker<br>
-          ⏰ Kickoff tijd op pick card + auto-invullen in log modal<br>
-          💳 Payout calculator in modal: inzet → uitbetaling → winst live berekend<br>
-          📋 Tracker: aftrap kolom toegevoegd, notities verwijderd, potentiële winst bij open bets</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.8</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Unified scanner — pre-match + live in één pool</div>
-          <div style="color:var(--muted);line-height:1.7">🔀 Live picks geïntegreerd in prematch scan — één knop, één pool<br>
-          🔴 LIVE / PRE badge per pick, live picks slaan pre-kickoff check over<br>
-          📡 API limiet voortgangsbalk op scan card<br>
-          🎯 Combi generator: legs mogen &lt;1.60, eindodds 1.60–4.0, alleen als hitrate hoger dan single</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.7</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">api-football.com migratie + live scan in dagelijkse check</div>
-          <div style="color:var(--muted);line-height:1.7">🔄 Volledig gemigreerd naar api-football.com (The Odds API verwijderd)<br>
-          🏟️ Opstellingen (<9 starters = rotatiesignaal) en AI predictions opgenomen in kansberekening<br>
-          ⏰ Pre-kickoff check: 30 min voor aftrap hertelt odds drift via api-football.com + Telegram ping<br>
-          📡 Dagelijkse check draait nu ook live scan — actieve wedstrijden op xG en dominantie<br>
-          💰 Notificaties: unit verhoging aanbevolen bij +50%/+100% bankroll groei<br>
-          🚀 Notificatie voor All Sports upgrade ($99/mnd) bij ROI > 10% over 30+ bets</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.6</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Pick kwaliteitsfilters + model-update tracking</div>
-          <div style="color:var(--muted);line-height:1.7">🚫 Picks met odds > 6.0 geblokkeerd — geen krankzinnige outsider picks meer<br>
-          🔍 Blowout filter: als tegenstander ≤ 1.35 staat, skip underdog automatisch<br>
-          📉 Minimale trefkans 28% per pick — geen picks meer met lage hitrate<br>
-          ✅ Confidence drempel: model toont 0–5 overtuigde picks, nooit vullen om te vullen<br>
-          🔔 Model-update notificaties: bij recalibratie verschijnt melding in bell + info tab<br>
-          📝 Versiebeheeer & model log nu automatisch bijgehouden</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.5</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Dashboard redesign + Google Sheets + cloud-ready</div>
-          <div style="color:var(--muted);line-height:1.7">🎨 Volledig herontworpen homepage — hero banner met klok/stats, scan panels, recente bets sidebar, model-status widget<br>
-          ☁️ Bettracker.xlsx vervangen door Google Sheets — bets altijd online, sync over alle apparaten<br>
-          🚀 Cloud-ready voor Render deployment (render.yaml, env vars, keep-alive ping)<br>
-          🔔 Notifications panel + dagelijkse uitslag check (09:03) + tab persistentie</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.4</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Notifications + automatische uitslag check</div>
-          <div style="color:var(--muted);line-height:1.7">🔔 Notifications panel in header met API-limieten, calibratie inzichten en verliespatronen<br>
-          📡 "Check uitslagen" knop in Tracker — haalt scores op via ESPN en update W/L automatisch<br>
-          ⏰ Dagelijkse check om 09:03 met Telegram rapport<br>
-          💾 Tab persistentie via localStorage</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.3</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Calibratie &amp; zelflerende multipliers</div>
-          <div style="color:var(--muted);line-height:1.7">🧠 Calibration.json — bijhoudt win rate per markttype (home/away/draw/over/under)<br>
-          📉 Multipliers worden automatisch aangepast na 8+ afgeronde bets per categorie<br>
-          🔴 Verlies-log met patroondetectie — model verhoogt drempel bij herhaald verlies<br>
-          📊 Portfolio analyse via Telegram elke 7 settled bets + Sportmonks aanbeveling op ROI</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.2</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">api-sports.io integratie + live scan rewrite</div>
-          <div style="color:var(--muted);line-height:1.7">🏥 Blessure data, scheidsrechter stats, team H2H via api-sports.io<br>
-          ⚽ Live scan herschreven met echte api-sports.io data + xG schatting (SoT × 0.33)<br>
-          📈 4 live scenario's: xG-dominantie comeback, Over/Under waarde, extreme druk<br>
-          🔧 MMA draw bug gefixed (geen nep edge meer op hoge odds)</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v2.1</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">The Odds API + pick cards + dashboard</div>
-          <div style="color:var(--muted);line-height:1.7">💹 Volledige overstap van Sofascore (geblokkeerd) naar The Odds API<br>
-          🃏 Pick cards met edge badge (groen ≥8% / geel ≥5%), uitklapbare analyse<br>
-          📊 Data tab met bankroll grafiek, pie chart uitkomsten en sport-verdeling<br>
-          ⚠️ API limiet waarschuwingsbalk (rood ≤42 calls, geel ≤105 calls)</div>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:14px">
-        <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v1.0</span><br>
-          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
-        </div>
-        <div>
-          <div style="font-weight:600;margin-bottom:5px">Eerste versie — Sofascore + Telegram</div>
-          <div style="color:var(--muted);line-height:1.7">🚀 Express.js dashboard met bet tracker (Excel integratie)<br>
-          📱 Telegram picks via bot<br>
-          ⚽ ESPN standings voor competitiestand<br>
-          🌅 Pre-match + live scan basisversie</div>
+          <div style="font-weight:600;margin-bottom:5px">Login systeem, live tracking, PWA</div>
+          <div style="color:var(--muted);line-height:1.7">🔐 Eigen account met login<br>
+          🔴 Live wedstrijd tracking<br>
+          📱 Installeerbaar als app (PWA)<br>
+          🔔 Push notificaties</div>
         </div>
       </div>
 
     </div>
   </div>
+
 </section>
 
 <!-- ══ SETTINGS PAGE ═══════════════════════════════════════════════════════ -->
@@ -1892,6 +1574,21 @@ Object.assign(LANG.nl, {
   tour_next: 'Volgende',
   tour_done: 'Klaar!',
   tour_skip: 'Skip',
+  analyze_title: '\ud83d\udd0d Wedstrijd Analyser',
+  analyze_btn: 'Analyseer',
+  analyze_placeholder: 'Bijv: Ajax PSV over 2.5',
+  analyze_help: 'Typ een wedstrijd + markt. Voorbeelden: "Feyenoord NEC gelijkspel", "Liverpool Arsenal over 2.5", "Bayern btts"',
+  analyze_busy: 'Bezig...',
+  analyze_analyzing: 'Analyseren...',
+  analyze_failed: 'Analyse mislukt',
+  analyze_no_edge: 'Geen edge gevonden. De bookmaker-odds lijken correct geprijsd.',
+  analyze_form: 'Vorm',
+  analyze_standings: 'Stand',
+  analyze_h2h: 'Onderlinge resultaten',
+  analyze_injuries: 'Blessures',
+  analyze_weather: 'Weer',
+  analyze_all_markets: 'Alle markten geanalyseerd',
+  analyze_log: '+ Log',
 });
 Object.assign(LANG.en, {
   picks_none: 'No confident picks today',
@@ -1933,6 +1630,21 @@ Object.assign(LANG.en, {
   tour_next: 'Next',
   tour_done: 'Done!',
   tour_skip: 'Skip',
+  analyze_title: '\ud83d\udd0d Match Analyzer',
+  analyze_btn: 'Analyze',
+  analyze_placeholder: 'E.g.: Ajax PSV over 2.5',
+  analyze_help: 'Type a match + market. Examples: "Liverpool Arsenal over 2.5", "Bayern btts", "Ajax PSV draw"',
+  analyze_busy: 'Analyzing...',
+  analyze_analyzing: 'Analyzing...',
+  analyze_failed: 'Analysis failed',
+  analyze_no_edge: 'No edge found. The bookmaker odds appear correctly priced.',
+  analyze_form: 'Form',
+  analyze_standings: 'Standings',
+  analyze_h2h: 'Head to head',
+  analyze_injuries: 'Injuries',
+  analyze_weather: 'Weather',
+  analyze_all_markets: 'All markets analyzed',
+  analyze_log: '+ Log',
 });
 
 function t(key) {
@@ -3262,7 +2974,162 @@ function copyPOTD(type) {
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-// ── ANALYSE ───────────────────────────────────────────────────────────────────
+// ── MATCH ANALYSER ────────────────────────────────────────────────────────────
+
+async function runAnalysis() {
+  const input = document.getElementById('analyze-input').value.trim();
+  if (!input) return;
+  const btn = document.getElementById('analyze-btn');
+  const result = document.getElementById('analyze-result');
+  btn.disabled = true; btn.textContent = t('analyze_busy');
+  result.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">' + t('analyze_analyzing') + '</div>';
+
+  try {
+    const r = await api('/api/analyze', { method: 'POST', body: { query: input } });
+    if (!r) return;
+    const d = await r.json();
+    if (!d) return;
+    if (d.error) {
+      let errHtml = '<div class="card"><div style="color:var(--red);padding:12px">' + escHtml(d.error) + '</div>';
+      if (d.matches && d.matches.length) {
+        errHtml += '<div style="margin-top:8px;font-size:13px">';
+        d.matches.forEach(m => {
+          errHtml += '<div style="padding:6px 0;border-top:1px solid var(--border);cursor:pointer" onclick="document.getElementById(\'analyze-input\').value=\'' +
+            escHtml(m.match.replace(/'/g, "\\'")) + '\';runAnalysis()">' +
+            escHtml(m.match) + ' <span style="color:var(--muted)">' + escHtml(m.league) + ' - ' + escHtml(m.kickoff) + '</span></div>';
+        });
+        errHtml += '</div>';
+      }
+      errHtml += '</div>';
+      result.innerHTML = errHtml;
+      return;
+    }
+    if (d.multi && d.results) {
+      renderAnalysisMulti(result, d.results);
+    } else {
+      renderAnalysisResult(result, d);
+    }
+  } catch {
+    result.innerHTML = '<div class="card"><div style="color:var(--red);padding:12px">' + t('analyze_failed') + '</div></div>';
+  } finally {
+    btn.disabled = false; btn.textContent = t('analyze_btn');
+  }
+}
+
+function renderAnalysisMulti(el, results) {
+  el.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">' + t('analyze_all_markets') + ' (' + results.length + ')</div>';
+  results.forEach(r => {
+    const card = document.createElement('div');
+    renderAnalysisResult(card, r);
+    el.appendChild(card);
+  });
+}
+
+function renderAnalysisResult(el, d) {
+  const prob = d.prob || 0;
+  const pc = prob >= 65 ? '#34d399' : prob >= 50 ? '#fbbf24' : '#f87171';
+  const scoreCol = d.score >= 8 ? '#34d399' : d.score >= 5 ? '#fbbf24' : '#f87171';
+  const edgeCol = d.edge > 0 ? '#34d399' : '#f87171';
+
+  let html = '<div class="pick-card' + (d.edge > 5 ? ' top' : '') + '" style="margin-bottom:8px">';
+  html += '<div style="flex:1;min-width:0">';
+  html += '<div class="pick-name">' + escHtml(d.label || '') + '</div>';
+  html += '<div class="pick-meta">' + escHtml(d.match || '') + (d.league ? ' &middot; ' + escHtml(d.league) : '') +
+    (d.kickoff ? ' &middot; <span style="color:#fbbf24;font-weight:600">&#9200; ' + escHtml(d.kickoff) + '</span>' : '') + '</div>';
+  html += '<div class="prob-row" style="margin-top:7px">';
+  html += '<div class="prob-bar"><div class="prob-fill" style="width:' + Math.min(prob, 100) + '%;background:' + pc + '"></div></div>';
+  html += '<span class="prob-pct">' + prob + '% kans</span>';
+  html += '<span class="edge-badge" style="background:' + (d.score >= 8 ? 'rgba(52,211,153,0.15)' : d.score >= 5 ? 'rgba(251,191,36,0.15)' : 'rgba(248,113,113,0.15)') +
+    ';color:' + scoreCol + ';font-size:12px;font-weight:800;padding:2px 8px">' + (d.score || 0) + '/10</span>';
+  html += '<span style="font-size:12px;font-weight:700;color:' + edgeCol + '">Edge ' + (d.edge > 0 ? '+' : '') + (d.edge || 0) + '%</span>';
+  html += '</div>';
+
+  // Reason (admin only)
+  if (d.reason) {
+    html += '<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:8px;line-height:1.6;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px">' + escHtml(d.reason) + '</div>';
+  }
+  if (d.signals && d.signals.length) {
+    html += '<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:4px">Signals: ' + d.signals.map(s => escHtml(s)).join(', ') + '</div>';
+  }
+
+  html += '</div>'; // end left
+
+  html += '<div class="pick-right">';
+  html += '<div class="pick-odds">' + (d.odd || '?') + '</div>';
+  html += '<div class="pick-units" style="margin-top:3px">' + escHtml(d.units || '') + '</div>';
+  if (d.bookie) {
+    const isBet365 = (d.bookie || '').toLowerCase().includes('bet365');
+    html += '<div style="margin-top:6px;padding:3px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.03em;text-align:center;' +
+      (isBet365 ? 'background:#1a6b3a;color:#4ade80' : 'background:#1a2e6b;color:#93c5fd') + '">' +
+      (isBet365 ? 'Bet365' : escHtml(d.bookie)) + '</div>';
+  }
+  html += '<div style="margin-top:6px"><button class="btn btn-success btn-sm" onclick="openAnalyzeLog(this)" ' +
+    'data-match="' + escHtml(d.match || '') + '" data-label="' + escHtml(d.label || '') + '" data-odd="' + (d.odd || '') + '" ' +
+    'data-league="' + escHtml(d.league || '') + '" data-kickoff="' + escHtml(d.kickoff || '') + '" data-units="' + escHtml(d.units || '') + '">' + t('analyze_log') + '</button></div>';
+  html += '</div>'; // end right
+  html += '</div>'; // end pick-card
+
+  // Warning banner
+  if (d.warning) {
+    html += '<div style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:12px;color:#fbbf24">' +
+      '&#9888;&#65039; ' + escHtml(d.warning) + '</div>';
+  }
+
+  // Analysis details panel
+  if (d.analysis) {
+    html += '<div class="card" style="margin-bottom:8px;padding:12px 14px;font-size:12px">';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">';
+
+    // Form
+    html += '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase;margin-bottom:4px">' + t('analyze_form') + '</div>';
+    html += '<div style="font-weight:600">' + escHtml(d.analysis.homeForm || '?') + ' vs ' + escHtml(d.analysis.awayForm || '?') + '</div></div>';
+
+    // Standings
+    html += '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase;margin-bottom:4px">' + t('analyze_standings') + '</div>';
+    html += '<div style="font-weight:600">#' + escHtml(String(d.analysis.standings?.home || '?')) + ' vs #' + escHtml(String(d.analysis.standings?.away || '?')) + '</div></div>';
+
+    // H2H
+    html += '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase;margin-bottom:4px">' + t('analyze_h2h') + '</div>';
+    html += '<div style="font-weight:600">' + escHtml(d.analysis.h2h || 'Geen data') + '</div></div>';
+
+    // Injuries
+    html += '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase;margin-bottom:4px">' + t('analyze_injuries') + '</div>';
+    html += '<div style="font-weight:600">' + (d.analysis.injuries?.home || 0) + ' / ' + (d.analysis.injuries?.away || 0) + '</div></div>';
+
+    // Weather
+    if (d.weather) {
+      html += '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase;margin-bottom:4px">' + t('analyze_weather') + '</div>';
+      html += '<div style="font-weight:600">' + d.weather.temp + '&#176;C, ' + d.weather.rain + 'mm, ' + d.weather.wind + 'km/h</div></div>';
+    }
+
+    html += '</div></div>';
+  }
+
+  el.innerHTML += html;
+}
+
+function openAnalyzeLog(btn) {
+  const match = btn.getAttribute('data-match');
+  const label = btn.getAttribute('data-label');
+  const odd = parseFloat(btn.getAttribute('data-odd')) || 0;
+  const units = btn.getAttribute('data-units');
+  const kickoff = btn.getAttribute('data-kickoff');
+  // Build a fake modalPick so the existing modal works
+  modalPick = { match, label, odd, units, kickoff, bookie: 'Bet365' };
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  document.getElementById('m-match').value = match || '';
+  document.getElementById('m-markt').value = label || '';
+  document.getElementById('m-odds').value  = odd || '';
+  document.getElementById('m-units').value = parseFloat(String(units || '0.3').replace('U', '')) || 0.3;
+  document.getElementById('m-datum').value = pad(now.getDate()) + '-' + pad(now.getMonth() + 1) + '-' + now.getFullYear();
+  document.getElementById('m-tijd').value  = kickoff || '';
+  document.getElementById('modal-msg').textContent = '';
+  updatePayout();
+  document.getElementById('modal').classList.add('open');
+}
+
+// ── ANALYSE (scan search) ────────────────────────────────────────────────────
 let analysePicks = [];
 
 async function refreshAnalyse() {
@@ -4461,7 +4328,7 @@ if (_origApplyLanguage) {
     </button>
     <div class="bnav-menu" id="bnav-menu">
       <button class="bnav-menu-item" onclick="goMobile('analyse')">🔍 Analyse</button>
-      <button class="bnav-menu-item" onclick="goMobile('inbox')">📬 Inbox</button>
+      <button class="bnav-menu-item admin-only" onclick="goMobile('inbox')" style="display:none">📬 Inbox</button>
       <button class="bnav-menu-item" onclick="goMobile('status')">🟢 Status</button>
       <button class="bnav-menu-item" onclick="goMobile('info')">📖 Info</button>
       <button class="bnav-menu-item" onclick="closeBnavMenu(); openProfileModal()">⚙️ <span data-i18n="nav_settings">Instellingen</span></button>
