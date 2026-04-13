@@ -2916,19 +2916,34 @@ function updatePayout() {
   document.getElementById('payout-total').textContent  = total  ? `€${total.toFixed(2)}`  : '€—';
   document.getElementById('payout-profit').textContent = profit ? `+€${profit.toFixed(2)}` : '€—';
 
-  // Herbereken edge als odds afwijken van scanner
+  // Edge herberekening — alleen tonen als odds AFWIJKEN van scanner
   const edgeEl = document.getElementById('payout-edge');
   if (!edgeEl || !modalPick) return;
   const origOdds = parseFloat(modalPick.odd || modalPick.odds) || 0;
-  const prob = (modalPick.prob || 0) / 100; // scanner kans
-  if (!origOdds || !prob || !odds) { edgeEl.innerHTML = ''; return; }
+  const origUnits = parseFloat(String(modalPick.units||'0.3').replace('U','')) || 0.3;
+  if (!origOdds || !odds) { edgeEl.innerHTML = ''; return; }
 
+  const diff = odds - origOdds;
+
+  // Als odds (vrijwel) gelijk zijn: gebruik scanner's originele units + score
+  if (Math.abs(diff) < 0.02) {
+    const scoreVal = modalPick.kelly ? Math.min(10, Math.max(5, Math.round((modalPick.kelly - 0.015) / 0.135 * 5) + 5)) : null;
+    edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center;color:var(--muted)">
+      ✅ Odds ongewijzigd — scanner advies: <span style="color:var(--accent);font-weight:700">${origUnits}U</span>
+      ${scoreVal ? `<span style="color:${scoreVal>=8?'#34d399':scoreVal>=6?'#fbbf24':'#94a3b8'};font-weight:700">${scoreVal}/10</span>` : ''}
+    </div>`;
+    document.getElementById('m-units').value = origUnits;
+    return;
+  }
+
+  // Odds zijn gewijzigd: herbereken edge
+  const prob = (modalPick.prob || 0) / 100;
+  if (!prob) { edgeEl.innerHTML = ''; return; }
   const fairOdds = 1 / prob;
   const edge = ((odds - fairOdds) / fairOdds * 100);
   const kelly = Math.max(0, (prob * (odds - 1) - (1 - prob)) / (odds - 1));
-  const hk = kelly * 0.5; // half-Kelly
+  const hk = kelly * 0.5;
   const recUnits = hk < 0.015 ? 0 : hk < 0.04 ? 0.3 : hk < 0.08 ? 0.5 : hk < 0.12 ? 1.0 : 2.0;
-  const diff = odds - origOdds;
   const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
   const diffCol = diff >= 0 ? '#34d399' : '#f87171';
 
@@ -2937,7 +2952,7 @@ function updatePayout() {
     document.getElementById('m-units').value = 0;
   } else {
     const scoreVal = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
-    edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center">
+    edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <span style="color:${diffCol};font-weight:700">Odds: ${origOdds} → ${odds.toFixed(2)} (${diffStr})</span>
       <span style="color:var(--muted)">Edge: ${edge.toFixed(1)}%</span>
       <span style="color:var(--accent);font-weight:700">${recUnits}U aanbevolen</span>
@@ -2945,13 +2960,6 @@ function updatePayout() {
     </div>`;
     document.getElementById('m-units').value = recUnits;
   }
-  // Update payout met nieuwe units
-  const newStake = +(recUnits * 10).toFixed(2);
-  const newTotal = +(newStake * odds).toFixed(2);
-  const newProfit = +(newTotal - newStake).toFixed(2);
-  document.getElementById('payout-stake').textContent  = newStake  ? `€${newStake.toFixed(2)}`  : '€—';
-  document.getElementById('payout-total').textContent  = newTotal  ? `€${newTotal.toFixed(2)}`  : '€—';
-  document.getElementById('payout-profit').textContent = newProfit ? `+€${newProfit.toFixed(2)}` : '€—';
 }
 
 document.getElementById('m-odds').addEventListener('input', updatePayout);
