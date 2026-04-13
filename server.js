@@ -768,15 +768,15 @@ const NBA_LEAGUES = [
   { id: 120, key: 'euroleague',  name: 'Euroleague',          ha: 0.04, season: SPLIT_SEASON },
   { id: 116, key: 'acb',         name: 'Liga ACB (Spanje)',   ha: 0.05, season: SPLIT_SEASON },
   { id: 117, key: 'lnb',         name: 'LNB Pro A (Frankrijk)',ha: 0.05, season: SPLIT_SEASON },
-  { id: 204, key: 'bsl',         name: 'BSL (Turkije)',       ha: 0.05, season: SPLIT_SEASON },
+  { id: 204, key: 'bsl',         name: 'BSL (Turkije)',       ha: 0.05, season: CURRENT_SEASON },
 ];
 
 // ── HOCKEY LEAGUES (alleen met goede odds data) ─────────────────────────────
 const NHL_LEAGUES = [
-  { id: 57,  key: 'nhl',         name: 'NHL',                 ha: 0.03, season: SPLIT_SEASON },
-  { id: 85,  key: 'khl',         name: 'KHL (Rusland)',       ha: 0.04, season: SPLIT_SEASON },
-  { id: 72,  key: 'shl',         name: 'SHL (Zweden)',        ha: 0.04, season: SPLIT_SEASON },
-  { id: 68,  key: 'liiga',       name: 'Liiga (Finland)',     ha: 0.04, season: SPLIT_SEASON },
+  { id: 57,  key: 'nhl',         name: 'NHL',                 ha: 0.03, season: CURRENT_SEASON },
+  { id: 85,  key: 'khl',         name: 'KHL (Rusland)',       ha: 0.04, season: CURRENT_SEASON },
+  { id: 72,  key: 'shl',         name: 'SHL (Zweden)',        ha: 0.04, season: CURRENT_SEASON },
+  { id: 68,  key: 'liiga',       name: 'Liiga (Finland)',     ha: 0.04, season: CURRENT_SEASON },
 ];
 
 // ── BASEBALL LEAGUES (alleen met goede odds data) ───────────────────────────
@@ -794,10 +794,10 @@ const NFL_LEAGUES = [
 
 // ── HANDBALL LEAGUES (alleen met goede odds data) ───────────────────────────
 const HANDBALL_LEAGUES = [
-  { id: 30,  key: 'ehf_cl',      name: 'EHF Champions League',ha: 0.05, season: SPLIT_SEASON },
-  { id: 35,  key: 'hbl',         name: 'Handball Bundesliga',  ha: 0.06, season: SPLIT_SEASON },
-  { id: 36,  key: 'lnh',         name: 'Starligue (Frankrijk)',ha: 0.06, season: SPLIT_SEASON },
-  { id: 37,  key: 'asobal',      name: 'Liga Asobal (Spanje)',ha: 0.06, season: SPLIT_SEASON },
+  { id: 30,  key: 'ehf_cl',      name: 'EHF Champions League',ha: 0.05, season: CURRENT_SEASON },
+  { id: 35,  key: 'hbl',         name: 'Handball Bundesliga',  ha: 0.06, season: CURRENT_SEASON },
+  { id: 36,  key: 'lnh',         name: 'Starligue (Frankrijk)',ha: 0.06, season: CURRENT_SEASON },
+  { id: 37,  key: 'asobal',      name: 'Liga Asobal (Spanje)',ha: 0.06, season: CURRENT_SEASON },
 ];
 
 // ── LAST PICKS (in-memory voor analyse tab) ──────────────────────────────────
