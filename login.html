@@ -88,6 +88,16 @@
       <div class="msg" id="l-msg"></div>
     </div>
 
+    <!-- 2FA Code -->
+    <div class="form" id="f-2fa">
+      <label id="lbl-2fa-code">Verificatiecode</label>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px" id="2fa-desc">Voer de 6-cijferige code in die we naar je email hebben gestuurd</div>
+      <input type="text" id="2fa-code" placeholder="123456" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" style="text-align:center;font-size:24px;letter-spacing:8px;font-weight:700" onkeydown="if(event.key==='Enter')verify2FA()">
+      <button class="btn" onclick="verify2FA()" id="btn-2fa">Verifieer</button>
+      <button class="btn" onclick="back2FA()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);margin-top:8px" id="btn-2fa-back">Terug</button>
+      <div class="msg" id="2fa-msg"></div>
+    </div>
+
     <!-- Register -->
     <div class="form" id="f-register">
       <label id="lbl-r-email">E-mailadres</label>
@@ -109,7 +119,9 @@
         register_btn: 'Aanmelden', busy: 'Bezig...', fill: 'Vul e-mail en wachtwoord in',
         failed: 'Inloggen mislukt', pw_mismatch: 'Wachtwoorden komen niet overeen',
         pw_short: 'Wachtwoord minimaal 8 tekens', reg_failed: 'Registratie mislukt',
-        conn_error: 'Verbindingsfout, probeer opnieuw'
+        conn_error: 'Verbindingsfout, probeer opnieuw',
+        '2fa_code': 'Verificatiecode', '2fa_desc': 'Voer de 6-cijferige code in die we naar je email hebben gestuurd',
+        '2fa_verify': 'Verifieer', '2fa_back': 'Terug', '2fa_invalid': 'Ongeldige of verlopen code'
       },
       en: {
         login: 'Log in', register: 'Register', email: 'Email', password: 'Password',
@@ -117,7 +129,9 @@
         register_btn: 'Register', busy: 'Loading...', fill: 'Fill in email and password',
         failed: 'Login failed', pw_mismatch: 'Passwords do not match',
         pw_short: 'Password minimum 8 characters', reg_failed: 'Registration failed',
-        conn_error: 'Connection error, try again'
+        conn_error: 'Connection error, try again',
+        '2fa_code': 'Verification code', '2fa_desc': 'Enter the 6-digit code we sent to your email',
+        '2fa_verify': 'Verify', '2fa_back': 'Back', '2fa_invalid': 'Invalid or expired code'
       }
     };
 
@@ -138,6 +152,11 @@
       document.getElementById('btn-register').textContent = tl('register_btn');
       document.getElementById('langBtn').textContent = l === 'nl' ? 'EN' : 'NL';
       document.documentElement.lang = l;
+      // 2FA labels
+      document.getElementById('lbl-2fa-code').textContent = tl('2fa_code');
+      document.getElementById('2fa-desc').textContent = tl('2fa_desc');
+      document.getElementById('btn-2fa').textContent = tl('2fa_verify');
+      document.getElementById('btn-2fa-back').textContent = tl('2fa_back');
     }
 
     function toggleLang() {
@@ -196,6 +215,15 @@
         });
         const d = await r.json();
         if (!r.ok) return showMsg('l-msg', d.error || tl('failed'), 'err');
+        if (d.requires2FA) {
+          // Show 2FA code entry screen
+          window._2faEmail = email;
+          document.getElementById('f-login').classList.remove('active');
+          document.getElementById('f-2fa').classList.add('active');
+          document.querySelector('.tabs').style.display = 'none';
+          document.getElementById('2fa-code').focus();
+          return;
+        }
         localStorage.setItem('ep_token', d.token);
         localStorage.setItem('ep_user', JSON.stringify(d.user));
         // Save language preference from user settings if available
@@ -226,6 +254,35 @@
         showMsg('r-msg', '\u2705 ' + d.message, 'ok');
       } catch { showMsg('r-msg', tl('conn_error'), 'err'); }
       finally { btn.disabled = false; btn.textContent = tl('register_btn'); }
+    }
+    async function verify2FA() {
+      const btn  = document.getElementById('btn-2fa');
+      const code = document.getElementById('2fa-code').value.trim();
+      if (!code || code.length !== 6) return showMsg('2fa-msg', tl('2fa_invalid'), 'err');
+      btn.disabled = true;
+      btn.textContent = tl('busy');
+      try {
+        const r = await fetch('/api/auth/verify-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: window._2faEmail, code })
+        });
+        const d = await r.json();
+        if (!r.ok) return showMsg('2fa-msg', d.error || tl('2fa_invalid'), 'err');
+        localStorage.setItem('ep_token', d.token);
+        localStorage.setItem('ep_user', JSON.stringify(d.user));
+        if (d.user?.language) localStorage.setItem('ep_lang', d.user.language);
+        window.location.href = '/';
+      } catch { showMsg('2fa-msg', tl('conn_error'), 'err'); }
+      finally { btn.disabled = false; btn.textContent = tl('2fa_verify'); }
+    }
+
+    function back2FA() {
+      document.getElementById('f-2fa').classList.remove('active');
+      document.getElementById('f-login').classList.add('active');
+      document.querySelector('.tabs').style.display = 'flex';
+      document.getElementById('2fa-code').value = '';
+      document.getElementById('2fa-msg').className = 'msg';
     }
   </script>
 </body>
