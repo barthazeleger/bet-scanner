@@ -4366,6 +4366,113 @@ app.get('/api/bets/correlations', async (req, res) => {
 // ── PRE-KICKOFF CHECK · 30 min voor aftrap ───────────────────────────────────
 // Haalt huidige odds op voor het specifieke event en vergelijkt met gelogde odds.
 // Stuurt Telegram ping als: odds gedrift >8%, of als aftrap veranderd is.
+// ── SPORT-AWARE API HELPERS ──────────────────────────────────────────────────
+function getSportApiConfig(sport) {
+  const configs = {
+    football:          { host: 'v3.football.api-sports.io', fixturesPath: '/fixtures', oddsPath: '/odds', fixtureParam: 'fixture', gameParam: 'fixture' },
+    basketball:        { host: 'v1.basketball.api-sports.io', fixturesPath: '/games', oddsPath: '/odds', fixtureParam: 'game', gameParam: 'game' },
+    hockey:            { host: 'v1.hockey.api-sports.io', fixturesPath: '/games', oddsPath: '/odds', fixtureParam: 'game', gameParam: 'game' },
+    baseball:          { host: 'v1.baseball.api-sports.io', fixturesPath: '/games', oddsPath: '/odds', fixtureParam: 'game', gameParam: 'game' },
+    'american-football':{ host: 'v1.american-football.api-sports.io', fixturesPath: '/games', oddsPath: '/odds', fixtureParam: 'game', gameParam: 'game' },
+    handball:          { host: 'v1.handball.api-sports.io', fixturesPath: '/games', oddsPath: '/odds', fixtureParam: 'game', gameParam: 'game' },
+  };
+  return configs[sport] || configs.football;
+}
+
+// Zoek fixture/game ID op teamnamen voor elke sport
+async function findGameId(sport, matchName) {
+  const cfg = getSportApiConfig(sport);
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const parts = (matchName || '').split(' vs ').map(s => s.trim().toLowerCase());
+  if (parts.length < 2) return null;
+
+  const games = await afGet(cfg.host, cfg.fixturesPath, { date: today }).catch(() => []);
+  const match = (games || []).find(g => {
+    // Football has teams under g.teams, other sports similar
+    const home = (g.teams?.home?.name || '').toLowerCase();
+    const away = (g.teams?.away?.name || '').toLowerCase();
+    return (home.includes(parts[0]) || parts[0].includes(home.split(' ').pop())) &&
+           (away.includes(parts[1]) || parts[1].includes(away.split(' ').pop()));
+  });
+  if (!match) return null;
+  // Football: match.fixture.id, other sports: match.id
+  return sport === 'football' ? match.fixture?.id : match.id;
+}
+
+// Haal odds op voor elke sport en match elke markt
+async function fetchCurrentOdds(sport, gameId, markt, bookmaker) {
+  if (!gameId) return null;
+  const cfg = getSportApiConfig(sport);
+  const oddsData = await afGet(cfg.host, cfg.oddsPath, { [cfg.fixtureParam]: gameId }).catch(() => []);
+  const rawBks = oddsData?.[0]?.bookmakers || [];
+  const userBk = (bookmaker || 'bet365').toLowerCase();
+  const bk = rawBks.find(b => b.name?.toLowerCase().includes(userBk))
+          || rawBks.find(b => b.name?.toLowerCase().includes('bet365')) || rawBks[0];
+  if (!bk) return null;
+
+  const m = markt.toLowerCase();
+  let val = null;
+
+  // Over/Under (alle sporten: goals, punten, runs)
+  const overMatch = m.match(/over\s*(\d+\.?\d*)/);
+  const underMatch = m.match(/under\s*(\d+\.?\d*)/);
+  if (overMatch || underMatch) {
+    const ou = bk.bets?.find(b => b.id === 5 || (b.name||'').toLowerCase().includes('over'));
+    if (ou) {
+      const isOver = !!overMatch;
+      const line = (overMatch || underMatch)[1];
+      val = ou.values?.find(v => v.value === `${isOver ? 'Over' : 'Under'} ${line}`);
+    }
+  }
+  // Moneyline / Match Winner
+  else if (m.includes('wint') || m.includes('winner') || m.includes('moneyline') || m.includes('🏠') || m.includes('✈️')) {
+    const mw = bk.bets?.find(b => b.id === 1 || (b.name||'').toLowerCase().includes('winner') || (b.name||'').toLowerCase().includes('money'));
+    if (mw) {
+      const isHome = m.includes('🏠') || !m.includes('✈️');
+      val = mw.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
+    }
+  }
+  // BTTS (voetbal + handball)
+  else if (m.includes('btts') || m.includes('beide')) {
+    const btts = bk.bets?.find(b => b.id === 8 || (b.name||'').toLowerCase().includes('both'));
+    if (btts) {
+      const isNo = m.includes('nee') || m.includes('no') || m.includes('🛡️');
+      val = btts.values?.find(v => v.value === (isNo ? 'No' : 'Yes'));
+    }
+  }
+  // Spread / Handicap / Run Line / Puck Line
+  else if (m.includes('spread') || m.includes('handicap') || m.includes('line') || m.includes('puck')) {
+    const sp = bk.bets?.find(b => (b.name||'').toLowerCase().includes('spread') || (b.name||'').toLowerCase().includes('handicap') || (b.name||'').toLowerCase().includes('line'));
+    if (sp) {
+      const lineMatch = m.match(/([+-]?\d+\.?\d*)/);
+      if (lineMatch) val = sp.values?.find(v => v.value?.includes(lineMatch[1]));
+    }
+  }
+  // Gelijkspel / Draw
+  else if (m.includes('gelijkspel') || m.includes('draw')) {
+    const mw = bk.bets?.find(b => b.id === 1);
+    if (mw) val = mw.values?.find(v => v.value === 'Draw');
+  }
+  // DNB
+  else if (m.includes('draw no bet') || m.includes('dnb')) {
+    const dnb = bk.bets?.find(b => b.id === 12 || (b.name||'').toLowerCase().includes('draw no bet'));
+    if (dnb) {
+      const isHome = m.includes('🏠') || !m.includes('✈️');
+      val = dnb.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
+    }
+  }
+  // NRFI (baseball)
+  else if (m.includes('nrfi') || m.includes('no run first')) {
+    const nrfi = bk.bets?.find(b => (b.name||'').toLowerCase().includes('1st inning') || (b.name||'').toLowerCase().includes('nrfi'));
+    if (nrfi) {
+      const isYes = m.includes('yes') || m.includes('ja') || !m.includes('no');
+      val = nrfi.values?.find(v => v.value === (isYes ? 'Yes' : 'No')) || nrfi.values?.[0];
+    }
+  }
+
+  return val ? parseFloat(val.odd) || null : null;
+}
+
 async function schedulePreKickoffCheck(bet) {
   // Live bets zijn al bezig · geen pre-kickoff check nodig
   if (bet.scanType === 'live') return;
@@ -4407,77 +4514,12 @@ async function schedulePreKickoffCheck(bet) {
       const markt      = bet.markt || '';
       const lines      = [];
 
-      // Haal huidige odds op via api-football.com
+      // Haal huidige odds op via de juiste sport API
+      const betSport = bet.sport || 'football';
       let currentOdds = null;
       try {
-        let fxId = bet.fixtureId;
-
-        // Geen fixtureId? Zoek fixture op teamnamen
-        if (!fxId) {
-          const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-          const parts = (matchName || '').split(' vs ').map(s => s.trim().toLowerCase());
-          if (parts.length >= 2) {
-            const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', { date: today });
-            const match = (fixtures || []).find(f => {
-              const h = (f.teams?.home?.name || '').toLowerCase();
-              const a = (f.teams?.away?.name || '').toLowerCase();
-              return (h.includes(parts[0]) || parts[0].includes(h.split(' ').pop())) &&
-                     (a.includes(parts[1]) || parts[1].includes(a.split(' ').pop()));
-            });
-            if (match) fxId = match.fixture?.id;
-          }
-        }
-
-        if (fxId) {
-          const oddsData = await afGet('v3.football.api-sports.io', '/odds', { fixture: fxId });
-          const rawBks   = oddsData?.[0]?.bookmakers || [];
-          const userBk   = (bet.tip || 'bet365').toLowerCase();
-          const bk       = rawBks.find(b => b.name?.toLowerCase().includes(userBk))
-                        || rawBks.find(b => b.name?.toLowerCase().includes('bet365')) || rawBks[0];
-          if (bk) {
-            const marktLc = markt.toLowerCase();
-            let val = null;
-
-            if (marktLc.includes('over') || marktLc.includes('under')) {
-              // Over/Under goals · bet id 5
-              const ou = bk.bets?.find(b => b.id === 5) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('over'));
-              if (ou) {
-                // Zoek de juiste lijn (bijv. "Over 2.5" of "Under 2.5")
-                const lineMatch = marktLc.match(/(over|under)\s*(\d+\.?\d*)/);
-                if (lineMatch) {
-                  const side = lineMatch[1].charAt(0).toUpperCase() + lineMatch[1].slice(1); // "Over" of "Under"
-                  const line = lineMatch[2]; // "2.5"
-                  val = ou.values?.find(v => v.value === `${side} ${line}`);
-                }
-              }
-            } else if (marktLc.includes('wint') || marktLc.includes('winner')) {
-              // Match Winner · bet id 1
-              const mw = bk.bets?.find(b => b.id === 1);
-              if (mw) {
-                const isHome = marktLc.includes('🏠') || !marktLc.includes('✈️');
-                val = mw.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
-              }
-            } else if (marktLc.includes('btts') || marktLc.includes('beide')) {
-              // Both Teams To Score · bet id 8
-              const btts = bk.bets?.find(b => b.id === 8) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('both'));
-              if (btts) {
-                const isBttsNo = marktLc.includes('nee') || marktLc.includes('no') || marktLc.includes('🛡️');
-                val = btts.values?.find(v => v.value === (isBttsNo ? 'No' : 'Yes'));
-              }
-            } else if (marktLc.includes('gelijkspel') || marktLc.includes('draw')) {
-              const mw = bk.bets?.find(b => b.id === 1);
-              if (mw) val = mw.values?.find(v => v.value === 'Draw');
-            } else if (marktLc.includes('draw no bet') || marktLc.includes('dnb')) {
-              const dnb = bk.bets?.find(b => b.id === 12) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('draw no bet'));
-              if (dnb) {
-                const isHome = marktLc.includes('🏠') || !marktLc.includes('✈️');
-                val = dnb.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
-              }
-            }
-
-            if (val) currentOdds = parseFloat(val.odd) || null;
-          }
-        }
+        const fxId = bet.fixtureId || await findGameId(betSport, matchName);
+        currentOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip);
       } catch {}
 
       // Beoordeling
@@ -4546,76 +4588,11 @@ async function scheduleCLVCheck(bet) {
       const matchName  = bet.wedstrijd || '';
       const markt      = bet.markt || '';
 
-      // Zoek fixture ID
-      let fxId = bet.fixtureId;
-      if (!fxId) {
-        const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-        const parts = (matchName || '').split(' vs ').map(s => s.trim().toLowerCase());
-        if (parts.length >= 2) {
-          const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', { date: today });
-          const match = (fixtures || []).find(f => {
-            const h = (f.teams?.home?.name || '').toLowerCase();
-            const a = (f.teams?.away?.name || '').toLowerCase();
-            return (h.includes(parts[0]) || parts[0].includes(h.split(' ').pop())) &&
-                   (a.includes(parts[1]) || parts[1].includes(a.split(' ').pop()));
-          });
-          if (match) fxId = match.fixture?.id;
-        }
-      }
-
-      if (!fxId) return;
-
-      const oddsData = await afGet('v3.football.api-sports.io', '/odds', { fixture: fxId });
-      const rawBks   = oddsData?.[0]?.bookmakers || [];
-      // Gebruik de bookmaker waar de user daadwerkelijk bet (opgeslagen in tip field)
-      const userBookie = (bet.tip || 'bet365').toLowerCase();
-      const bk = rawBks.find(b => b.name?.toLowerCase().includes(userBookie))
-              || rawBks.find(b => b.name?.toLowerCase().includes('bet365'))
-              || rawBks[0];
-      if (!bk) return;
-      const usedBookie = bk.name || userBookie;
-
-      let closingOdds = null;
-      const marktLc = markt.toLowerCase();
-
-      if (marktLc.includes('over') || marktLc.includes('under')) {
-        const ou = bk.bets?.find(b => b.id === 5) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('over'));
-        if (ou) {
-          const lineMatch = marktLc.match(/(over|under)\s*(\d+\.?\d*)/);
-          if (lineMatch) {
-            const side = lineMatch[1].charAt(0).toUpperCase() + lineMatch[1].slice(1);
-            const line = lineMatch[2];
-            const val = ou.values?.find(v => v.value === `${side} ${line}`);
-            if (val) closingOdds = parseFloat(val.odd) || null;
-          }
-        }
-      } else if (marktLc.includes('wint') || marktLc.includes('winner')) {
-        const mw = bk.bets?.find(b => b.id === 1);
-        if (mw) {
-          const isHome = marktLc.includes('🏠') || !marktLc.includes('✈️');
-          const val = mw.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
-          if (val) closingOdds = parseFloat(val.odd) || null;
-        }
-      } else if (marktLc.includes('btts') || marktLc.includes('beide')) {
-        const btts = bk.bets?.find(b => b.id === 8) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('both'));
-        if (btts) {
-          const val = btts.values?.find(v => v.value === (marktLc.includes('nee') || marktLc.includes('no') ? 'No' : 'Yes'));
-          if (val) closingOdds = parseFloat(val.odd) || null;
-        }
-      } else if (marktLc.includes('draw no bet') || marktLc.includes('dnb')) {
-        const dnb = bk.bets?.find(b => b.id === 12) || bk.bets?.find(b => (b.name||'').toLowerCase().includes('draw no bet'));
-        if (dnb) {
-          const isHome = marktLc.includes('🏠') || !marktLc.includes('✈️');
-          const val = dnb.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
-          if (val) closingOdds = parseFloat(val.odd) || null;
-        }
-      } else if (marktLc.includes('gelijkspel') || marktLc.includes('draw')) {
-        const mw = bk.bets?.find(b => b.id === 1);
-        if (mw) {
-          const val = mw.values?.find(v => v.value === 'Draw');
-          if (val) closingOdds = parseFloat(val.odd) || null;
-        }
-      }
+      // Gebruik sport-aware helpers voor alle sport APIs
+      const betSport = bet.sport || 'football';
+      const fxId = bet.fixtureId || await findGameId(betSport, matchName);
+      const closingOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip);
+      const usedBookie = bet.tip || 'Bet365';
 
       if (!closingOdds) return;
 
@@ -5197,22 +5174,96 @@ async function checkOpenBetResults(userId = null) {
   const openBets = bets.filter(b => b.uitkomst === 'Open');
   if (!openBets.length) return { checked: 0, updated: 0, results: [] };
 
-  // Gebruik api-football voor uitslagen (vervangt ESPN)
+  // Gebruik api-football voor uitslagen (vervangt ESPN) — alle sporten
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  const [todayFixtures, yesterdayFixtures] = await Promise.all([
-    afGet('v3.football.api-sports.io', '/fixtures', { date: today }),
-    afGet('v3.football.api-sports.io', '/fixtures', { date: yesterday }),
+
+  // Fetch all sports in parallel
+  const [
+    todayFixtures, yesterdayFixtures,
+    bbToday, bbYesterday,
+    hkToday, hkYesterday,
+    baToday, baYesterday,
+    nflToday, nflYesterday,
+    hbToday, hbYesterday,
+  ] = await Promise.all([
+    afGet('v3.football.api-sports.io', '/fixtures', { date: today }).catch(() => []),
+    afGet('v3.football.api-sports.io', '/fixtures', { date: yesterday }).catch(() => []),
+    afGet('v1.basketball.api-sports.io', '/games', { date: today }).catch(() => []),
+    afGet('v1.basketball.api-sports.io', '/games', { date: yesterday }).catch(() => []),
+    afGet('v1.hockey.api-sports.io', '/games', { date: today }).catch(() => []),
+    afGet('v1.hockey.api-sports.io', '/games', { date: yesterday }).catch(() => []),
+    afGet('v1.baseball.api-sports.io', '/games', { date: today }).catch(() => []),
+    afGet('v1.baseball.api-sports.io', '/games', { date: yesterday }).catch(() => []),
+    afGet('v1.american-football.api-sports.io', '/games', { date: today }).catch(() => []),
+    afGet('v1.american-football.api-sports.io', '/games', { date: yesterday }).catch(() => []),
+    afGet('v1.handball.api-sports.io', '/games', { date: today }).catch(() => []),
+    afGet('v1.handball.api-sports.io', '/games', { date: yesterday }).catch(() => []),
   ]);
+
+  // Football finished
   const FINISHED_STATUSES = new Set(['FT','AET','PEN']);
-  const allFinished = [...(todayFixtures || []), ...(yesterdayFixtures || [])]
+  const footballFinished = [...(todayFixtures || []), ...(yesterdayFixtures || [])]
     .filter(f => FINISHED_STATUSES.has(f.fixture?.status?.short))
     .map(f => ({
       home:   f.teams?.home?.name || '',
       away:   f.teams?.away?.name || '',
       scoreH: f.goals?.home ?? 0,
       scoreA: f.goals?.away ?? 0,
+      sport:  'football',
     }));
+
+  // Basketball finished games
+  const bbFinished = [...(bbToday || []), ...(bbYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return status === 'FT' || status === 'AOT';
+  }).map(g => ({
+    home: g.teams?.home?.name || '', away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home?.total ?? 0, scoreA: g.scores?.away?.total ?? 0,
+    sport: 'basketball',
+  }));
+
+  // Hockey finished games
+  const hkFinished = [...(hkToday || []), ...(hkYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return status === 'FT' || status === 'AOT';
+  }).map(g => ({
+    home: g.teams?.home?.name || '', away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home ?? 0, scoreA: g.scores?.away ?? 0,
+    sport: 'hockey',
+  }));
+
+  // Baseball finished games
+  const baseballFinished = [...(baToday || []), ...(baYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return status === 'FT' || status === 'AOT';
+  }).map(g => ({
+    home: g.teams?.home?.name || '', away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home?.total ?? 0, scoreA: g.scores?.away?.total ?? 0,
+    sport: 'baseball',
+  }));
+
+  // NFL (American Football) finished games
+  const nflFinished = [...(nflToday || []), ...(nflYesterday || [])].filter(g => {
+    const status = (g.game?.status?.short || '').toUpperCase();
+    return status === 'FT' || status === 'AOT';
+  }).map(g => ({
+    home: g.teams?.home?.name || '', away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home?.total ?? 0, scoreA: g.scores?.away?.total ?? 0,
+    sport: 'american-football',
+  }));
+
+  // Handball finished games
+  const handballFinished = [...(hbToday || []), ...(hbYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return status === 'FT' || status === 'AOT';
+  }).map(g => ({
+    home: g.teams?.home?.name || '', away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home ?? 0, scoreA: g.scores?.away ?? 0,
+    sport: 'handball',
+  }));
+
+  const allFinished = [...footballFinished, ...bbFinished, ...hkFinished, ...baseballFinished, ...nflFinished, ...handballFinished];
 
   const results = [];
   for (const bet of openBets) {
@@ -5230,12 +5281,17 @@ async function checkOpenBetResults(userId = null) {
     const total = ev.scoreH + ev.scoreA;
     let uitkomst = null;
 
-    if      (markt.includes('over 2.5')  || markt.includes('over2.5'))  uitkomst = total > 2 ? 'W' : 'L';
-    else if (markt.includes('under 2.5') || markt.includes('under2.5')) uitkomst = total < 3 ? 'W' : 'L';
-    else if (markt.includes('over 1.5')  || markt.includes('over1.5'))  uitkomst = total > 1 ? 'W' : 'L';
-    else if (markt.includes('under 1.5') || markt.includes('under1.5')) uitkomst = total < 2 ? 'W' : 'L';
-    else if (markt.includes('over 3.5')  || markt.includes('over3.5'))  uitkomst = total > 3 ? 'W' : 'L';
-    else if (markt.includes('under 3.5') || markt.includes('under3.5')) uitkomst = total < 4 ? 'W' : 'L';
+    // Generic over/under detection (works for all sports: goals, points, runs, etc.)
+    const overMatch = markt.match(/over\s*(\d+\.?\d*)/i);
+    const underMatch = !overMatch && markt.match(/under\s*(\d+\.?\d*)/i);
+    if (overMatch) {
+      const line = parseFloat(overMatch[1]);
+      uitkomst = total > line ? 'W' : total < line ? 'L' : null; // exact = push
+    }
+    else if (underMatch) {
+      const line = parseFloat(underMatch[1]);
+      uitkomst = total < line ? 'W' : total > line ? 'L' : null;
+    }
     else if (markt.includes('btts ja') || markt.includes('btts yes') || (markt.includes('btts') && !markt.includes('nee') && !markt.includes('no'))) {
       uitkomst = (ev.scoreH > 0 && ev.scoreA > 0) ? 'W' : 'L';
     }
@@ -5256,14 +5312,31 @@ async function checkOpenBetResults(userId = null) {
       }
     }
     else {
-      const winnerMatch = markt.match(/(?:winner|wint)[^a-z]+([\w\s]+?)(?:\s*[\|·]|$)/i)
-                       || markt.match(/→\s*([\w\s]+?)(?:\s*[\|·]|$)/i);
-      if (winnerMatch) {
-        const t = winnerMatch[1].trim().toLowerCase();
-        const isHome = ev.home.toLowerCase().includes(t) || t.includes(ev.home.toLowerCase().split(' ').pop());
-        const isAway = ev.away.toLowerCase().includes(t) || t.includes(ev.away.toLowerCase().split(' ').pop());
-        if (isHome) uitkomst = ev.scoreH > ev.scoreA ? 'W' : ev.scoreH < ev.scoreA ? 'L' : null;
-        else if (isAway) uitkomst = ev.scoreA > ev.scoreH ? 'W' : ev.scoreA < ev.scoreH ? 'L' : null;
+      // Spread / handicap / run line / puck line detection
+      const spreadMatch = markt.match(/(?:spread|handicap|line)\s*[:\s]?\s*(.+?)\s*([+-]\d+\.?\d*)/i);
+      if (spreadMatch) {
+        const spreadTeam = spreadMatch[1].trim().toLowerCase();
+        const line = parseFloat(spreadMatch[2]);
+        const isHome = ev.home.toLowerCase().includes(spreadTeam) || spreadTeam.includes(ev.home.toLowerCase().split(' ').pop());
+        const isAway = ev.away.toLowerCase().includes(spreadTeam) || spreadTeam.includes(ev.away.toLowerCase().split(' ').pop());
+        if (isHome || isAway) {
+          const diff = isHome ? (ev.scoreH - ev.scoreA) : (ev.scoreA - ev.scoreH);
+          const adjusted = diff + line;
+          uitkomst = adjusted > 0 ? 'W' : adjusted < 0 ? 'L' : null; // exact 0 = push
+        }
+      }
+
+      if (!uitkomst) {
+        // Moneyline / winner detection
+        const winnerMatch = markt.match(/(?:winner|wint)[^a-z]+([\w\s]+?)(?:\s*[\|·]|$)/i)
+                         || markt.match(/→\s*([\w\s]+?)(?:\s*[\|·]|$)/i);
+        if (winnerMatch) {
+          const t = winnerMatch[1].trim().toLowerCase();
+          const isHome = ev.home.toLowerCase().includes(t) || t.includes(ev.home.toLowerCase().split(' ').pop());
+          const isAway = ev.away.toLowerCase().includes(t) || t.includes(ev.away.toLowerCase().split(' ').pop());
+          if (isHome) uitkomst = ev.scoreH > ev.scoreA ? 'W' : ev.scoreH < ev.scoreA ? 'L' : null;
+          else if (isAway) uitkomst = ev.scoreA > ev.scoreH ? 'W' : ev.scoreA < ev.scoreH ? 'L' : null;
+        }
       }
     }
 
@@ -5339,16 +5412,47 @@ app.get('/api/live-scores', async (req, res) => {
     const knownLeagueIds = new Set(AF_FOOTBALL_LEAGUES.map(l => l.id));
     const leagueNames    = Object.fromEntries(AF_FOOTBALL_LEAGUES.map(l => [l.id, l.name]));
 
-    // Live en vandaag geplande wedstrijden ophalen in parallel
-    // Gebruik Amsterdam-datum zodat we rond middernacht de juiste dag tonen
+    // Known league IDs for other sports
+    const knownBBLeagueIds  = new Set(NBA_LEAGUES.map(l => l.id));
+    const bbLeagueNames     = Object.fromEntries(NBA_LEAGUES.map(l => [l.id, l.name]));
+    const knownHKLeagueIds  = new Set(NHL_LEAGUES.map(l => l.id));
+    const hkLeagueNames     = Object.fromEntries(NHL_LEAGUES.map(l => [l.id, l.name]));
+    const knownBALeagueIds  = new Set(BASEBALL_LEAGUES.map(l => l.id));
+    const baLeagueNames     = Object.fromEntries(BASEBALL_LEAGUES.map(l => [l.id, l.name]));
+    const knownNFLLeagueIds = new Set(NFL_LEAGUES.map(l => l.id));
+    const nflLeagueNames    = Object.fromEntries(NFL_LEAGUES.map(l => [l.id, l.name]));
+    const knownHBLeagueIds  = new Set(HANDBALL_LEAGUES.map(l => l.id));
+    const hbLeagueNames     = Object.fromEntries(HANDBALL_LEAGUES.map(l => [l.id, l.name]));
+
+    // Live en vandaag geplande wedstrijden ophalen in parallel — alle sporten
     const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-    const [liveFixtures, todayFixtures] = await Promise.all([
-      afGet('v3.football.api-sports.io', '/fixtures', { live: 'all' }),
-      afGet('v3.football.api-sports.io', '/fixtures', { date: today }),
+    const [
+      liveFixtures, todayFixtures,
+      bbLive, bbToday,
+      hkLive, hkToday,
+      baLive, baToday,
+      nflLive, nflToday,
+      hbLive, hbToday,
+    ] = await Promise.all([
+      afGet('v3.football.api-sports.io', '/fixtures', { live: 'all' }).catch(() => []),
+      afGet('v3.football.api-sports.io', '/fixtures', { date: today }).catch(() => []),
+      afGet('v1.basketball.api-sports.io', '/games', { live: 'all' }).catch(() => []),
+      afGet('v1.basketball.api-sports.io', '/games', { date: today }).catch(() => []),
+      afGet('v1.hockey.api-sports.io', '/games', { live: 'all' }).catch(() => []),
+      afGet('v1.hockey.api-sports.io', '/games', { date: today }).catch(() => []),
+      afGet('v1.baseball.api-sports.io', '/games', { live: 'all' }).catch(() => []),
+      afGet('v1.baseball.api-sports.io', '/games', { date: today }).catch(() => []),
+      afGet('v1.american-football.api-sports.io', '/games', { date: today }).catch(() => []),
+      afGet('v1.american-football.api-sports.io', '/games', { date: today }).catch(() => []),
+      afGet('v1.handball.api-sports.io', '/games', { live: 'all' }).catch(() => []),
+      afGet('v1.handball.api-sports.io', '/games', { date: today }).catch(() => []),
     ]);
 
     const LIVE_STATUSES = new Set(['1H','HT','2H','ET','BT','P','INT','LIVE']);
+    // v1 sport APIs use different status codes for live
+    const V1_LIVE_STATUSES = new Set(['Q1','Q2','Q3','Q4','OT','BT','HT','LIVE','P1','P2','P3','OT','BT','IN1','IN2','IN3','IN4','IN5','IN6','IN7','IN8','IN9']);
 
+    // ── Football mapper ──────────────────────────────────────────────────────
     const mapFixture = (f) => {
       const statusShort = f.fixture?.status?.short || '';
       const elapsed     = f.fixture?.status?.elapsed;
@@ -5385,22 +5489,94 @@ app.get('/api/live-scores', async (req, res) => {
       };
     };
 
-    // Dedup op fixture ID (live heeft voorrang boven scheduled)
+    // ── Generic v1 sport mapper (basketball, hockey, baseball, NFL, handball) ─
+    const mapV1Game = (g, sport, leagueNamesMap) => {
+      const statusShort = (g.status?.short || g.game?.status?.short || '').toUpperCase();
+      const isLive = V1_LIVE_STATUSES.has(statusShort);
+      const isFT = statusShort === 'FT' || statusShort === 'AOT' || statusShort === 'AP';
+      const isNS = statusShort === 'NS';
+
+      let scoreH = null, scoreA = null;
+      if (sport === 'basketball' || sport === 'baseball') {
+        scoreH = isLive || isFT ? (g.scores?.home?.total ?? 0) : null;
+        scoreA = isLive || isFT ? (g.scores?.away?.total ?? 0) : null;
+      } else if (sport === 'hockey' || sport === 'handball') {
+        scoreH = isLive || isFT ? (g.scores?.home ?? 0) : null;
+        scoreA = isLive || isFT ? (g.scores?.away ?? 0) : null;
+      } else if (sport === 'american-football') {
+        scoreH = isLive || isFT ? (g.scores?.home?.total ?? 0) : null;
+        scoreA = isLive || isFT ? (g.scores?.away?.total ?? 0) : null;
+      }
+
+      const leagueId = g.league?.id;
+      const startDate = g.date || g.game?.date?.date;
+      const startTime = !isLive && startDate
+        ? new Date(startDate).toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' })
+        : '';
+
+      return {
+        id:        g.id || g.game?.id || 0,
+        fixtureId: g.id || g.game?.id || 0,
+        sport,
+        league:    leagueNamesMap[leagueId] || g.league?.name || '',
+        leagueId,
+        home:      g.teams?.home?.name || '?',
+        away:      g.teams?.away?.name || '?',
+        homeLogo:  g.teams?.home?.logo || '',
+        awayLogo:  g.teams?.away?.logo || '',
+        scoreH,
+        scoreA,
+        minute:    isLive ? statusShort : isFT ? 'FT' : '',
+        status:    g.status?.long || g.game?.status?.long || '',
+        startTime,
+        live:      isLive,
+      };
+    };
+
+    // ── Collect football events (dedup live vs scheduled) ────────────────────
     const seen = new Set();
     const events = [];
 
-    for (const f of liveFixtures) {
+    for (const f of (liveFixtures || [])) {
       if (!knownLeagueIds.has(f.league?.id)) continue;
       seen.add(f.fixture?.id);
       events.push(mapFixture(f));
     }
-    for (const f of todayFixtures) {
+    for (const f of (todayFixtures || [])) {
       if (!knownLeagueIds.has(f.league?.id)) continue;
       if (seen.has(f.fixture?.id)) continue;
-      if (f.fixture?.status?.short !== 'NS') continue; // alleen nog niet begonnen
+      if (f.fixture?.status?.short !== 'NS') continue;
       seen.add(f.fixture?.id);
       events.push(mapFixture(f));
     }
+
+    // ── Collect other sports (dedup live vs today) ───────────────────────────
+    const addV1Sport = (liveGames, todayGames, sport, knownIds, namesMap) => {
+      const sportSeen = new Set();
+      for (const g of (liveGames || [])) {
+        const lid = g.league?.id;
+        const gid = g.id || g.game?.id;
+        if (!knownIds.has(lid)) continue;
+        sportSeen.add(gid);
+        events.push(mapV1Game(g, sport, namesMap));
+      }
+      for (const g of (todayGames || [])) {
+        const lid = g.league?.id;
+        const gid = g.id || g.game?.id;
+        if (!knownIds.has(lid)) continue;
+        if (sportSeen.has(gid)) continue;
+        const st = (g.status?.short || g.game?.status?.short || '').toUpperCase();
+        if (st !== 'NS') continue;
+        sportSeen.add(gid);
+        events.push(mapV1Game(g, sport, namesMap));
+      }
+    };
+
+    addV1Sport(bbLive,  bbToday,  'basketball',       knownBBLeagueIds,  bbLeagueNames);
+    addV1Sport(hkLive,  hkToday,  'hockey',           knownHKLeagueIds,  hkLeagueNames);
+    addV1Sport(baLive,  baToday,  'baseball',         knownBALeagueIds,  baLeagueNames);
+    addV1Sport(nflLive, nflToday, 'american-football', knownNFLLeagueIds, nflLeagueNames);
+    addV1Sport(hbLive,  hbToday,  'handball',         knownHBLeagueIds,  hbLeagueNames);
 
     events.sort((a, b) => {
       if (a.live !== b.live) return b.live ? 1 : -1;
