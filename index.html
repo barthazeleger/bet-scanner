@@ -868,7 +868,7 @@ nav::-webkit-scrollbar { display: none; }
         <input type="checkbox" id="liveAutoRefresh" checked onchange="toggleLiveAutoRefresh()">
         <span class="sw-track"></span>
       </label>
-      <span>Auto-refresh (10s)</span>
+      <span>Auto-refresh (60s)</span>
     </div>
     <span id="live-info" style="font-size:12px;color:var(--muted)"></span>
   </div>
@@ -2602,8 +2602,8 @@ let liveAutoTimer = null;
 async function fetchLive() {
   document.getElementById('live-info').textContent = 'Laden...';
   try {
-    // ESPN als enige bron — gratis, onbeperkt, geen duplicaten
-    const d = await api('/api/live-poll').then(r => r?.json());
+    // api-football: alle 59 competities, rijke data
+    const d = await api('/api/live-scores').then(r => r?.json());
     if (!d) return;
     liveEvts = d.events || [];
     const lc = d.liveCount ?? liveEvts.filter(e=>e.live).length;
@@ -2621,7 +2621,7 @@ function startLiveAutoRefresh() {
   liveAutoTimer = setInterval(async () => {
     if (!document.getElementById('page-live')?.classList.contains('active')) return;
     try {
-      const d = await api('/api/live-poll').then(r => r?.json());
+      const d = await api('/api/live-scores').then(r => r?.json());
       if (!d) return;
       liveEvts = d.events || [];
       const lc = liveEvts.filter(e=>e.live).length;
@@ -2629,7 +2629,7 @@ function startLiveAutoRefresh() {
       checkBetNotifications(liveEvts);
       filterLive();
     } catch {}
-  }, 10000);
+  }, 60000);
 }
 
 function stopLiveAutoRefresh() {
