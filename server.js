@@ -685,6 +685,29 @@ const AF_FOOTBALL_LEAGUES = [
   { id:128, key:'argentina',    name:'Primera División',    ha:0.06, season:new Date().getFullYear() },
   { id:307, key:'saudi',        name:'Saudi Pro League',    ha:0.05, season:CURRENT_SEASON },
   { id:98,  key:'j1league',     name:'J1 League',           ha:0.04, season:new Date().getFullYear() },
+  // ── Azië & Oceanië (minder efficiënt geprijsd) ─────────────────────────
+  { id:169, key:'china_super',   name:'Chinese Super League',  ha:0.05, season:new Date().getFullYear() },
+  { id:292, key:'korea',         name:'K League 1',            ha:0.05, season:new Date().getFullYear() },
+  { id:188, key:'australia',     name:'A-League',              ha:0.04, season:CURRENT_SEASON },
+  // ── Zuid-Amerika ───────────────────────────────────────────────────────
+  { id:239, key:'colombia',      name:'Liga BetPlay',          ha:0.06, season:new Date().getFullYear() },
+  { id:268, key:'chile',         name:'Primera División Chile', ha:0.06, season:new Date().getFullYear() },
+  { id:242, key:'peru',          name:'Liga 1 Peru',           ha:0.06, season:new Date().getFullYear() },
+  // ── Afrika & Midden-Oosten ─────────────────────────────────────────────
+  { id:233, key:'egypt',         name:'Egyptian Premier',      ha:0.06, season:CURRENT_SEASON },
+  { id:270, key:'south_africa',  name:'South African Premier', ha:0.05, season:CURRENT_SEASON },
+  // ── Scandinavië & Noordelijk Europa (2e divisies) ─────────────────────
+  { id:547, key:'denmark2',      name:'Danish 1st Division',   ha:0.04, season:CURRENT_SEASON },
+  { id:271, key:'norway2',       name:'Norwegian First Div',   ha:0.04, season:new Date().getFullYear() },
+  { id:114, key:'sweden2',       name:'Superettan',            ha:0.04, season:new Date().getFullYear() },
+  { id:318, key:'finland',       name:'Veikkausliiga',         ha:0.05, season:new Date().getFullYear() },
+  { id:373, key:'iceland',       name:'Úrvalsdeild',           ha:0.04, season:new Date().getFullYear() },
+  // ── Oost-Europa (minder efficiënt geprijsd) ───────────────────────────
+  { id:327, key:'bulgaria',      name:'First Professional League', ha:0.05, season:CURRENT_SEASON },
+  { id:332, key:'serbia',        name:'Serbian SuperLiga',     ha:0.05, season:CURRENT_SEASON },
+  { id:383, key:'hungary',       name:'NB I Hungary',          ha:0.05, season:CURRENT_SEASON },
+  { id:286, key:'cyprus',        name:'Cyprus First Division', ha:0.05, season:CURRENT_SEASON },
+  { id:325, key:'slovakia',      name:'Slovak Super Liga',     ha:0.05, season:CURRENT_SEASON },
 ];
 
 // (ESPN standings removed — api-football standings used exclusively)
@@ -851,6 +874,59 @@ const BLOWOUT_OPP_MAX  = 1.35;  // tegenstander ≤ 1.35 = mismatched wedstrijd
 const MIN_EP           = 0.52;  // minimale geschatte kans (~52%) — boven 50% = meer wins dan losses structureel
 const KELLY_FRACTION   = 0.50;  // half-Kelly: veiligst voor kleine bankroll (aanbevolen door Wharton)
 
+// ── DRAWDOWN PROTECTION ──────────────────────────────────────────────────────
+// Bij een losing streak: verlaag automatisch stakes om bankroll te beschermen
+function getDrawdownMultiplier() {
+  const c = loadCalib();
+  const losses = c.lossLog || [];
+  // Tel opeenvolgende recente verliezen
+  let streak = 0;
+  for (const l of losses) {
+    streak++;
+    // Check of er een win tussenzit (lossLog bevat alleen losses, dus check via bets)
+  }
+  // Simpeler: kijk naar de laatste 10 bets ratio
+  if (c.totalSettled < 5) return 1.0; // te weinig data
+  const recentN = Math.min(10, c.totalSettled);
+  const recentLossRate = losses.slice(0, recentN).length / recentN;
+
+  // Gebruik de werkelijke streak uit de calibratie data
+  // lossLog is gesorteerd nieuwste eerst — tel aaneengesloten verliezen
+  // Maar we hebben ook wins nodig. Simpelste: check de bets direct.
+  try {
+    // Sync check via calibration data
+    const totalWr = c.totalSettled > 0 ? c.totalWins / c.totalSettled : 0.5;
+    const recentProfit = c.totalProfit || 0;
+
+    // Als we meer dan 20% van startbankroll verloren hebben: halveer stakes
+    if (recentProfit < -(START_BANKROLL * 0.20)) {
+      console.log('⚠️ Drawdown protection: stakes gehalveerd (>20% loss)');
+      tg(`🛡️ DRAWDOWN PROTECTION\nStakes gehalveerd — bankroll >20% onder start.\nHuidige P/L: €${recentProfit.toFixed(2)}`).catch(() => {});
+      return 0.5;
+    }
+    // Als win rate onder 30% na 10+ bets: verlaag stakes met 30%
+    if (c.totalSettled >= 10 && totalWr < 0.30) {
+      console.log('⚠️ Drawdown protection: stakes -30% (win rate < 30%)');
+      return 0.7;
+    }
+    // Na 5+ opeenvolgende verliezen (geschat): verlaag met 40%
+    if (losses.length >= 5 && c.totalSettled >= 8) {
+      const last5 = losses.slice(0, 5);
+      const recentDates = last5.map(l => l.date).filter(Boolean);
+      // Als alle 5 verliezen van de afgelopen 3 dagen zijn = streak
+      if (recentDates.length >= 5) {
+        const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+        const allRecent = recentDates.every(d => d >= threeDaysAgo);
+        if (allRecent) {
+          console.log('⚠️ Drawdown protection: stakes -40% (5 verliezen in 3 dagen)');
+          return 0.6;
+        }
+      }
+    }
+  } catch {}
+  return 1.0;
+}
+
 function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}) {
   const picks     = [];  // standalone picks (odd >= MIN_ODDS)
   const combiPool = [];  // alle valide picks incl. lage odds (voor combi-legs)
@@ -876,8 +952,9 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}) {
       ? calibEpBuckets[bk].weight
       : DEFAULT_EPW[bk];
 
-    // Half-Kelly unit sizing (fractional Kelly = 0.5 — Wharton aanbeveling)
-    const hk = k * KELLY_FRACTION;
+    // Half-Kelly unit sizing met drawdown protection
+    const ddMult = getDrawdownMultiplier();
+    const hk = k * KELLY_FRACTION * ddMult;
     const u  = hk>0.09?'1.0U' : hk>0.04?'0.5U' : '0.3U';
     const edge = Math.round((ep * odd - 1) * 100 * 10) / 10;
 
@@ -1235,6 +1312,140 @@ async function fetchTeamStats(teamId, leagueId, season) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// WEATHER DATA — Open-Meteo API (gratis, geen API key)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Simpele city→lat/lon mapping voor grote voetbalsteden
+const CITY_COORDS = {
+  'london':      { lat:51.50, lon:-0.13 },  'manchester':  { lat:53.48, lon:-2.24 },
+  'liverpool':   { lat:53.41, lon:-2.98 },  'birmingham':  { lat:52.48, lon:-1.89 },
+  'leeds':       { lat:53.80, lon:-1.55 },  'newcastle':   { lat:54.98, lon:-1.62 },
+  'madrid':      { lat:40.42, lon:-3.70 },  'barcelona':   { lat:41.39, lon:2.17 },
+  'sevilla':     { lat:37.39, lon:-5.99 },  'valencia':    { lat:39.47, lon:-0.38 },
+  'münchen':     { lat:48.14, lon:11.58 },  'munich':      { lat:48.14, lon:11.58 },
+  'dortmund':    { lat:51.51, lon:7.47 },   'berlin':      { lat:52.52, lon:13.41 },
+  'leipzig':     { lat:51.34, lon:12.37 },  'frankfurt':   { lat:50.11, lon:8.68 },
+  'milano':      { lat:45.46, lon:9.19 },   'milan':       { lat:45.46, lon:9.19 },
+  'roma':        { lat:41.90, lon:12.50 },  'rome':        { lat:41.90, lon:12.50 },
+  'torino':      { lat:45.07, lon:7.69 },   'napoli':      { lat:40.85, lon:14.27 },
+  'paris':       { lat:48.86, lon:2.35 },   'lyon':        { lat:45.76, lon:4.84 },
+  'marseille':   { lat:43.30, lon:5.37 },   'lille':       { lat:50.63, lon:3.06 },
+  'amsterdam':   { lat:52.37, lon:4.90 },   'rotterdam':   { lat:51.92, lon:4.48 },
+  'eindhoven':   { lat:51.44, lon:5.47 },   'lisboa':      { lat:38.72, lon:-9.14 },
+  'lisbon':      { lat:38.72, lon:-9.14 },  'porto':       { lat:41.16, lon:-8.63 },
+  'istanbul':    { lat:41.01, lon:28.98 },  'brussel':     { lat:50.85, lon:4.35 },
+  'brussels':    { lat:50.85, lon:4.35 },   'glasgow':     { lat:55.86, lon:-4.25 },
+  'edinburgh':   { lat:55.95, lon:-3.19 },  'wien':        { lat:48.21, lon:16.37 },
+  'vienna':      { lat:48.21, lon:16.37 },  'zürich':      { lat:47.38, lon:8.54 },
+  'zurich':      { lat:47.38, lon:8.54 },   'bern':        { lat:46.95, lon:7.45 },
+  'copenhagen':  { lat:55.68, lon:12.57 },  'københavn':   { lat:55.68, lon:12.57 },
+  'oslo':        { lat:59.91, lon:10.75 },  'stockholm':   { lat:59.33, lon:18.07 },
+  'gothenburg':  { lat:57.71, lon:11.97 },  'helsinki':     { lat:60.17, lon:24.94 },
+  'reykjavik':   { lat:64.15, lon:-21.95 }, 'athens':      { lat:37.98, lon:23.73 },
+  'warsaw':      { lat:52.23, lon:21.01 },  'krakow':      { lat:50.06, lon:19.94 },
+  'prague':      { lat:50.08, lon:14.44 },  'bucharest':   { lat:44.43, lon:26.10 },
+  'zagreb':      { lat:45.81, lon:15.98 },  'moscow':      { lat:55.76, lon:37.62 },
+  'kyiv':        { lat:50.45, lon:30.52 },  'belgrade':    { lat:44.79, lon:20.47 },
+  'budapest':    { lat:47.50, lon:19.04 },  'sofia':       { lat:42.70, lon:23.32 },
+  'nicosia':     { lat:35.17, lon:33.37 },  'bratislava':  { lat:48.15, lon:17.11 },
+  'cairo':       { lat:30.04, lon:31.24 },  'johannesburg':{ lat:-26.20, lon:28.05 },
+  'cape town':   { lat:-33.93, lon:18.42 }, 'pretoria':    { lat:-25.75, lon:28.19 },
+  'new york':    { lat:40.71, lon:-74.01 }, 'los angeles': { lat:34.05, lon:-118.24 },
+  'mexico city': { lat:19.43, lon:-99.13 }, 'bogota':      { lat:4.71, lon:-74.07 },
+  'bogotá':      { lat:4.71, lon:-74.07 },  'santiago':    { lat:-33.45, lon:-70.67 },
+  'lima':        { lat:-12.05, lon:-77.04 },'buenos aires':{ lat:-34.60, lon:-58.38 },
+  'são paulo':   { lat:-23.55, lon:-46.63 },'sao paulo':   { lat:-23.55, lon:-46.63 },
+  'rio de janeiro':{ lat:-22.91, lon:-43.17 },
+  'riyadh':      { lat:24.71, lon:46.67 },  'jeddah':      { lat:21.49, lon:39.19 },
+  'tokyo':       { lat:35.68, lon:139.69 }, 'osaka':       { lat:34.69, lon:135.50 },
+  'seoul':       { lat:37.57, lon:126.98 }, 'beijing':     { lat:39.90, lon:116.40 },
+  'shanghai':    { lat:31.23, lon:121.47 }, 'guangzhou':   { lat:23.13, lon:113.26 },
+  'sydney':      { lat:-33.87, lon:151.21 },'melbourne':   { lat:-37.81, lon:144.96 },
+};
+
+let weatherCallsThisScan = 0;
+const MAX_WEATHER_CALLS = 30;
+
+async function fetchMatchWeather(lat, lon, kickoffTime) {
+  if (weatherCallsThisScan >= MAX_WEATHER_CALLS) return null;
+  const date = kickoffTime.toISOString().slice(0, 10);
+  const hour = kickoffTime.getUTCHours();
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=precipitation,windspeed_10m,temperature_2m&start_date=${date}&end_date=${date}`;
+  try {
+    weatherCallsThisScan++;
+    const r = await fetch(url).then(r => r.json());
+    const idx = r.hourly?.time?.findIndex(t => t.includes(`T${String(hour).padStart(2,'0')}`)) ?? -1;
+    if (idx < 0) return null;
+    return {
+      rain: r.hourly.precipitation?.[idx] ?? 0,       // mm
+      wind: r.hourly.windspeed_10m?.[idx] ?? 0,       // km/h
+      temp: r.hourly.temperature_2m?.[idx] ?? 15,     // °C
+    };
+  } catch { return null; }
+}
+
+function getVenueCoords(fixture) {
+  // Probeer city uit fixture.venue.city, zoek in CITY_COORDS
+  const city = (fixture?.venue?.city || '').toLowerCase().trim();
+  if (!city) return null;
+  // Directe match
+  if (CITY_COORDS[city]) return CITY_COORDS[city];
+  // Fuzzy: check of city-naam een bekende stad bevat
+  for (const [key, coords] of Object.entries(CITY_COORDS)) {
+    if (city.includes(key) || key.includes(city)) return coords;
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POISSON GOAL MODEL — supplementair op het bestaande model
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function factorial(n) {
+  let r = 1; for (let i = 2; i <= n; i++) r *= i; return r;
+}
+
+function poissonProb(lambda, k) {
+  return Math.exp(-lambda) * Math.pow(lambda, k) / factorial(k);
+}
+
+function calcGoalProbs(homeAttack, homeDefense, awayAttack, awayDefense, leagueAvgGoals = 1.35) {
+  // Expected goals via Poisson: attack * defense * league avg
+  const homeExpG = Math.max(0.3, homeAttack * awayDefense * leagueAvgGoals);
+  const awayExpG = Math.max(0.3, awayAttack * homeDefense * leagueAvgGoals);
+
+  // Goal distribution matrix (0-6 goals each)
+  const probs = {};
+  for (let h = 0; h <= 6; h++) {
+    for (let a = 0; a <= 6; a++) {
+      probs[`${h}-${a}`] = poissonProb(homeExpG, h) * poissonProb(awayExpG, a);
+    }
+  }
+
+  // Derived probabilities
+  const overX = (line) => Object.entries(probs)
+    .filter(([s]) => { const [h,a] = s.split('-').map(Number); return h+a > line; })
+    .reduce((s, [,p]) => s + p, 0);
+
+  const bttsYes = Object.entries(probs)
+    .filter(([s]) => { const [h,a] = s.split('-').map(Number); return h>0 && a>0; })
+    .reduce((s, [,p]) => s + p, 0);
+
+  return {
+    homeExpG: +homeExpG.toFixed(2),
+    awayExpG: +awayExpG.toFixed(2),
+    over15: +overX(1.5).toFixed(4),
+    over25: +overX(2.5).toFixed(4),
+    over35: +overX(3.5).toFixed(4),
+    bttsYes: +bttsYes.toFixed(4),
+    bttsNo:  +(1 - bttsYes).toFixed(4),
+  };
+}
+
+// European cup league IDs — teams in these play midweek, risico op vermoeidheid
+const EUROPEAN_CUP_IDS = new Set([2, 3, 848]); // UCL, UEL, UECL
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PREMATCH SCAN — api-football.com
 // ═══════════════════════════════════════════════════════════════════════════════
 async function runPrematch(emit) {
@@ -1249,6 +1460,7 @@ async function runPrematch(emit) {
 
   // ── STAP 2: Team stats, blessures, scheidsrechters ───────────────────────
   h2hCallsThisScan = 0;
+  weatherCallsThisScan = 0;
   // Clear team stats cache for fresh scan
   for (const k of Object.keys(teamStatsCache)) delete teamStatsCache[k];
   let teamStatsCalls = 0;
@@ -1420,7 +1632,70 @@ async function runPrematch(emit) {
           }
         }
 
-        const totalAdj  = formAdj + injAdj + h2hAdj;
+        // ── Weather data (Open-Meteo, alleen voor kandidaat-wedstrijden) ──
+        let weatherAdj = 0, weatherNote = '', weatherData = null;
+        const venueCoords = getVenueCoords(f.fixture);
+        if (venueCoords && weatherCallsThisScan < MAX_WEATHER_CALLS) {
+          weatherData = await fetchMatchWeather(venueCoords.lat, venueCoords.lon, new Date(kickoffMs));
+          if (weatherData) {
+            const parts = [];
+            if (weatherData.rain > 5)  { weatherAdj -= 0.03; parts.push(`🌧️ ${weatherData.rain}mm regen`); }
+            if (weatherData.wind > 30) { weatherAdj -= 0.02; parts.push(`💨 ${weatherData.wind}km/h wind`); }
+            if (parts.length) weatherNote = ` | Weer: ${parts.join(', ')} → Under nudge ${(weatherAdj*100).toFixed(0)}%`;
+            else weatherNote = ` | ☀️ ${weatherData.temp}°C`;
+          }
+        }
+
+        // ── Poisson goal model (supplementair) ──────────────────────
+        let poissonNote = '', poissonOverP = null, poissonBttsP = null;
+        if (hmSt && awSt && hmSt.goalsFor > 0 && awSt.goalsFor > 0) {
+          // Bereken league gemiddelde doelpunten (benadering via standings)
+          const allTeams = Object.values(afStats);
+          const leagueAvgGF = allTeams.length > 4
+            ? allTeams.reduce((s,t) => s + (t.goalsFor || 0), 0) / allTeams.length
+            : 1.35;
+          // Attack rating = team GF/game / league avg; Defense rating = team GA/game / league avg
+          const leagueAvgGA = allTeams.length > 4
+            ? allTeams.reduce((s,t) => s + (t.goalsAgainst || 0), 0) / allTeams.length
+            : 1.35;
+          const hmAttack  = hmSt.goalsFor / leagueAvgGF;
+          const hmDefense = hmSt.goalsAgainst / leagueAvgGA;
+          const awAttack  = awSt.goalsFor / leagueAvgGF;
+          const awDefense = awSt.goalsAgainst / leagueAvgGA;
+
+          const poisson = calcGoalProbs(hmAttack, hmDefense, awAttack, awDefense, leagueAvgGF);
+          poissonOverP = poisson.over25;
+          poissonBttsP = poisson.bttsYes;
+          poissonNote = ` | 📊 Poisson xG: ${poisson.homeExpG}-${poisson.awayExpG}, O2.5: ${(poisson.over25*100).toFixed(0)}%, BTTS: ${(poisson.bttsYes*100).toFixed(0)}%`;
+        }
+
+        // ── Congestion detection (Europese cups) ────────────────────
+        let congestionAdj = 0, congestionNote = '';
+        // Check of een team in UCL/UEL/UECL speelt (=extra wedstrijden, vermoeidheid)
+        if (EUROPEAN_CUP_IDS.has(league.id)) {
+          // Dit IS een Europese cupwedstrijd — teams kunnen vermoeid zijn van weekendcompetitie
+          congestionAdj = -0.02;
+          congestionNote = ' | ⚠️ Europees duel: vermoeidheidsrisico';
+        } else {
+          // Domestic wedstrijd — check of een van de teams in Europese cups zit
+          const hmId2 = hmSt?.teamId, awId2 = awSt?.teamId;
+          // Zoek in vandaag's fixtures of dit team ook in een cup-competitie speelt
+          // Simpele benadering: we weten welke teams in top competitions spelen
+          // Teams uit top-5 competities met cupwedstrijden op weekdagen = vermoeidheidsrisico
+          const dayOfWeek = new Date(kickoffMs).getDay(); // 0=zo, 6=za
+          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+          if (isWeekend && (hmSt?.rank <= 4 || awSt?.rank <= 4)) {
+            // Top-4 teams spelen waarschijnlijk Europees op di/wo → weekend vermoeidheid
+            if (hmSt?.rank <= 4) { congestionAdj -= 0.02; }
+            if (awSt?.rank <= 4) { congestionAdj -= 0.02; }
+            if (congestionAdj < 0) {
+              congestionNote = ` | 🔄 Mogelijke congestie (top-${Math.min(hmSt?.rank||99, awSt?.rank||99)}, weekend na Europees)`;
+            }
+          }
+        }
+        congestionAdj = Math.max(-0.04, congestionAdj);
+
+        const totalAdj  = formAdj + injAdj + h2hAdj + congestionAdj;
         const adjHome2  = Math.min(0.88, adjHome + totalAdj);
         const adjAway2  = Math.max(0.08, adjAway - totalAdj);
 
@@ -1444,11 +1719,14 @@ async function runPrematch(emit) {
           if (Math.abs(predAdj) >= 0.005) sigs.push(`api_pred:${predAdj>0?'+':''}${(predAdj*100).toFixed(1)}%`);
           if (lineupPenalty.home !== 0) sigs.push(`lineup:${(lineupPenalty.home*100).toFixed(1)}%`);
           if (lineupPenalty.away !== 0) sigs.push(`lineup:${(lineupPenalty.away*100).toFixed(1)}%`);
+          if (Math.abs(congestionAdj) >= 0.005) sigs.push(`congestion:${(congestionAdj*100).toFixed(1)}%`);
+          if (weatherData && (weatherData.rain > 5 || weatherData.wind > 30)) sigs.push(`weather:${(weatherAdj*100).toFixed(1)}%`);
+          if (poissonOverP !== null) sigs.push(`poisson_o25:${(poissonOverP*100).toFixed(1)}%`);
           return sigs;
         };
         const matchSignals = buildSignals();
 
-        const sharedNotes = `${posStr}${splitNote}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}`;
+        const sharedNotes = `${posStr}${splitNote}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}${weatherNote}${poissonNote}${congestionNote}`;
         const reasonH = `Consensus: ${(fp.home*100).toFixed(1)}%→${(adjHome2*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`;
         const reasonA = `Consensus: ${(fp.away*100).toFixed(1)}%→${(adjAway2*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`;
         const reasonD = `Gelijkspel: ${((fp.draw||0)*100).toFixed(1)}% | ${bD?.bookie}: ${bD?.price}${sharedNotes} | ${ko}`;
@@ -1501,17 +1779,42 @@ async function runPrematch(emit) {
             }
           }
 
+          // ── Weather adjustment: regen/wind → nudge Under ─────────
+          let weatherOUAdj = 0, weatherOUNote = '';
+          if (weatherData) {
+            if (weatherData.rain > 5)  weatherOUAdj -= 0.03;
+            if (weatherData.wind > 30) weatherOUAdj -= 0.02;
+            if (weatherOUAdj !== 0) {
+              overP = Math.max(0.10, Math.min(0.90, overP + weatherOUAdj));
+              weatherOUNote = ` | Weer: Under nudge ${(weatherOUAdj*100).toFixed(0)}%`;
+            }
+          }
+
+          // ── Poisson cross-check: significant verschil = extra edge ──
+          let poissonOUAdj = 0, poissonOUNote = '';
+          if (poissonOverP !== null) {
+            const diff = poissonOverP - overP;
+            // Als Poisson >8% afwijkt van boekmaker → nudge richting Poisson
+            if (Math.abs(diff) > 0.08) {
+              poissonOUAdj = Math.max(-0.04, Math.min(0.04, diff * 0.3));
+              overP = Math.max(0.10, Math.min(0.90, overP + poissonOUAdj));
+              poissonOUNote = ` | Poisson O2.5: ${(poissonOverP*100).toFixed(0)}% (${poissonOUAdj>0?'+':''}${(poissonOUAdj*100).toFixed(1)}%)`;
+            }
+          }
+
           const overEdge  = overP * over.best.price - 1;
           const underEdge = under.best.price > 0 ? (1-overP) * under.best.price - 1 : -1;
           const ouSignals = [...matchSignals];
           if (tsNote) ouSignals.push(`team_stats:${tsNote.replace(/[^+\-\d.%]/g,'').trim()}`);
+          if (weatherOUAdj !== 0) ouSignals.push(`weather_ou:${(weatherOUAdj*100).toFixed(1)}%`);
+          if (Math.abs(poissonOUAdj) >= 0.005) ouSignals.push(`poisson_ou:${poissonOUAdj>0?'+':''}${(poissonOUAdj*100).toFixed(1)}%`);
           if (overEdge >= MIN_EDGE)
             mkP(`${hm} vs ${aw}`, league.name, `⚽ Over 2.5 goals`, over.best.price,
-              `O/U consensus: ${(overP*100).toFixed(1)}% over | ${over.best.bookie}: ${over.best.price}${tsNote}${predNote} | ${ko}`,
+              `O/U consensus: ${(overP*100).toFixed(1)}% over | ${over.best.bookie}: ${over.best.price}${tsNote}${weatherOUNote}${poissonOUNote}${predNote} | ${ko}`,
               Math.round(overP*100), overEdge * 0.24 * (cm.over?.multiplier ?? 1), kickoffTime, over.best.bookie, ouSignals, refereeName);
           if (underEdge >= MIN_EDGE && under.best.price >= 1.60)
             mkP(`${hm} vs ${aw}`, league.name, `🔒 Under 2.5 goals`, under.best.price,
-              `O/U consensus: ${((1-overP)*100).toFixed(1)}% under | ${under.best.bookie}: ${under.best.price}${tsNote} | ${ko}`,
+              `O/U consensus: ${((1-overP)*100).toFixed(1)}% under | ${under.best.bookie}: ${under.best.price}${tsNote}${weatherOUNote}${poissonOUNote} | ${ko}`,
               Math.round((1-overP)*100), underEdge * 0.22 * (cm.under?.multiplier ?? 1), kickoffTime, under.best.bookie, ouSignals, refereeName);
         }
 
@@ -1562,12 +1865,31 @@ async function runPrematch(emit) {
               if (awTS2 && awTS2.cleanSheetPct > 0.35) csBoost += Math.min(0.04, (awTS2.cleanSheetPct - 0.35) * 0.10);
               if (csBoost > 0) bttsYesP = Math.max(0.15, bttsYesP - csBoost);
 
+              // Weather: regen + beide teams scoren veel → BTTS Yes omlaag
+              let bttWeatherAdj = 0;
+              if (weatherData && weatherData.rain > 5 && hmGFAvg > 1.3 && awGFAvg > 1.3) {
+                bttWeatherAdj = -0.03;
+                bttsYesP = Math.max(0.15, bttsYesP + bttWeatherAdj);
+              }
+
+              // Poisson cross-check voor BTTS
+              let bttsPoissonAdj = 0;
+              if (poissonBttsP !== null) {
+                const diff = poissonBttsP - bttsYesP;
+                if (Math.abs(diff) > 0.08) {
+                  bttsPoissonAdj = Math.max(-0.04, Math.min(0.04, diff * 0.3));
+                  bttsYesP = Math.max(0.15, Math.min(0.85, bttsYesP + bttsPoissonAdj));
+                }
+              }
+
               const bttsNoP = 1 - bttsYesP;
               const bttsYesEdge = bttsYesP * bestYes.price - 1;
               const bttsNoEdge  = bttsNoP * bestNo.price - 1;
               const bttsSignals = [...matchSignals];
               if (bttsAdj > 0) bttsSignals.push(`btts_scoring:+${(bttsAdj*100).toFixed(1)}%`);
               if (csBoost > 0) bttsSignals.push(`btts_cleansheet:-${(csBoost*100).toFixed(1)}%`);
+              if (bttWeatherAdj !== 0) bttsSignals.push(`btts_weather:${(bttWeatherAdj*100).toFixed(1)}%`);
+              if (Math.abs(bttsPoissonAdj) >= 0.005) bttsSignals.push(`btts_poisson:${bttsPoissonAdj>0?'+':''}${(bttsPoissonAdj*100).toFixed(1)}%`);
 
               if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60)
                 mkP(`${hm} vs ${aw}`, league.name, `🔥 BTTS Ja`, bestYes.price,
