@@ -1487,6 +1487,7 @@ nav::-webkit-scrollbar { display: none; }
       <span style="font-size:12px;color:rgba(255,255,255,0.5)">winst</span>
       <span id="payout-profit" style="font-size:14px;font-weight:700;color:#34d399">€—</span>
     </div>
+    <div id="payout-edge"></div>
     <div class="modal-actions">
       <button class="btn btn-primary" onclick="logModalBet()">Bet loggen</button>
       <button class="btn btn-ghost" onclick="closeModal()">Annuleren</button>
@@ -2787,16 +2788,63 @@ function closeModal() { document.getElementById('modal').classList.remove('open'
 function updatePayout() {
   const odds   = parseFloat(document.getElementById('m-odds').value) || 0;
   const units  = parseFloat(document.getElementById('m-units').value) || 0;
-  const stake  = +(units * 10).toFixed(2);   // 1 unit = €10
+  const stake  = +(units * 10).toFixed(2);
   const total  = +(stake * odds).toFixed(2);
   const profit = +(total - stake).toFixed(2);
   document.getElementById('payout-stake').textContent  = stake  ? `€${stake.toFixed(2)}`  : '€—';
   document.getElementById('payout-total').textContent  = total  ? `€${total.toFixed(2)}`  : '€—';
   document.getElementById('payout-profit').textContent = profit ? `+€${profit.toFixed(2)}` : '€—';
+
+  // Herbereken edge als odds afwijken van scanner
+  const edgeEl = document.getElementById('payout-edge');
+  if (!edgeEl || !modalPick) return;
+  const origOdds = parseFloat(modalPick.odd || modalPick.odds) || 0;
+  const prob = (modalPick.prob || 0) / 100; // scanner kans
+  if (!origOdds || !prob || !odds) { edgeEl.innerHTML = ''; return; }
+
+  const fairOdds = 1 / prob;
+  const edge = ((odds - fairOdds) / fairOdds * 100);
+  const kelly = Math.max(0, (prob * (odds - 1) - (1 - prob)) / (odds - 1));
+  const hk = kelly * 0.5; // half-Kelly
+  const recUnits = hk < 0.015 ? 0 : hk < 0.04 ? 0.3 : hk < 0.08 ? 0.5 : hk < 0.12 ? 1.0 : 2.0;
+  const diff = odds - origOdds;
+  const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
+  const diffCol = diff >= 0 ? '#34d399' : '#f87171';
+
+  if (recUnits === 0) {
+    edgeEl.innerHTML = `<div style="color:#f87171;font-size:12px;font-weight:600;margin-top:4px">⚠️ Odds ${odds.toFixed(2)} (${diffStr}) — edge onvoldoende, overweeg niet te plaatsen</div>`;
+    document.getElementById('m-units').value = 0;
+  } else {
+    const scoreVal = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
+    edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center">
+      <span style="color:${diffCol};font-weight:700">Odds: ${origOdds} → ${odds.toFixed(2)} (${diffStr})</span>
+      <span style="color:var(--muted)">Edge: ${edge.toFixed(1)}%</span>
+      <span style="color:var(--accent);font-weight:700">${recUnits}U aanbevolen</span>
+      <span style="color:${scoreVal>=8?'#34d399':scoreVal>=6?'#fbbf24':'#94a3b8'};font-weight:700">${scoreVal}/10</span>
+    </div>`;
+    document.getElementById('m-units').value = recUnits;
+  }
+  // Update payout met nieuwe units
+  const newStake = +(recUnits * 10).toFixed(2);
+  const newTotal = +(newStake * odds).toFixed(2);
+  const newProfit = +(newTotal - newStake).toFixed(2);
+  document.getElementById('payout-stake').textContent  = newStake  ? `€${newStake.toFixed(2)}`  : '€—';
+  document.getElementById('payout-total').textContent  = newTotal  ? `€${newTotal.toFixed(2)}`  : '€—';
+  document.getElementById('payout-profit').textContent = newProfit ? `+€${newProfit.toFixed(2)}` : '€—';
 }
 
 document.getElementById('m-odds').addEventListener('input', updatePayout);
-document.getElementById('m-units').addEventListener('input', updatePayout);
+document.getElementById('m-units').addEventListener('input', () => {
+  // Alleen payout updaten, niet edge recalcen (user override)
+  const odds   = parseFloat(document.getElementById('m-odds').value) || 0;
+  const units  = parseFloat(document.getElementById('m-units').value) || 0;
+  const stake  = +(units * 10).toFixed(2);
+  const total  = +(stake * odds).toFixed(2);
+  const profit = +(total - stake).toFixed(2);
+  document.getElementById('payout-stake').textContent  = stake  ? `€${stake.toFixed(2)}`  : '€—';
+  document.getElementById('payout-total').textContent  = total  ? `€${total.toFixed(2)}`  : '€—';
+  document.getElementById('payout-profit').textContent = profit ? `+€${profit.toFixed(2)}` : '€—';
+});
 
 async function logModalBet() {
   const odds  = parseFloat(document.getElementById('m-odds').value);

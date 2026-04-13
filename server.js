@@ -26,10 +26,52 @@ if (VAPID_PUBLIC && VAPID_PRIVATE) {
   webpush.setVapidDetails('mailto:noreply@betscanner.app', VAPID_PUBLIC, VAPID_PRIVATE);
 }
 
+const PUSH_TAB = 'PushSubs';
+let _pushSubsCache = null;
+
 function loadPushSubs() {
+  if (_pushSubsCache) return _pushSubsCache;
   try { return JSON.parse(fs.readFileSync(PUSH_SUBS_FILE, 'utf8')); } catch { return []; }
 }
-function savePushSubs(subs) { fs.writeFileSync(PUSH_SUBS_FILE, JSON.stringify(subs)); }
+
+function savePushSubs(subs) {
+  _pushSubsCache = subs;
+  fs.writeFileSync(PUSH_SUBS_FILE, JSON.stringify(subs));
+  // Persist naar Google Sheets (async)
+  (async () => {
+    try {
+      const sh = getSheetsClient();
+      const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
+      if (!meta.data.sheets?.some(s => s.properties?.title === PUSH_TAB)) {
+        await sh.spreadsheets.batchUpdate({
+          spreadsheetId: SHEET_ID,
+          requestBody: { requests: [{ addSheet: { properties: { title: PUSH_TAB } } }] }
+        });
+      }
+      await sh.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID, range: `${PUSH_TAB}!A1`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[JSON.stringify(subs)]] }
+      });
+    } catch {}
+  })();
+}
+
+async function loadPushSubsFromSheets() {
+  try {
+    const sh = getSheetsClient();
+    const res = await sh.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID, range: `${PUSH_TAB}!A1`
+    });
+    const raw = res.data.values?.[0]?.[0];
+    if (raw) {
+      _pushSubsCache = JSON.parse(raw);
+      fs.writeFileSync(PUSH_SUBS_FILE, raw);
+      return _pushSubsCache;
+    }
+  } catch {}
+  return loadPushSubs();
+}
 
 async function sendPushToAll(payload) {
   const subs = loadPushSubs();
@@ -3365,6 +3407,7 @@ app.listen(PORT, () => {
   console.log(`   Bet tracker   : GET/POST /api/bets\n`);
   seedAdminUser().catch(e => console.error('Seed admin fout:', e.message));
   loadScanHistoryFromSheets().then(h => console.log(`📜 Scan history geladen: ${h.length} entries`)).catch(() => {});
+  loadPushSubsFromSheets().then(s => console.log(`🔔 Push subs geladen: ${s.length}`)).catch(() => {});
   scheduleDailyResultsCheck();
   scheduleDailyScan();
   scheduleOddsMonitor();
@@ -3391,8 +3434,12 @@ app.listen(PORT, () => {
 // Plan een scan op een bepaald uur (0-23); geeft de timeout handle terug
 function scheduleScanAtHour(hour) {
   const now    = new Date();
+  // hour is Amsterdam-tijd → converteer naar UTC
+  const amsNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  const offsetMs = amsNow.getTime() - now.getTime();
   const target = new Date(now);
   target.setHours(hour, 0, 0, 0);
+  target.setTime(target.getTime() - offsetMs);
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
   const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
@@ -3423,8 +3470,15 @@ function scheduleDailyScan() {
 // ── DAGELIJKSE UITSLAG CHECK (09:03 AM) ──────────────────────────────────────
 function scheduleDailyResultsCheck() {
   const now    = new Date();
+  // 06:00 Amsterdam-tijd → bereken UTC offset
+  const amsNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  const offsetMs = amsNow.getTime() - now.getTime();
   const target = new Date(now);
-  target.setHours(6, 0, 0, 0); // 06:00 — resultaten + push bij het opstaan
+  // Zet target op 06:00 Amsterdam = 06:00 - offset in UTC
+  const amsTarget = new Date(now);
+  amsTarget.setHours(6, 0, 0, 0);
+  // Corrigeer naar UTC: als Amsterdam +2h is, dan UTC = 04:00
+  target.setTime(amsTarget.getTime() - offsetMs);
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
   const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
