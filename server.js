@@ -1631,17 +1631,26 @@ async function runBasketball(emit) {
   let apiCallsUsed = 0;
 
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
 
   for (const league of NBA_LEAGUES) {
     try {
-      // Fixtures today
-      const fixtures = await afGet('v1.basketball.api-sports.io', '/games', {
-        date: today, league: league.id, season: league.season
-      });
-      apiCallsUsed++;
+      // Fixtures today + tomorrow (night games)
+      const [todayFixtures, tomorrowFixtures] = await Promise.all([
+        afGet('v1.basketball.api-sports.io', '/games', { date: today, league: league.id, season: league.season }),
+        afGet('v1.basketball.api-sports.io', '/games', { date: tomorrow, league: league.id, season: league.season }),
+      ]);
+      apiCallsUsed += 2;
 
-      const games = (fixtures || []).filter(f => {
+      // Merge: tomorrow only before 10:00 Amsterdam
+      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
+        return koH < 10;
+      })];
+
+      const games = allFixtures.filter(f => {
         const st = f.status?.short || '';
         return st === 'NS' || st === 'SCH'; // Not started / Scheduled
       });
@@ -1954,17 +1963,26 @@ async function runHockey(emit) {
   let apiCallsUsed = 0;
 
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
 
   for (const league of NHL_LEAGUES) {
     try {
-      // Fixtures today
-      const fixtures = await afGet('v1.hockey.api-sports.io', '/games', {
-        date: today, league: league.id, season: league.season
-      });
-      apiCallsUsed++;
+      // Fixtures today + tomorrow (night games)
+      const [todayFixtures, tomorrowFixtures] = await Promise.all([
+        afGet('v1.hockey.api-sports.io', '/games', { date: today, league: league.id, season: league.season }),
+        afGet('v1.hockey.api-sports.io', '/games', { date: tomorrow, league: league.id, season: league.season }),
+      ]);
+      apiCallsUsed += 2;
 
-      const games = (fixtures || []).filter(f => {
+      // Merge: tomorrow only before 10:00 Amsterdam
+      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
+        return koH < 10;
+      })];
+
+      const games = allFixtures.filter(f => {
         const st = f.status?.short || '';
         return st === 'NS' || st === 'SCH';
       });
@@ -2230,16 +2248,25 @@ async function runBaseball(emit) {
   let apiCallsUsed = 0;
 
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
 
   for (const league of BASEBALL_LEAGUES) {
     try {
-      // Fixtures today
-      const fixtures = await afGet('v1.baseball.api-sports.io', '/games', {
-        date: today, league: league.id, season: league.season
-      });
-      apiCallsUsed++;
+      // Fixtures today + tomorrow (night games)
+      const [todayFixtures, tomorrowFixtures] = await Promise.all([
+        afGet('v1.baseball.api-sports.io', '/games', { date: today, league: league.id, season: league.season }),
+        afGet('v1.baseball.api-sports.io', '/games', { date: tomorrow, league: league.id, season: league.season }),
+      ]);
+      apiCallsUsed += 2;
 
-      const games = (fixtures || []).filter(f => {
+      // Merge: tomorrow only before 10:00 Amsterdam
+      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
+        return koH < 10;
+      })];
+
+      const games = allFixtures.filter(f => {
         const st = f.status?.short || '';
         return st === 'NS' || st === 'SCH';
       });
@@ -2505,16 +2532,25 @@ async function runFootballUS(emit) {
   let apiCallsUsed = 0;
 
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
 
   for (const league of NFL_LEAGUES) {
     try {
-      // Fixtures today
-      const fixtures = await afGet('v1.american-football.api-sports.io', '/games', {
-        date: today, league: league.id, season: league.season
-      });
-      apiCallsUsed++;
+      // Fixtures today + tomorrow (night games)
+      const [todayFixtures, tomorrowFixtures] = await Promise.all([
+        afGet('v1.american-football.api-sports.io', '/games', { date: today, league: league.id, season: league.season }),
+        afGet('v1.american-football.api-sports.io', '/games', { date: tomorrow, league: league.id, season: league.season }),
+      ]);
+      apiCallsUsed += 2;
 
-      const games = (fixtures || []).filter(f => {
+      // Merge: tomorrow only before 10:00 Amsterdam
+      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
+        return koH < 10;
+      })];
+
+      const games = allFixtures.filter(f => {
         const st = f.status?.short || '';
         return st === 'NS' || st === 'SCH';
       });
@@ -2773,16 +2809,25 @@ async function runHandball(emit) {
   let apiCallsUsed = 0;
 
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
 
   for (const league of HANDBALL_LEAGUES) {
     try {
-      // Fixtures today
-      const fixtures = await afGet('v1.handball.api-sports.io', '/games', {
-        date: today, league: league.id, season: league.season
-      });
-      apiCallsUsed++;
+      // Fixtures today + tomorrow (night games)
+      const [todayFixtures, tomorrowFixtures] = await Promise.all([
+        afGet('v1.handball.api-sports.io', '/games', { date: today, league: league.id, season: league.season }),
+        afGet('v1.handball.api-sports.io', '/games', { date: tomorrow, league: league.id, season: league.season }),
+      ]);
+      apiCallsUsed += 2;
 
-      const games = (fixtures || []).filter(f => {
+      // Merge: tomorrow only before 10:00 Amsterdam
+      const allFixtures = [...(todayFixtures || []), ...(tomorrowFixtures || []).filter(g => {
+        const ko = new Date(g.date || g.timestamp * 1000);
+        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
+        return koH < 10;
+      })];
+
+      const games = allFixtures.filter(f => {
         const st = f.status?.short || '';
         return st === 'NS' || st === 'SCH';
       });

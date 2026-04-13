@@ -3912,16 +3912,25 @@ async function loadStatus() {
       </div>
     `;
 
-    // Competities
-    const leagues = d.leagues || [];
-    document.getElementById('status-league-count').textContent = `${leagues.length} competities`;
-    document.getElementById('status-leagues').innerHTML = leagues.map(l =>
-      `<div style="padding:3px 0;break-inside:avoid;display:flex;align-items:center;gap:6px">
-        <span style="color:var(--green);font-size:10px">●</span>
-        <span style="font-size:12px">${l.name}</span>
-        <span style="font-size:10px;color:var(--muted);margin-left:auto">${(l.ha*100).toFixed(0)}% HA</span>
-      </div>`
-    ).join('');
+    // Competities — d.leagues is een object met per-sport arrays
+    const leaguesObj = d.leagues || {};
+    const sportLabels = { football: '⚽ Voetbal', basketball: '🏀 Basketbal', hockey: '🏒 Hockey', baseball: '⚾ Baseball', 'american-football': '🏈 NFL', handball: '🤾 Handbal' };
+    let totalLeagues = 0;
+    let leaguesHtml = '';
+    for (const [sport, arr] of Object.entries(leaguesObj)) {
+      if (!Array.isArray(arr) || !arr.length) continue;
+      totalLeagues += arr.length;
+      leaguesHtml += `<div style="font-size:11px;font-weight:700;color:var(--accent);margin:8px 0 4px;text-transform:uppercase">${sportLabels[sport] || sport} (${arr.length})</div>`;
+      leaguesHtml += arr.map(l =>
+        `<div style="padding:3px 0;break-inside:avoid;display:flex;align-items:center;gap:6px">
+          <span style="color:var(--green);font-size:10px">●</span>
+          <span style="font-size:12px">${l.name}</span>
+          <span style="font-size:10px;color:var(--muted);margin-left:auto">${(l.ha*100).toFixed(0)}% HA</span>
+        </div>`
+      ).join('');
+    }
+    document.getElementById('status-league-count').textContent = `${totalLeagues} competities`;
+    document.getElementById('status-leagues').innerHTML = leaguesHtml;
   } catch { document.getElementById('status-services').innerHTML = '<div style="color:var(--muted)">Fout bij laden</div>'; }
 }
 
