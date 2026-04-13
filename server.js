@@ -92,6 +92,21 @@ app.use((req, res, next) => {
   requireAuth(req, res, next);
 });
 
+// Blokkeer toegang tot server code en gevoelige bestanden
+const BLOCKED_FILES = new Set([
+  'server.js', 'package.json', 'package-lock.json', 'render.yaml',
+  'migrate-to-supabase.js', 'gsheets-key.json', 'calibration.json',
+  'signal_weights.json', 'af-usage.json', 'push-subs.json',
+  'scan-history.json', '.gitignore', '.git', 'README.md', 'node_modules'
+]);
+app.use((req, res, next) => {
+  const file = req.path.split('/').pop().toLowerCase();
+  const dir = req.path.split('/')[1]?.toLowerCase();
+  if (BLOCKED_FILES.has(file) || BLOCKED_FILES.has(dir)) {
+    return res.status(404).send('Not found');
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
