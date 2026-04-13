@@ -4008,17 +4008,6 @@ function scheduleDailyResultsCheck() {
       await tg(`⚠️ Dagelijkse check mislukt: ${e.message}`).catch(() => {});
     }
 
-    // ── Live scan: kijk of er al waardevolle live games zijn ────────────────
-    try {
-      const noopEmit = () => {};
-      const livePicks = await runLive(noopEmit).catch(() => []);
-      if (livePicks?.length > 0) {
-        console.log(`⚡ Dagelijkse live check: ${livePicks.length} pick(s) gevonden en gestuurd`);
-      }
-    } catch (e) {
-      console.error('Dagelijkse live check fout:', e.message);
-    }
-
     // Auto-tune signalen na resultatencheck
     await autoTuneSignals().catch(e => console.error('Auto-tune fout:', e.message));
 
