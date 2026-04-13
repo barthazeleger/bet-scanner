@@ -708,6 +708,10 @@ nav::-webkit-scrollbar { display: none; }
           <select id="f-tip"><option>Main</option><option>Side</option></select>
         </div>
         <div class="field">
+          <label>Bookmaker</label>
+          <select id="f-bookie"><option>Bet365</option><option>Unibet</option><option>Toto</option><option>Pinnacle</option><option>Anders</option></select>
+        </div>
+        <div class="field">
           <label>Uitkomst</label>
           <select id="f-uitkomst"><option>Open</option><option>W</option><option>L</option></select>
         </div>
@@ -1506,6 +1510,10 @@ nav::-webkit-scrollbar { display: none; }
       <div class="field">
         <label>Datum</label>
         <input type="text" id="m-datum">
+      </div>
+      <div class="field">
+        <label>Bookmaker</label>
+        <select id="m-bookie"><option>Bet365</option><option>Unibet</option><option>Toto</option><option>Pinnacle</option><option>Anders</option></select>
       </div>
     </div>
     <div id="payout-bar" style="display:flex;align-items:center;justify-content:space-between;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.2);border-radius:8px;padding:10px 14px;margin-bottom:4px">
@@ -2912,6 +2920,10 @@ function openModal(idx, labelHint) {
   document.getElementById('m-units').value = parseFloat(String(modalPick.units||'1').replace('U','')) || 1;
   document.getElementById('m-datum').value = pad(now.getDate())+'-'+pad(now.getMonth()+1)+'-'+now.getFullYear();
   document.getElementById('m-tijd').value  = modalPick.kickoff || '';
+  // Bookmaker uit pick data
+  const bkSel = document.getElementById('m-bookie');
+  const bkName = (modalPick.bookie || 'Bet365').toLowerCase();
+  for (const opt of bkSel.options) { if (opt.value.toLowerCase().includes(bkName.split(' ')[0])) { opt.selected = true; break; } }
   document.getElementById('modal-msg').textContent = '';
   updatePayout();
   document.getElementById('modal').classList.add('open');
