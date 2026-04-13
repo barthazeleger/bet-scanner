@@ -69,7 +69,7 @@ header {
   top: 0;
   z-index: 100;
   box-shadow: var(--shadow);
-  overflow: hidden;
+  overflow: visible;
 }
 .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .brand-icon { width: 32px; height: 32px; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
@@ -1182,15 +1182,32 @@ nav::-webkit-scrollbar { display: none; }
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v6.0</span><br>
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v6.3</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Email, 2FA, notificaties, vertaling, security</div>
+          <div style="color:var(--muted);line-height:1.7">📧 Email via Resend: goedkeuringsmail bij account activatie<br>
+          🔐 2FA: optionele email-verificatie bij login (6-cijferige code, 5 min geldig)<br>
+          🔔 Notificatie dropdown: alle Telegram meldingen nu ook in-app zichtbaar<br>
+          🌍 Volledige EN/NL vertaling: 200+ teksten, taalwissel in profiel + login<br>
+          ✍️ Teksten gehumaniseerd: geen AI-patronen meer, natuurlijk taalgebruik<br>
+          🛡️ Security audit: 22 kwetsbaarheden gefixt (rate limiting, whitelist, input validatie)<br>
+          🧪 31 unit tests: Kelly, Poisson, scoring, rate limiter (npm test)<br>
+          📋 Sorteerbare tracker headers, editable odds/units/bookmaker per bet</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v6.0</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
           <div style="font-weight:600;margin-bottom:5px">Supabase, EdgePickr rebrand, logo, domein</div>
-          <div style="color:var(--muted);line-height:1.7">🗄️ Google Sheets → Supabase (PostgreSQL) — alles persistent, snel, schaalbaar<br>
-          🎨 Rebrand: Bet Scanner → EdgePickr · "Outsmart the bookmaker"<br>
-          🖼️ Eigen logo: crosshair + trendlijn icoon in header, favicon, PWA<br>
-          🌐 edgepickr.com custom domein via TransIP<br>
+          <div style="color:var(--muted);line-height:1.7">🗄️ Google Sheets → Supabase (PostgreSQL): alles persistent en snel<br>
+          🎨 Rebrand naar EdgePickr met eigen logo en tagline<br>
+          🌐 edgepickr.com live met SSL via Render + TransIP<br>
           📊 API usage tracking persistent in database<br>
           🔔 Supabase grootte monitoring met upgrade-advies</div>
         </div>
