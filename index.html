@@ -1985,8 +1985,8 @@ function renderBetsTable(bets) {
       <td>${b.sport}</td>
       <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis" title="${b.wedstrijd}">${b.wedstrijd}</td>
       <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${b.markt}">${b.markt}</td>
-      <td><strong>${b.odds}</strong></td>
-      <td>${b.units}U</td>
+      <td><strong style="cursor:pointer" onclick="editBetField(${b.id},'odds',${b.odds})" title="Klik om aan te passen">${b.odds}</strong></td>
+      <td style="cursor:pointer" onclick="editBetField(${b.id},'units',${b.units})" title="Klik om aan te passen">${b.units}U</td>
       <td>€${b.inzet}</td>
       <td style="text-align:center">${b.score != null ? `<span style="font-size:11px;font-weight:700;color:${b.score>=8?'#34d399':b.score>=6?'#fbbf24':'#94a3b8'}">${b.score}/10</span>` : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
       <td>
@@ -2007,6 +2007,20 @@ function setOutcome(id, v) {
   api('/api/bets/' + id, {
     method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ uitkomst: v })
   }).then(r => r?.json()).then(d => { if(d){ betData = d; renderStats(d.stats); renderBetsTable(d.bets); } });
+}
+
+function editBetField(id, field, currentVal) {
+  const label = field === 'odds' ? 'Nieuwe odds' : 'Nieuwe units';
+  const val = prompt(`${label} (was ${currentVal}):`, currentVal);
+  if (val === null || val === '') return;
+  const num = parseFloat(val);
+  if (isNaN(num) || num <= 0) return;
+  api('/api/bets/' + id, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ [field]: num })
+  }).then(r => r?.json()).then(d => {
+    if (d) { betData = d; renderStats(d.stats); renderBetsTable(d.bets); }
+  });
 }
 
 function removeBet(id) {

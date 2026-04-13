@@ -2944,7 +2944,37 @@ app.post('/api/bets', async (req, res) => {
 // Uitkomst updaten
 app.put('/api/bets/:id', async (req, res) => {
   try {
-    await updateBetOutcome(req.params.id, req.body.uitkomst);
+    const { uitkomst, odds, units } = req.body;
+    // Als alleen uitkomst: gebruik bestaande flow
+    if (uitkomst && !odds && !units) {
+      await updateBetOutcome(req.params.id, uitkomst);
+    } else {
+      // Edit odds/units/uitkomst
+      const sh = getSheetsClient();
+      const { tab } = await getSheetMeta();
+      const { _raw } = await readBets();
+      const id = parseFloat(req.params.id);
+      for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
+        if (parseFloat(_raw[i]?.[0]) !== id) continue;
+        const rowNum = i + 1;
+        if (odds != null) {
+          await sh.spreadsheets.values.update({
+            spreadsheetId: SHEET_ID, range: `${tab}!F${rowNum}`,
+            valueInputOption: 'RAW', requestBody: { values: [[parseFloat(odds)]] }
+          });
+        }
+        if (units != null) {
+          const u = parseFloat(units);
+          const inzet = +(u * UNIT_EUR).toFixed(2);
+          await sh.spreadsheets.values.update({
+            spreadsheetId: SHEET_ID, range: `${tab}!G${rowNum}:H${rowNum}`,
+            valueInputOption: 'RAW', requestBody: { values: [[u, inzet]] }
+          });
+        }
+        if (uitkomst) await updateBetOutcome(id, uitkomst);
+        break;
+      }
+    }
     res.json(await readBets());
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
