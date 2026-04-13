@@ -1,17 +1,32 @@
 # EdgePickr Business Plan
 
 ## Product
-EdgePickr is een data-driven sportsbetting analytics platform dat AI en statistische modellen combineert om value bets te vinden in 59 competities wereldwijd.
+EdgePickr is een multi-sport betting analytics platform dat AI en statistische modellen combineert om de beste value bets te vinden uit 6 sporten en 100+ competities wereldwijd. Het model leert van elk resultaat en wordt elke dag scherper.
+
+## 6 Sporten, 365 Dagen
+
+| Sport | Seizoen | Wedstrijden/dag | Markten |
+|---|---|---|---|
+| ⚽ Voetbal | aug-mei | 50-200 | Match Winner, Over/Under, BTTS, Draw No Bet, Handicap |
+| 🏀 Basketball | okt-jun | 10-30 | Moneyline, Spread, Over/Under Totals |
+| ⚾ Baseball | apr-okt | 10-15 | Moneyline, Run Line, Over/Under, NRFI |
+| 🏒 Hockey | okt-jun | 5-15 | Moneyline, Puck Line, Over/Under |
+| 🏈 Am. Football | sep-feb | 5-16 | Moneyline, Spread, Over/Under |
+| 🤾 Handball | sep-jun | 5-15 | Moneyline, Handicap, Over/Under |
+
+**Geen off-season.** Elke maand minstens 3-4 sporten actief. In het piekseizoen (okt-apr) draait alles tegelijk: 200+ wedstrijden per dag, top 5 picks eruit.
 
 ## Unique Selling Points
 
-1. **Zelflerend model** — wordt elke dag beter door resultaten
-2. **14 databronnen in 1 scan** — vorm, H2H, blessures, weer, standings, Poisson model, odds consensus
-3. **CLV tracking** — bewijst dat het model de markt verslaat, niet alleen op geluk draait
-4. **Wedstrijd analyser** — typ een wedstrijd en krijg direct een data-gedreven analyse
-5. **Geen gokgevoel** — alles onderbouwd met wiskunde en data
-6. **Multi-market** — Over/Under, BTTS, Match Winner, Draw No Bet, Handicap
-7. **Real-time tracking** — volg je bets live met automatische resultaten
+1. **6 sporten, 1 platform** — voetbal, basketball, baseball, hockey, NFL, handball
+2. **Geen off-season** — het hele jaar picks, ongeacht welk seizoen
+3. **Zelflerend model per sport** — aparte calibratie, signalen en gewichten per sport
+4. **Cherry-picking uit 200+ wedstrijden** — alleen de absolute top 5 per dag
+5. **14+ databronnen per pick** — vorm, H2H, blessures, weer, standings, sport-specifieke stats
+6. **CLV tracking** — bewijst dat het model de markt verslaat
+7. **Wedstrijd analyser** — typ een wedstrijd en krijg direct een analyse
+8. **Real-time tracking** — volg je bets live met automatische resultaten
+9. **Bewezen signalen** — gebaseerd op academisch onderzoek per sport
 
 ## Doelgroep
 - Recreatieve sportwedders (25-45) die slimmer willen wedden
