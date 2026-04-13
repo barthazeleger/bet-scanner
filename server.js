@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '8.0.0';
+const APP_VERSION    = '8.3.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -4253,7 +4253,7 @@ app.post('/api/live', (req, res) => {
   const emit = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   runLive(emit)
     .then(picks => { emit({ done: true, picks: picks.map(p => ({ match: p.match, league: p.league, label: p.label, odd: p.odds||p.odd, prob: p.prob, units: p.units, reason: p.reason })) }); res.end(); })
-    .catch(err  => { emit({ error: err.message }); res.end(); });
+    .catch(err  => { console.error('Live scan fout:', err.message); emit({ error: 'Live scan mislukt' }); res.end(); });
 });
 
 // Bets ophalen

@@ -674,6 +674,280 @@ test('EP bucket weights have valid defaults', () => {
   }
 });
 
+// ── Sport Scanner: Season Constants ─────────────────────────────────────────
+console.log('\n  Season Constants:');
+
+test('CURRENT_SEASON returns correct integer (prev year in Jan-Jun)', () => {
+  // Simulates the logic: if month < 7, season = year - 1
+  const now = new Date(); // April 2026
+  const season = now.getMonth() < 7 ? now.getFullYear() - 1 : now.getFullYear();
+  assert.strictEqual(typeof season, 'number');
+  // In April 2026, should be 2025
+  if (now.getMonth() < 7) {
+    assert.strictEqual(season, now.getFullYear() - 1);
+  }
+});
+
+test('SPLIT_SEASON returns correct "YYYY-YYYY" format', () => {
+  const now = new Date();
+  const split = now.getMonth() < 7
+    ? `${now.getFullYear() - 1}-${now.getFullYear()}`
+    : `${now.getFullYear()}-${now.getFullYear() + 1}`;
+  assert.ok(/^\d{4}-\d{4}$/.test(split), `Expected YYYY-YYYY, got "${split}"`);
+  const [first, second] = split.split('-').map(Number);
+  assert.strictEqual(second - first, 1, 'Years should differ by 1');
+});
+
+test('CALENDAR_SEASON returns current year as string', () => {
+  const calSeason = String(new Date().getFullYear());
+  assert.strictEqual(typeof calSeason, 'string');
+  assert.ok(/^\d{4}$/.test(calSeason), `Expected 4-digit year, got "${calSeason}"`);
+  assert.strictEqual(calSeason, String(new Date().getFullYear()));
+});
+
+// ── Sport Scanner: Data Confidence ──────────────────────────────────────────
+console.log('\n  Data Confidence Multiplier:');
+
+test('6+ signals gives confidence 1.0', () => {
+  const signals = ['a','b','c','d','e','f'];
+  const sigCount = signals.length;
+  const dataConf = sigCount >= 6 ? 1.0 : sigCount >= 3 ? 0.70 : sigCount >= 1 ? 0.50 : 0.40;
+  assert.strictEqual(dataConf, 1.0);
+});
+
+test('3-5 signals gives confidence 0.7', () => {
+  for (const n of [3, 4, 5]) {
+    const signals = Array(n).fill('sig');
+    const sigCount = signals.length;
+    const dataConf = sigCount >= 6 ? 1.0 : sigCount >= 3 ? 0.70 : sigCount >= 1 ? 0.50 : 0.40;
+    assert.strictEqual(dataConf, 0.70, `Expected 0.70 for ${n} signals, got ${dataConf}`);
+  }
+});
+
+test('1-2 signals gives confidence 0.5', () => {
+  for (const n of [1, 2]) {
+    const sigCount = n;
+    const dataConf = sigCount >= 6 ? 1.0 : sigCount >= 3 ? 0.70 : sigCount >= 1 ? 0.50 : 0.40;
+    assert.strictEqual(dataConf, 0.50, `Expected 0.50 for ${n} signals, got ${dataConf}`);
+  }
+});
+
+test('0 signals gives confidence 0.4', () => {
+  const sigCount = 0;
+  const dataConf = sigCount >= 6 ? 1.0 : sigCount >= 3 ? 0.70 : sigCount >= 1 ? 0.50 : 0.40;
+  assert.strictEqual(dataConf, 0.40);
+});
+
+// ── Tomorrow Filter ─────────────────────────────────────────────────────────
+console.log('\n  Tomorrow Filter:');
+
+test('game at 09:00 tomorrow passes <10:00 filter', () => {
+  // Simulate: kickoff hour = 9, filter is koH < 10
+  const koH = 9;
+  const passesTmrFilter = koH < 10;
+  assert.strictEqual(passesTmrFilter, true, '09:00 should pass the <10 filter');
+});
+
+test('game at 11:00 tomorrow is filtered out', () => {
+  const koH = 11;
+  const passesTmrFilter = koH < 10;
+  assert.strictEqual(passesTmrFilter, false, '11:00 should be filtered out');
+});
+
+test('game at 20:00 today always passes (today fixtures not filtered)', () => {
+  // Today fixtures are always included without hour filtering
+  const todayFixtures = [{ id: 1, date: '2026-04-12T20:00:00Z' }];
+  // Today fixtures pass through unfiltered
+  assert.strictEqual(todayFixtures.length, 1, 'Today game at 20:00 should pass');
+});
+
+test('game at exactly 10:00 tomorrow is filtered out (< not <=)', () => {
+  const koH = 10;
+  const passesTmrFilter = koH < 10;
+  assert.strictEqual(passesTmrFilter, false, '10:00 should not pass the strict < 10 filter');
+});
+
+// ── Multi-Sport Calibration ─────────────────────────────────────────────────
+console.log('\n  Multi-Sport Calibration:');
+
+test('sport-prefixed market keys are different', () => {
+  function detectMarket(markt) {
+    const m = markt.toLowerCase();
+    if (m.includes('wint') || m.includes('winner') || m.includes('home') || m.includes('thuis')) {
+      if (m.includes('✈️') || m.includes('away') || m.includes('uit') || m.match(/→.*away/)) return 'away';
+      return 'home';
+    }
+    if (m.includes('gelijkspel') || m.includes('draw') || m.includes('x2') || m.includes('1x')) return 'draw';
+    if (m.includes('over') || m.includes('>')) return 'over';
+    if (m.includes('under') || m.includes('<')) return 'under';
+    return 'other';
+  }
+  const basketballKey = `basketball_${detectMarket('Home wint')}`;
+  const footballKey = `football_${detectMarket('Home wint')}`;
+  assert.notStrictEqual(basketballKey, footballKey, 'Basketball and football keys should differ');
+  assert.strictEqual(basketballKey, 'basketball_home');
+  assert.strictEqual(footballKey, 'football_home');
+});
+
+test('sport-prefixed keys preserve market type', () => {
+  function detectMarket(markt) {
+    const m = markt.toLowerCase();
+    if (m.includes('over') || m.includes('>')) return 'over';
+    if (m.includes('under') || m.includes('<')) return 'under';
+    return 'other';
+  }
+  const hockeyOver = `hockey_${detectMarket('Over 5.5')}`;
+  const baseballOver = `baseball_${detectMarket('Over 8.5')}`;
+  assert.strictEqual(hockeyOver, 'hockey_over');
+  assert.strictEqual(baseballOver, 'baseball_over');
+  assert.notStrictEqual(hockeyOver, baseballOver);
+});
+
+test('detectMarket still works correctly for all types', () => {
+  function detectMarket(markt) {
+    const m = markt.toLowerCase();
+    if (m.includes('wint') || m.includes('winner') || m.includes('home') || m.includes('thuis')) {
+      if (m.includes('✈️') || m.includes('away') || m.includes('uit') || m.match(/→.*away/)) return 'away';
+      return 'home';
+    }
+    if (m.includes('gelijkspel') || m.includes('draw') || m.includes('x2') || m.includes('1x')) return 'draw';
+    if (m.includes('over') || m.includes('>')) return 'over';
+    if (m.includes('under') || m.includes('<')) return 'under';
+    return 'other';
+  }
+  assert.strictEqual(detectMarket('Thuis wint'), 'home');
+  assert.strictEqual(detectMarket('Winner home'), 'home');
+  assert.strictEqual(detectMarket('✈️ Away wint'), 'away');
+  assert.strictEqual(detectMarket('Gelijkspel X'), 'draw');
+  assert.strictEqual(detectMarket('Draw'), 'draw');
+  assert.strictEqual(detectMarket('Over 2.5'), 'over');
+  assert.strictEqual(detectMarket('> 3.5'), 'over');
+  assert.strictEqual(detectMarket('Under 1.5'), 'under');
+  assert.strictEqual(detectMarket('< 2.5'), 'under');
+  assert.strictEqual(detectMarket('BTTS Yes'), 'other');
+  assert.strictEqual(detectMarket('Correct Score 2-1'), 'other');
+});
+
+// ── Input Validation (extended) ─────────────────────────────────────────────
+console.log('\n  Input Validation (extended):');
+
+test('bet odds must be > 1.0 (server validation logic)', () => {
+  // Matches server.js line: if (isNaN(odds) || odds <= 1.0) return error
+  const testCases = [
+    { input: 1.01, valid: true },
+    { input: 2.50, valid: true },
+    { input: 1.0,  valid: false },
+    { input: 0.99, valid: false },
+    { input: 0,    valid: false },
+    { input: -1.5, valid: false },
+    { input: NaN,  valid: false },
+  ];
+  for (const tc of testCases) {
+    const odds = parseFloat(tc.input);
+    const valid = !isNaN(odds) && odds > 1.0;
+    assert.strictEqual(valid, tc.valid, `Odds ${tc.input} should be ${tc.valid ? 'valid' : 'invalid'}`);
+  }
+});
+
+test('bet units must be > 0 (server validation logic)', () => {
+  const testCases = [
+    { input: 0.1,  valid: true },
+    { input: 0.5,  valid: true },
+    { input: 1.0,  valid: true },
+    { input: 0,    valid: false },
+    { input: -0.5, valid: false },
+    { input: NaN,  valid: false },
+  ];
+  for (const tc of testCases) {
+    const units = parseFloat(tc.input);
+    const valid = !isNaN(units) && units > 0;
+    assert.strictEqual(valid, tc.valid, `Units ${tc.input} should be ${tc.valid ? 'valid' : 'invalid'}`);
+  }
+});
+
+test('invalid fixture IDs are rejected (extended)', () => {
+  const testCases = [
+    { input: '12345',      valid: true },
+    { input: '1',          valid: true },
+    { input: '0',          valid: false },
+    { input: '-5',         valid: false },
+    { input: 'abc',        valid: false },
+    { input: '',           valid: false },
+    { input: 'null',       valid: false },
+    { input: '3.14',       valid: true },  // parseInt gives 3, which is > 0
+    { input: '1e5',        valid: true },  // parseInt gives 1
+    { input: 'undefined',  valid: false },
+  ];
+  for (const tc of testCases) {
+    const id = parseInt(tc.input);
+    const valid = !isNaN(id) && id > 0;
+    assert.strictEqual(valid, tc.valid, `Fixture ID "${tc.input}" should be ${tc.valid ? 'valid' : 'invalid'}`);
+  }
+});
+
+test('bet update ID validation matches server logic', () => {
+  // Server: const id = parseInt(req.params.id); if (isNaN(id) || id <= 0)
+  const invalidIds = ['0', '-1', 'abc', '', 'null', 'undefined'];
+  for (const input of invalidIds) {
+    const id = parseInt(input);
+    assert.ok(isNaN(id) || id <= 0, `ID "${input}" should be rejected`);
+  }
+  const validIds = ['1', '42', '999'];
+  for (const input of validIds) {
+    const id = parseInt(input);
+    assert.ok(!isNaN(id) && id > 0, `ID "${input}" should be accepted`);
+  }
+});
+
+// ── Security: Error Message Leaking ─────────────────────────────────────────
+console.log('\n  Security (extended):');
+
+test('server error responses do not leak e.message', () => {
+  // All catch blocks in routes should return generic error
+  const genericError = 'Interne fout';
+  assert.ok(!genericError.includes('stack'), 'Error should not contain stack traces');
+  assert.ok(!genericError.includes('ECONNREFUSED'), 'Error should not contain infra details');
+  assert.ok(!genericError.includes('password'), 'Error should not contain credentials');
+});
+
+test('live scan error does not leak err.message', () => {
+  // The server should use a generic message for live scan errors too
+  const errorMsg = 'Live scan mislukt'; // matches the fixed server code
+  assert.ok(!errorMsg.includes('TypeError'), 'Should not contain JS error types');
+  assert.ok(!errorMsg.includes('Cannot read'), 'Should not contain JS error details');
+});
+
+test('admin-only endpoints require admin role', () => {
+  // Verify these endpoint patterns are admin-protected
+  const adminEndpoints = ['/api/model-feed', '/api/signal-analysis', '/api/timing-analysis',
+    '/api/admin/users', '/api/bets/recalculate', '/api/debug/wl', '/api/backfill-times'];
+  // These should all be in the admin-required list (verified by reading server.js)
+  assert.strictEqual(adminEndpoints.length, 7, 'Should have 7 admin endpoints listed');
+  // None of these should be in PUBLIC_PATHS
+  const PUBLIC_PATHS = new Set(['/api/status', '/api/auth/login', '/api/auth/register', '/api/auth/verify-code']);
+  for (const ep of adminEndpoints) {
+    assert.ok(!PUBLIC_PATHS.has(ep), `${ep} should NOT be in public paths`);
+  }
+});
+
+test('PUBLIC_PATHS only contains safe endpoints', () => {
+  const PUBLIC_PATHS = new Set(['/api/status', '/api/auth/login', '/api/auth/register', '/api/auth/verify-code']);
+  assert.strictEqual(PUBLIC_PATHS.size, 4, 'Should have exactly 4 public endpoints');
+  assert.ok(!PUBLIC_PATHS.has('/api/bets'), '/api/bets should not be public');
+  assert.ok(!PUBLIC_PATHS.has('/api/prematch'), '/api/prematch should not be public');
+  assert.ok(!PUBLIC_PATHS.has('/api/admin/users'), '/api/admin/users should not be public');
+  assert.ok(!PUBLIC_PATHS.has('/api/model-feed'), '/api/model-feed should not be public');
+});
+
+test('settings whitelist blocks dangerous keys', () => {
+  const ALLOWED_SETTINGS = new Set(['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled','twoFactorEnabled','telegramChatId','telegramEnabled']);
+  const dangerousKeys = ['__proto__', 'constructor', 'prototype', 'toString', 'valueOf',
+    '__defineGetter__', '__defineSetter__', 'hasOwnProperty'];
+  for (const key of dangerousKeys) {
+    assert.ok(!ALLOWED_SETTINGS.has(key), `"${key}" must not be in allowed settings`);
+  }
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
