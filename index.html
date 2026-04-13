@@ -772,8 +772,18 @@ nav::-webkit-scrollbar { display: none; }
     <table class="bets-table">
       <thead>
         <tr>
-          <th>#</th><th>Datum</th><th>Aftrap</th><th>Sport</th><th>Wedstrijd</th><th>Bet</th>
-          <th>Odds</th><th>Units</th><th>Bookie</th><th>Inzet</th><th>Score</th><th>Uitkomst</th><th>W/L</th><th>CLV</th><th></th>
+          <th style="cursor:pointer" onclick="sortBets('id')">#</th>
+          <th style="cursor:pointer" onclick="sortBets('datum')">Datum</th>
+          <th style="cursor:pointer" onclick="sortBets('tijd')">Aftrap</th>
+          <th>Sport</th><th>Wedstrijd</th><th>Bet</th>
+          <th style="cursor:pointer" onclick="sortBets('odds')">Odds</th>
+          <th style="cursor:pointer" onclick="sortBets('units')">Units</th>
+          <th>Bookie</th><th>Inzet</th>
+          <th style="cursor:pointer" onclick="sortBets('score')">Score</th>
+          <th style="cursor:pointer" onclick="sortBets('uitkomst')">Uitkomst</th>
+          <th style="cursor:pointer" onclick="sortBets('wl')">W/L</th>
+          <th style="cursor:pointer" onclick="sortBets('clvPct')">CLV</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="bets-body"></tbody>
@@ -1882,12 +1892,13 @@ function formatPeriodStats(s, prefix = '') {
 }
 
 function setPeriodToday() {
-  // Vandaag = zelfde datum voor from en to
+  // Vandaag = zelfde datum voor from en to, gesorteerd op aftrap
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
   document.getElementById('f-from').value = todayStr;
   document.getElementById('f-to').value   = todayStr;
   document.querySelectorAll('.period-btn').forEach(b => b.classList.toggle('active', b.textContent.trim() === 'Vandaag'));
+  currentSort = { field: 'tijd', dir: 'asc' }; // sorteer op aftrap
   applyPeriodFilter();
 }
 
@@ -1974,14 +1985,47 @@ function applyPeriodFilter() {
   }
 }
 
+let currentSort = { field: 'tijd', dir: 'asc' };
+
+function sortBets(field) {
+  if (currentSort.field === field) {
+    currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    currentSort.field = field;
+    currentSort.dir = field === 'id' ? 'desc' : 'asc';
+  }
+  if (betData?.bets) {
+    // Gebruik gefilterde bets als er een periode filter actief is
+    const fromVal = document.getElementById('f-from')?.value;
+    const toVal = document.getElementById('f-to')?.value;
+    if (fromVal || toVal) { applyPeriodFilter(); return; }
+    renderBetsTable(betData.bets);
+  }
+}
+
 function renderBetsTable(bets) {
   const tbody = document.getElementById('bets-body');
   tbody.innerHTML = '';
   if (!bets.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="14">Nog geen bets geregistreerd.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">Nog geen bets geregistreerd.</td></tr>';
     return;
   }
-  [...bets].reverse().forEach(b => {
+  // Sorteer
+  const sorted = [...bets].sort((a, b) => {
+    const f = currentSort.field;
+    let va = a[f], vb = b[f];
+    // Speciale gevallen
+    if (f === 'tijd') { va = va || '99:99'; vb = vb || '99:99'; }
+    if (f === 'datum') {
+      const pa = parseDatum(va), pb = parseDatum(vb);
+      va = pa ? pa.getTime() : 0; vb = pb ? pb.getTime() : 0;
+    }
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb||'').toLowerCase(); }
+    if (va == null) va = -Infinity; if (vb == null) vb = -Infinity;
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return currentSort.dir === 'asc' ? cmp : -cmp;
+  });
+  sorted.forEach(b => {
     const tr = document.createElement('tr');
     const wCls = b.wl > 0 ? 'wl-pos' : b.wl < 0 ? 'wl-neg' : '';
     if (b.uitkomst === 'L') tr.style.background = 'rgba(248,113,113,0.07)';
