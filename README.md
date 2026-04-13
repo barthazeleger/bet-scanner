@@ -1,4 +1,4 @@
-# Bet Scanner v4.8
+# Bet Scanner v5.1
 
 Data-gedreven sportsbetting platform met een zelflerend prediction model, real-time tracking en automatische notificaties.
 
@@ -10,8 +10,8 @@ Bet Scanner scant dagelijks 40 voetbalcompetities wereldwijd, vindt value bets w
 
 | Feature | Beschrijving |
 |---|---|
-| **Dagelijkse scan** | Automatisch om 10:00 — analyseert alle wedstrijden van de dag |
-| **11 signalen** | Thuisvoordeel, vorm, H2H, blessures, standings, team stats, home/away splits, lineup, referee, API predictions, O/U adjustments |
+| **Dagelijkse scan** | Automatisch om 10:00 — analyseert wedstrijden van vandaag + nachtwedstrijden tot 10:00 volgende ochtend |
+| **14 signalen** | Thuisvoordeel, vorm, H2H, blessures, standings, team stats, home/away splits, lineup, referee, API predictions, O/U adjustments, weer (regen/wind), Poisson model, fixture congestion |
 | **6 markten** | Match Winner, Over/Under, BTTS, Draw No Bet, Handicap, Gelijkspel |
 | **Kelly Criterion** | Half-Kelly sizing: 0.3U (voorzichtig) tot 2.0U (sterk vertrouwen) |
 | **Self-learning** | Markt multipliers, signal gewichten en EP-buckets passen zich automatisch aan |
@@ -106,7 +106,7 @@ npm start
 ```
 1. Odds ophalen          Bet365 + Unibet via api-football
 2. No-vig berekening     Verwijder bookmaker marge -> fair probability
-3. 11 signalen           Pas kans aan op basis van data (+/- per signaal)
+3. 14 signalen           Pas kans aan op basis van data (+/- per signaal)
 4. Kelly Criterion       Bereken optimale inzet op basis van edge
 5. Threshold filter      Alleen picks met voldoende expected profit
 6. Calibratie            Model leert van resultaten (markt, EP, signals)
@@ -122,7 +122,7 @@ Bet gelogd -> Wedstrijd afgelopen -> Uitkomst bepaald -> Calibratie update
                                   Signal gewichten getuned    <-+ (dagelijks)
 ```
 
-## 40 competities
+## 59 competities
 
 | Regio | Competities |
 |---|---|
@@ -153,6 +153,9 @@ Bet gelogd -> Wedstrijd afgelopen -> Uitkomst bepaald -> Calibratie update
 
 | Versie | Datum | Highlights |
 |---|---|---|
+| **v5.1** | apr 2026 | 59 competities, weer/Poisson/congestion, drawdown, bookmaker tracking, scan tot 10:00 |
+| **v5.0** | apr 2026 | 59 competities, weer data, Poisson model, fixture congestion, drawdown protection |
+| **v4.10** | apr 2026 | POTD generator, modal herberekening, push fix, sorteerbare tracker |
 | **v4.8** | apr 2026 | PWA, push notificaties, status pagina, mobile-first, iOS bottom nav |
 | **v4.5** | apr 2026 | Mijn Bets tab, correlatie-check, ESPN auto-refresh, signal auto-tuning, inbox |
 | **v4.2** | apr 2026 | CLV tracking, signal attribution, variance tracker, BTTS/DNB, odds alerts |

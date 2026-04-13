@@ -112,7 +112,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '4.10.1';
+const APP_VERSION    = '5.1.0';
 const TOKEN      = '8722733522:AAGuQiuENAwHYrW21wXD-W5drNAxJHSiYMw';
 const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1476,10 +1476,11 @@ async function runPrematch(emit) {
   let totalEvents = 0;
   let apiCallsUsed = 0;
 
-  // Datumbereik: alleen vandaag (Amsterdam-tijdzone)
+  // Datumbereik: vandaag + morgen (voor nachtwedstrijden tot 10:00)
   const today    = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   const dateFrom = today;
-  const dateTo   = today;
+  const dateTo   = tomorrow;
 
   // ── STAP 3: Per competitie fixtures + odds + predictions ────────────────
   for (const league of AF_FOOTBALL_LEAGUES) {
@@ -1490,14 +1491,25 @@ async function runPrematch(emit) {
       });
       apiCallsUsed++;
 
-      if (!fixtures?.length) { emit({ log: `📭 ${league.name}: geen wedstrijden` }); continue; }
-      emit({ log: `✅ ${league.name}: ${fixtures.length} wedstrijd(en)` });
-      totalEvents += fixtures.length;
+      // Filter: morgen alleen wedstrijden vóór 10:00 Amsterdam (nachtwedstrijden)
+      const cutoffHour = 10; // 10:00 volgende ochtend
+      const filtered = (fixtures || []).filter(f => {
+        const ko = new Date(f.fixture?.date);
+        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
+        // Vandaag: alles. Morgen: alleen vóór 10:00
+        if (koDate === today) return true;
+        return koH < cutoffHour;
+      });
+
+      if (!filtered.length) { emit({ log: `📭 ${league.name}: geen wedstrijden` }); continue; }
+      emit({ log: `✅ ${league.name}: ${filtered.length} wedstrijd(en)` });
+      totalEvents += filtered.length;
 
       const afStats   = afCache.teamStats[league.key] || {};
       const afInj     = afCache.injuries[league.key]  || {};
 
-      for (const f of fixtures) {
+      for (const f of filtered) {
         const fid = f.fixture?.id;
         const hm  = f.teams?.home?.name;
         const aw  = f.teams?.away?.name;
