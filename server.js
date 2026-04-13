@@ -4226,10 +4226,16 @@ app.post('/api/prematch', (req, res) => {
       const allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks, ...mlbPicks, ...nflPicks, ...handballPicks];
       allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
 
-      emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey + ${mlbPicks.length} baseball + ${nflPicks.length} NFL + ${handballPicks.length} handball = ${allPicks.length} picks` });
+      // Top 5 picks over alle sporten (gesorteerd op verwachte waarde)
+      const MAX_PICKS = 5;
+      const topPicks = allPicks.slice(0, MAX_PICKS);
+      const droppedCount = allPicks.length - topPicks.length;
+
+      emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey + ${mlbPicks.length} baseball + ${nflPicks.length} NFL + ${handballPicks.length} handball = ${allPicks.length} kandidaten` });
+      if (droppedCount > 0) emit({ log: `🎯 Top ${MAX_PICKS} geselecteerd (${droppedCount} zwakkere kandidaten weggelaten)` });
 
       // Non-admin: filter gevoelige model data uit picks
-      const safePicks = allPicks.map(p => {
+      const safePicks = topPicks.map(p => {
         // Score server-side berekenen (zodat kelly niet naar de client hoeft)
         const hk = p.kelly || 0;
         const score = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
