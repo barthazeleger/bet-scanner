@@ -2179,7 +2179,7 @@ function renderBetsTable(bets) {
         </select>
       </td>
       <td class="${wCls}">${b.wl !== 0 ? (b.wl>0?'+':'')+'€'+b.wl : b.uitkomst==='Open' ? `<span style="color:var(--muted);font-size:11px" title="Potentiële winst">+€${+((b.odds-1)*b.inzet).toFixed(2)}</span>` : '—'}</td>
-      <td>${b.clvPct != null && b.clvPct !== 0 ? `<span style="font-size:11px;font-weight:700;color:${b.clvPct>0?'#34d399':'#f87171'}">${b.clvPct>0?'+':''}${b.clvPct}%</span>` : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
+      <td>${b.clvPct != null && !isNaN(b.clvPct) ? `<span style="font-size:11px;font-weight:700;color:${b.clvPct>0?'#34d399':b.clvPct<0?'#f87171':'#9ca3af'}">${b.clvPct>0?'+':''}${b.clvPct}%</span>` : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
       <td><button class="del-btn" onclick="removeBet(${parseInt(b.id)||0})" title="Verwijderen">🗑</button></td>`;
     tbody.appendChild(tr);
   });
@@ -2475,7 +2475,7 @@ async function redrawCharts(data) {
 
   // ── CLV Analyse ──────────────────────────────────────────────────────────
   const clvEl = document.getElementById('clv-analysis');
-  const clvBets = bets.filter(b => b.clvPct != null && b.clvPct !== 0);
+  const clvBets = bets.filter(b => b.clvPct != null && !isNaN(b.clvPct));
   if (clvBets.length) {
     const avgClv = +(clvBets.reduce((s,b) => s + b.clvPct, 0) / clvBets.length).toFixed(2);
     const pos = clvBets.filter(b => b.clvPct > 0).length;
