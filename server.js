@@ -2706,7 +2706,12 @@ app.get('/api/picks', (req, res) => {
 // POTD (Pick of the Day) post generator voor Reddit + X
 app.get('/api/potd', async (req, res) => {
   try {
-    const allPicks = [...lastPrematchPicks, ...lastLivePicks];
+    let allPicks = [...lastPrematchPicks, ...lastLivePicks];
+    // Fallback: laad uit scan history als geheugen leeg is (na deploy)
+    if (!allPicks.length) {
+      const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
+      if (history.length) allPicks = history[0].picks || [];
+    }
     if (!allPicks.length) return res.json({ error: 'Geen picks beschikbaar — draai eerst een scan' });
 
     // #1 pick = hoogste expectedEur
