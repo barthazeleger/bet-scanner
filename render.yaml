@@ -8,14 +8,14 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: SHEET_ID
-        value: 1tHV7Mrp_jUzlU-nxUAHpYL-d0rcqG2FpfGGNWbu16Ik
+      - key: SUPABASE_URL
+        value: https://mntfhhzanoyhgfavozhg.supabase.co
+      - key: SUPABASE_KEY
+        sync: false          # service_role key — vul in via Render dashboard
       - key: ODDS_API_KEY
         sync: false          # vul in via Render dashboard
       - key: API_FOOTBALL_KEY
         sync: false          # vul in via Render dashboard
-      - key: GOOGLE_CREDENTIALS_JSON
-        sync: false          # vul in via Render dashboard (volledige JSON als één regel)
       - key: JWT_SECRET
         sync: false          # willekeurige lange string, bijv. 64 hex tekens
       - key: ADMIN_EMAIL

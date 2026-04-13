@@ -3,10 +3,15 @@
 const express        = require('express');
 const path           = require('path');
 const fs             = require('fs');
-const { google }     = require('googleapis');
+const { createClient } = require('@supabase/supabase-js');
 const jwt            = require('jsonwebtoken');
 const bcrypt         = require('bcryptjs');
 const webpush        = require('web-push');
+
+// ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mntfhhzanoyhgfavozhg.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_KEY; // service_role key
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const app = express();
 app.use(express.json());
@@ -15,72 +20,50 @@ app.use(express.json());
 const JWT_SECRET   = process.env.JWT_SECRET || 'edgepickr-dev-secret-change-in-prod';
 const ADMIN_EMAIL  = (process.env.ADMIN_EMAIL || '').toLowerCase();
 const ADMIN_PASSW  = process.env.ADMIN_PASSWORD || '';
-const USER_TAB     = 'Users';
 
 // ── WEB PUSH CONFIG ────────────────────────────────────────────────────────
 const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BEIocmzc02XFhLvUUDPcZyWAA1Vw3bJGDckDYzIyoqqh0pv1qOOPNF9C2SRvnEISxkjXGOOqStrrtpNn8Z4INqI';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || 'ko_u-RBo2io-Cdl6K6Ah0_d8zgOg72pIr_erb0iOEgw';
-const PUSH_SUBS_FILE = path.join(__dirname, 'push-subs.json');
-
 if (VAPID_PUBLIC && VAPID_PRIVATE) {
   webpush.setVapidDetails('mailto:noreply@edgepickr.com', VAPID_PUBLIC, VAPID_PRIVATE);
 }
 
-const PUSH_TAB = 'PushSubs';
 let _pushSubsCache = null;
 
-function loadPushSubs() {
+async function loadPushSubs() {
   if (_pushSubsCache) return _pushSubsCache;
-  try { return JSON.parse(fs.readFileSync(PUSH_SUBS_FILE, 'utf8')); } catch { return []; }
-}
-
-function savePushSubs(subs) {
-  _pushSubsCache = subs;
-  fs.writeFileSync(PUSH_SUBS_FILE, JSON.stringify(subs));
-  // Persist naar Google Sheets (async)
-  (async () => {
-    try {
-      const sh = getSheetsClient();
-      const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
-      if (!meta.data.sheets?.some(s => s.properties?.title === PUSH_TAB)) {
-        await sh.spreadsheets.batchUpdate({
-          spreadsheetId: SHEET_ID,
-          requestBody: { requests: [{ addSheet: { properties: { title: PUSH_TAB } } }] }
-        });
-      }
-      await sh.spreadsheets.values.update({
-        spreadsheetId: SHEET_ID, range: `${PUSH_TAB}!A1`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[JSON.stringify(subs)]] }
-      });
-    } catch {}
-  })();
-}
-
-async function loadPushSubsFromSheets() {
   try {
-    const sh = getSheetsClient();
-    const res = await sh.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID, range: `${PUSH_TAB}!A1`
-    });
-    const raw = res.data.values?.[0]?.[0];
-    if (raw) {
-      _pushSubsCache = JSON.parse(raw);
-      fs.writeFileSync(PUSH_SUBS_FILE, raw);
-      return _pushSubsCache;
-    }
-  } catch {}
-  return loadPushSubs();
+    const { data, error } = await supabase.from('push_subscriptions').select('*');
+    if (error) throw new Error(error.message);
+    _pushSubsCache = (data || []).map(r => r.subscription);
+    return _pushSubsCache;
+  } catch { return []; }
+}
+
+async function savePushSub(sub) {
+  if (!sub?.endpoint) return;
+  await supabase.from('push_subscriptions').upsert(
+    { endpoint: sub.endpoint, subscription: sub, created_at: new Date().toISOString() },
+    { onConflict: 'endpoint' }
+  );
+  _pushSubsCache = null;
+}
+
+async function deletePushSub(endpoint) {
+  await supabase.from('push_subscriptions').delete().eq('endpoint', endpoint);
+  _pushSubsCache = null;
 }
 
 async function sendPushToAll(payload) {
-  const subs = loadPushSubs();
+  const subs = await loadPushSubs();
   const dead = [];
   for (const sub of subs) {
     try { await webpush.sendNotification(sub, JSON.stringify(payload)); }
     catch (e) { if (e.statusCode === 404 || e.statusCode === 410) dead.push(sub.endpoint); }
   }
-  if (dead.length) savePushSubs(subs.filter(s => !dead.includes(s.endpoint)));
+  if (dead.length) {
+    for (const ep of dead) await deletePushSub(ep);
+  }
 }
 
 // Routes that don't require authentication (full paths)
@@ -118,42 +101,12 @@ const CHAT       = '12272422';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
 const UNIT_EUR   = 10;
 const START_BANKROLL = 100;
-const CALIB_FILE = path.join(__dirname, 'calibration.json');
+// (calibration + signal weights stored in Supabase)
 
-// ── GOOGLE SHEETS CONFIG ──────────────────────────────────────────────────────
-const SHEET_ID    = process.env.SHEET_ID || '1tHV7Mrp_jUzlU-nxUAHpYL-d0rcqG2FpfGGNWbu16Ik';
-const SHEET_CREDS = process.env.GOOGLE_CREDENTIALS_JSON
-  ? JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON)
-  : require('./gsheets-key.json');
-const BET_START_ROW = 19;  // bets starten op rij 19 (1-gebaseerd)
-
-let _sheetsAuth = null;
-function getSheetsClient() {
-  if (!_sheetsAuth) {
-    _sheetsAuth = new google.auth.GoogleAuth({
-      credentials: SHEET_CREDS,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-  }
-  return google.sheets({ version: 'v4', auth: _sheetsAuth });
-}
-
-let _sheetTab = null;
-let _sheetGid = 0;
-async function getSheetMeta() {
-  if (_sheetTab) return { tab: _sheetTab, gid: _sheetGid };
-  const sh   = getSheetsClient();
-  const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
-  const s0   = meta.data.sheets?.[0]?.properties;
-  _sheetTab  = s0?.title || 'Sheet1';
-  _sheetGid  = s0?.sheetId ?? 0;
-  return { tab: _sheetTab, gid: _sheetGid };
-}
-
-// ── USER MANAGEMENT (Google Sheets "Users" tab) ─────────────────────────────
+// ── USER MANAGEMENT (Supabase "users" table) ────────────────────────────────
 let _usersCache     = null;
 let _usersCacheAt   = 0;
-const USERS_TTL     = 5 * 60 * 1000; // 5 min
+const USERS_TTL     = 30 * 1000; // 30 sec cache
 
 function defaultSettings() {
   return {
@@ -166,37 +119,16 @@ function defaultSettings() {
   };
 }
 
-async function ensureUsersTab() {
-  const sh   = getSheetsClient();
-  const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
-  const exists = meta.data.sheets?.some(s => s.properties?.title === USER_TAB);
-  if (!exists) {
-    await sh.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: { requests: [{ addSheet: { properties: { title: USER_TAB } } }] }
-    });
-    await sh.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `${USER_TAB}!A1:G1`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [['id','email','passwordHash','role','status','settings','createdAt']] }
-    });
-  }
-}
-
 async function loadUsers(force = false) {
   if (!force && _usersCache && Date.now() - _usersCacheAt < USERS_TTL) return _usersCache;
   try {
-    const sh  = getSheetsClient();
-    const res = await sh.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID, range: `${USER_TAB}!A2:G500`
-    });
-    const rows = (res.data.values || []).filter(r => r[0]);
-    _usersCache = rows.map(r => ({
-      id: r[0], email: (r[1]||'').toLowerCase(), passwordHash: r[2]||'',
-      role: r[3]||'user', status: r[4]||'pending',
-      settings: (() => { try { return { ...defaultSettings(), ...JSON.parse(r[5]||'{}') }; } catch { return defaultSettings(); } })(),
-      createdAt: r[6]||''
+    const { data, error } = await supabase.from('users').select('*');
+    if (error) throw new Error(error.message);
+    _usersCache = (data || []).map(r => ({
+      id: r.id, email: (r.email || '').toLowerCase(), passwordHash: r.password_hash || '',
+      role: r.role || 'user', status: r.status || 'pending',
+      settings: (() => { try { return { ...defaultSettings(), ...(typeof r.settings === 'string' ? JSON.parse(r.settings) : (r.settings || {})) }; } catch { return defaultSettings(); } })(),
+      createdAt: r.created_at || ''
     }));
     _usersCacheAt = Date.now();
     return _usersCache;
@@ -204,32 +136,19 @@ async function loadUsers(force = false) {
 }
 
 async function saveUser(user) {
-  const sh   = getSheetsClient();
-  const users = await loadUsers(true);
-  const idx  = users.findIndex(u => u.id === user.id);
-  const row  = [
-    user.id, user.email, user.passwordHash, user.role, user.status,
-    JSON.stringify(user.settings || defaultSettings()), user.createdAt
-  ];
-  if (idx === -1) {
-    await sh.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID, range: `${USER_TAB}!A2`,
-      valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [row] }
-    });
-  } else {
-    await sh.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID, range: `${USER_TAB}!A${idx+2}:G${idx+2}`,
-      valueInputOption: 'RAW', requestBody: { values: [row] }
-    });
-  }
+  const { error } = await supabase.from('users').upsert({
+    id: user.id, email: user.email, password_hash: user.passwordHash,
+    role: user.role, status: user.status,
+    settings: user.settings || defaultSettings(),
+    created_at: user.createdAt || new Date().toISOString()
+  }, { onConflict: 'id' });
+  if (error) throw new Error(error.message);
   _usersCache = null;
 }
 
 async function seedAdminUser() {
   if (!ADMIN_EMAIL || !ADMIN_PASSW) return;
   try {
-    await ensureUsersTab();
     const users = await loadUsers(true);
     const exists = users.find(u => u.email === ADMIN_EMAIL);
     if (!exists) {
@@ -270,15 +189,44 @@ function epBucketKey(ep) {
 // Standaard epW gewichten (worden overschreven door calibratie na 100 bets)
 const DEFAULT_EPW = { '0.28':0.80, '0.30':0.95, '0.38':1.05, '0.45':1.15, '0.55':1.25 };
 
+const DEFAULT_CALIB = { version:1, lastUpdated:null, totalSettled:0, totalWins:0, totalProfit:0,
+  markets:{ home:{n:0,w:0,profit:0,multiplier:1.0}, away:{n:0,w:0,profit:0,multiplier:1.0},
+            draw:{n:0,w:0,profit:0,multiplier:1.0}, over:{n:0,w:0,profit:0,multiplier:1.0},
+            under:{n:0,w:0,profit:0,multiplier:1.0}, other:{n:0,w:0,profit:0,multiplier:1.0} },
+  epBuckets: {}, leagues:{}, lossLog:[] };
+
+let _calibCache = null;
+let _calibCacheAt = 0;
+const CALIB_TTL = 10 * 1000; // 10 sec cache
+
 function loadCalib() {
-  try { return JSON.parse(fs.readFileSync(CALIB_FILE, 'utf8')); }
-  catch { return { version:1, lastUpdated:null, totalSettled:0, totalWins:0, totalProfit:0,
-    markets:{ home:{n:0,w:0,profit:0,multiplier:1.0}, away:{n:0,w:0,profit:0,multiplier:1.0},
-              draw:{n:0,w:0,profit:0,multiplier:1.0}, over:{n:0,w:0,profit:0,multiplier:1.0},
-              under:{n:0,w:0,profit:0,multiplier:1.0}, other:{n:0,w:0,profit:0,multiplier:1.0} },
-    epBuckets: {}, leagues:{}, lossLog:[] }; }
+  // Synchronous: return cache or default (async load happens at startup)
+  if (_calibCache) return _calibCache;
+  // Try local file as fallback during first load
+  try { _calibCache = JSON.parse(fs.readFileSync(path.join(__dirname, 'calibration.json'), 'utf8')); return _calibCache; }
+  catch { return { ...DEFAULT_CALIB }; }
 }
-function saveCalib(c) { fs.writeFileSync(CALIB_FILE, JSON.stringify(c, null, 2)); }
+
+async function loadCalibAsync() {
+  if (_calibCache && Date.now() - _calibCacheAt < CALIB_TTL) return _calibCache;
+  try {
+    const { data, error } = await supabase.from('calibration').select('data').eq('id', 1).single();
+    if (!error && data?.data) {
+      _calibCache = data.data;
+      _calibCacheAt = Date.now();
+      return _calibCache;
+    }
+  } catch {}
+  return loadCalib();
+}
+
+async function saveCalib(c) {
+  _calibCache = c;
+  _calibCacheAt = Date.now();
+  try {
+    await supabase.from('calibration').upsert({ id: 1, data: c, updated_at: new Date().toISOString() });
+  } catch (e) { console.error('saveCalib error:', e.message); }
+}
 
 function detectMarket(markt = '') {
   const m = markt.toLowerCase();
@@ -421,13 +369,30 @@ function updateCalibration(bet) {
 
 // ── SIGNAL AUTO-TUNING ───────────────────────────────────────────────────────
 // Na 30+ bets per signaal: pas gewicht aan op basis van werkelijke hit rate
-const SIGNAL_WEIGHTS_FILE = path.join(__dirname, 'signal_weights.json');
+let _signalWeightsCache = null;
 
 function loadSignalWeights() {
-  try { return JSON.parse(fs.readFileSync(SIGNAL_WEIGHTS_FILE, 'utf8')); }
-  catch { return {}; } // empty = all signals at 1.0 (default)
+  // Synchronous: return cache or default
+  return _signalWeightsCache || {};
 }
-function saveSignalWeights(w) { fs.writeFileSync(SIGNAL_WEIGHTS_FILE, JSON.stringify(w, null, 2)); }
+
+async function loadSignalWeightsAsync() {
+  try {
+    const { data, error } = await supabase.from('signal_weights').select('weights').eq('id', 1).single();
+    if (!error && data?.weights) {
+      _signalWeightsCache = data.weights;
+      return _signalWeightsCache;
+    }
+  } catch {}
+  return loadSignalWeights();
+}
+
+async function saveSignalWeights(w) {
+  _signalWeightsCache = w;
+  try {
+    await supabase.from('signal_weights').upsert({ id: 1, weights: w, updated_at: new Date().toISOString() });
+  } catch (e) { console.error('saveSignalWeights error:', e.message); }
+}
 
 async function autoTuneSignals() {
   try {
@@ -717,43 +682,21 @@ let lastPrematchPicks = [];
 let lastLivePicks = [];
 
 // ── SCAN HISTORY ─────────────────────────────────────────────────────────────
-const SCAN_HISTORY_FILE = path.join(__dirname, 'scan-history.json');
 const SCAN_HISTORY_MAX  = 10;
-
-// Scan history — opgeslagen in Google Sheets (persisteert over deploys)
-const SCAN_HISTORY_TAB = 'ScanHistory';
 let _scanHistoryCache = null;
 
-async function ensureScanHistoryTab() {
-  const sh = getSheetsClient();
-  const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
-  if (!meta.data.sheets?.some(s => s.properties?.title === SCAN_HISTORY_TAB)) {
-    await sh.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: { requests: [{ addSheet: { properties: { title: SCAN_HISTORY_TAB } } }] }
-    });
-  }
-}
-
 function loadScanHistory() {
-  // Sync fallback: return cache of file
   if (_scanHistoryCache) return _scanHistoryCache;
-  try { return JSON.parse(fs.readFileSync(SCAN_HISTORY_FILE, 'utf8')); } catch { return []; }
+  return [];
 }
 
 async function loadScanHistoryFromSheets() {
   try {
-    await ensureScanHistoryTab();
-    const sh = getSheetsClient();
-    const res = await sh.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID, range: `${SCAN_HISTORY_TAB}!A1:C${SCAN_HISTORY_MAX}`
-    });
-    const rows = res.data.values || [];
-    _scanHistoryCache = rows.filter(r => r[0]).map(r => {
-      try { return JSON.parse(r[2] || '{}'); } catch { return null; }
-    }).filter(Boolean);
-    // Schrijf ook naar lokaal bestand als cache
-    fs.writeFileSync(SCAN_HISTORY_FILE, JSON.stringify(_scanHistoryCache, null, 2));
+    const { data, error } = await supabase.from('scan_history').select('*').order('ts', { ascending: false }).limit(SCAN_HISTORY_MAX);
+    if (error) throw new Error(error.message);
+    _scanHistoryCache = (data || []).map(r => ({
+      ts: r.ts, type: r.type, totalEvents: r.total_events, picks: r.picks || []
+    }));
     return _scanHistoryCache;
   } catch { return loadScanHistory(); }
 }
@@ -762,7 +705,7 @@ async function saveScanEntry(picks, type = 'prematch', totalEvents = 0) {
   const entry = {
     ts:          new Date().toISOString(),
     type,
-    totalEvents,
+    total_events: totalEvents,
     picks: picks.map(p => ({
       match: p.match, league: p.league, label: p.label, odd: p.odd,
       prob: p.prob, units: p.units, reason: p.reason, kelly: p.kelly,
@@ -771,25 +714,16 @@ async function saveScanEntry(picks, type = 'prematch', totalEvents = 0) {
       signals: p.signals || [],
     })),
   };
-  // Lokaal opslaan
-  const history = loadScanHistory();
-  history.unshift(entry);
-  const trimmed = history.slice(0, SCAN_HISTORY_MAX);
-  _scanHistoryCache = trimmed;
-  fs.writeFileSync(SCAN_HISTORY_FILE, JSON.stringify(trimmed, null, 2));
-  // Google Sheets opslaan (async, niet-blokkerend)
+  _scanHistoryCache = null;
   try {
-    await ensureScanHistoryTab();
-    const sh = getSheetsClient();
-    // Schrijf alle entries opnieuw (simpel, max 10 rijen)
-    const rows = trimmed.map(e => [e.ts, e.type, JSON.stringify(e)]);
-    await sh.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `${SCAN_HISTORY_TAB}!A1:C${rows.length}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: rows }
-    });
-  } catch (e) { console.error('Scan history Sheets save fout:', e.message); }
+    await supabase.from('scan_history').insert(entry);
+    // Trim to max entries
+    const { data: all } = await supabase.from('scan_history').select('id').order('ts', { ascending: false });
+    if (all && all.length > SCAN_HISTORY_MAX) {
+      const toDelete = all.slice(SCAN_HISTORY_MAX).map(r => r.id);
+      await supabase.from('scan_history').delete().in('id', toDelete);
+    }
+  } catch (e) { console.error('Scan history save fout:', e.message); }
 }
 
 // ── HELPERS ────────────────────────────────────────────────────────────────────
@@ -1041,23 +975,28 @@ const afCache = {
 };
 
 // ── API-FOOTBALL RATE LIMIT TRACKER ─────────────────────────────────────────
-const AF_USAGE_FILE = path.join(__dirname, 'af-usage.json');
 let afRateLimit = { remaining: null, limit: 7500, updatedAt: null, callsToday: 0, date: null };
 
-// Laad persistent usage
-try {
-  const saved = JSON.parse(fs.readFileSync(AF_USAGE_FILE, 'utf8'));
-  const todayStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  if (saved.date === todayStr) {
-    afRateLimit = saved;
-  } else {
-    afRateLimit.date = todayStr;
-    afRateLimit.callsToday = 0;
-  }
-} catch { afRateLimit.date = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }); }
+// Load persistent usage from Supabase at startup
+(async () => {
+  try {
+    const todayStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+    const { data } = await supabase.from('api_usage').select('*').eq('date', todayStr).single();
+    if (data) {
+      afRateLimit = { remaining: data.remaining, limit: data.api_limit || 7500, updatedAt: data.updated_at, callsToday: data.calls || 0, date: data.date };
+    } else {
+      afRateLimit.date = todayStr;
+      afRateLimit.callsToday = 0;
+    }
+  } catch { afRateLimit.date = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }); }
+})();
 
 function saveAfUsage() {
-  try { fs.writeFileSync(AF_USAGE_FILE, JSON.stringify(afRateLimit)); } catch {}
+  supabase.from('api_usage').upsert({
+    date: afRateLimit.date, calls: afRateLimit.callsToday,
+    remaining: afRateLimit.remaining, api_limit: afRateLimit.limit,
+    updated_at: new Date().toISOString()
+  }).then(() => {}).catch(() => {});
 }
 
 async function afGet(host, path, params = {}) {
@@ -2344,116 +2283,46 @@ function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
 }
 
 async function readBets() {
-  const t0 = Date.now();
-  const sh  = getSheetsClient();
-  const { tab } = await getSheetMeta();
-  const res = await sh.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${tab}!A1:P500`,
-    valueRenderOption: 'UNFORMATTED_VALUE',
-  });
-  const readMs = Date.now() - t0;
-  if (readMs > 3000) {
-    console.warn(`⚠️ Sheets read traag: ${readMs}ms`);
-    tg(`⚠️ Google Sheets response time: ${readMs}ms (> 3s) — overweeg database migratie`).catch(() => {});
-    try {
-      const c = loadCalib();
-      c.modelLog = [{ date: new Date().toISOString(), type: 'sheets_slow',
-        note: `Google Sheets response: ${readMs}ms (> 3s). Bij aanhoudende traagheid → migratie naar Supabase aanbevolen.`
-      }, ...(c.modelLog || [])].slice(0, 50);
-      saveCalib(c);
-    } catch {}
-  }
-  const data = res.data.values || [];
-
-  const bets = [];
-  for (let i = BET_START_ROW - 1; i < data.length; i++) {
-    const row = data[i];
-    if (!row || !row[0]) continue;
-    const nr = parseFloat(row[0]);
-    if (isNaN(nr)) continue;
-    const pf = v => parseFloat(String(v||'').replace(',','.')) || 0;
-    bets.push({
-      id:        nr,
-      datum:     row[1]  || '',
-      sport:     row[2]  || '',
-      wedstrijd: row[3]  || '',
-      markt:     row[4]  || '',
-      odds:      pf(row[5]),
-      units:     pf(row[6]),
-      inzet:     pf(row[7]) || +(pf(row[6]) * UNIT_EUR).toFixed(2),
-      tip:       row[8]  || 'Main',
-      uitkomst:  row[9]  || 'Open',
-      wl:        pf(row[10]),
-      tijd:      row[11] || '',
-      score:     parseInt(row[12]) || null,
-      signals:   row[13] || '',
-      clvOdds:   pf(row[14]) || null,
-      clvPct:    pf(row[15]) || null
-    });
-  }
+  const { data, error } = await supabase.from('bets').select('*').order('bet_id', { ascending: true });
+  if (error) throw new Error(error.message);
+  const bets = (data || []).map(r => ({
+    id: r.bet_id, datum: r.datum || '', sport: r.sport || '', wedstrijd: r.wedstrijd || '',
+    markt: r.markt || '', odds: r.odds || 0, units: r.units || 0,
+    inzet: r.inzet || +(r.units * UNIT_EUR).toFixed(2),
+    tip: r.tip || 'Bet365', uitkomst: r.uitkomst || 'Open', wl: r.wl || 0,
+    tijd: r.tijd || '', score: r.score || null,
+    signals: r.signals || '', clvOdds: r.clv_odds || null, clvPct: r.clv_pct || null,
+  }));
   return { bets, stats: calcStats(bets), _raw: data };
 }
 
 async function writeBet(bet) {
-  const sh  = getSheetsClient();
-  const { tab } = await getSheetMeta();
   const inzet = bet.units * UNIT_EUR;
-  const wl    = bet.uitkomst === 'W' ? +((bet.odds-1)*inzet).toFixed(2)
-              : bet.uitkomst === 'L' ? -inzet : 0;
-  await sh.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID,
-    range: `${tab}!A${BET_START_ROW}`,
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [[
-      bet.id, bet.datum, bet.sport, bet.wedstrijd, bet.markt,
-      bet.odds, bet.units, inzet, bet.tip||'Main', bet.uitkomst||'Open', wl, bet.tijd||'', bet.score||'',
-      bet.signals || '', '', ''
-    ]] },
+  const wl = bet.uitkomst === 'W' ? +((bet.odds-1)*inzet).toFixed(2)
+           : bet.uitkomst === 'L' ? -inzet : 0;
+  const { error } = await supabase.from('bets').insert({
+    bet_id: bet.id, datum: bet.datum, sport: bet.sport, wedstrijd: bet.wedstrijd,
+    markt: bet.markt, odds: bet.odds, units: bet.units, inzet, tip: bet.tip || 'Bet365',
+    uitkomst: bet.uitkomst || 'Open', wl, tijd: bet.tijd || '', score: bet.score || null,
+    signals: bet.signals || '',
   });
+  if (error) throw new Error(error.message);
 }
 
 async function updateBetOutcome(id, uitkomst) {
-  const sh  = getSheetsClient();
-  const { tab } = await getSheetMeta();
-  const { _raw } = await readBets();
-
-  const pf = v => parseFloat(String(v||'').replace(',','.')) || 0;
-  for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
-    if (parseFloat(_raw[i]?.[0]) !== parseFloat(id)) continue;
-    const odds  = pf(_raw[i][5]);
-    const units = pf(_raw[i][6]);
-    const inzet = pf(_raw[i][7]) || +(units * UNIT_EUR).toFixed(2);
-    const wl    = uitkomst === 'W' ? +((odds-1)*inzet).toFixed(2) : uitkomst === 'L' ? -inzet : 0;
-    const rowNum = i + 1; // 1-gebaseerd
-    await sh.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `${tab}!J${rowNum}:K${rowNum}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [[uitkomst, wl]] },
-    });
-    updateCalibration({ datum: _raw[i][1], wedstrijd: _raw[i][3], markt: _raw[i][4],
-                        odds, units: parseFloat(_raw[i][6])||1, uitkomst, wl });
-    break;
-  }
+  const { data: row } = await supabase.from('bets').select('*').eq('bet_id', id).single();
+  if (!row) return;
+  const odds = row.odds || 0;
+  const units = row.units || 0;
+  const inzet = row.inzet || +(units * UNIT_EUR).toFixed(2);
+  const wl = uitkomst === 'W' ? +((odds-1)*inzet).toFixed(2) : uitkomst === 'L' ? -inzet : 0;
+  await supabase.from('bets').update({ uitkomst, wl }).eq('bet_id', id);
+  updateCalibration({ datum: row.datum, wedstrijd: row.wedstrijd, markt: row.markt,
+                      odds, units, uitkomst, wl });
 }
 
 async function deleteBet(id) {
-  const sh  = getSheetsClient();
-  const { tab, gid } = await getSheetMeta();
-  const { _raw } = await readBets();
-
-  for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
-    if (parseFloat(_raw[i]?.[0]) !== parseFloat(id)) continue;
-    await sh.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: { requests: [{ deleteDimension: {
-        range: { sheetId: gid, dimension: 'ROWS', startIndex: i, endIndex: i + 1 }
-      }}] },
-    });
-    break;
-  }
+  await supabase.from('bets').delete().eq('bet_id', id);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2482,7 +2351,6 @@ app.post('/api/auth/register', async (req, res) => {
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'E-mail en wachtwoord verplicht' });
     if (password.length < 8)  return res.status(400).json({ error: 'Wachtwoord minimaal 8 tekens' });
-    await ensureUsersTab();
     const users = await loadUsers(true);
     if (users.find(u => u.email === email.toLowerCase()))
       return res.status(409).json({ error: 'E-mailadres al in gebruik' });
@@ -2570,48 +2438,32 @@ app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
 app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   try {
     const users = await loadUsers(true);
-    const idx   = users.findIndex(u => u.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
-    if (users[idx].email === req.user.email)
+    const user  = users.find(u => u.id === req.params.id);
+    if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    if (user.email === req.user.email)
       return res.status(400).json({ error: 'Je kunt je eigen account niet verwijderen' });
-    const sh = getSheetsClient();
-    await sh.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: { requests: [{ deleteDimension: {
-        range: { sheetId: await getUsersSheetGid(), dimension: 'ROWS', startIndex: idx + 1, endIndex: idx + 2 }
-      }}] }
-    });
+    await supabase.from('users').delete().eq('id', req.params.id);
     _usersCache = null;
     res.json({ deleted: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-
-async function getUsersSheetGid() {
-  const sh   = getSheetsClient();
-  const meta = await sh.spreadsheets.get({ spreadsheetId: SHEET_ID });
-  return meta.data.sheets?.find(s => s.properties?.title === USER_TAB)?.properties?.sheetId ?? 1;
-}
 
 // ── PUSH NOTIFICATIONS ─────────────────────────────────────────────────────
 app.get('/api/push/vapid-key', (req, res) => {
   res.json({ publicKey: VAPID_PUBLIC });
 });
 
-app.post('/api/push/subscribe', (req, res) => {
+app.post('/api/push/subscribe', async (req, res) => {
   const sub = req.body;
   if (!sub?.endpoint) return res.status(400).json({ error: 'Geen subscription' });
-  const subs = loadPushSubs();
-  if (!subs.find(s => s.endpoint === sub.endpoint)) {
-    subs.push(sub);
-    savePushSubs(subs);
-  }
+  await savePushSub(sub);
   res.json({ ok: true });
 });
 
-app.delete('/api/push/subscribe', (req, res) => {
+app.delete('/api/push/subscribe', async (req, res) => {
   const endpoint = req.body?.endpoint;
   if (!endpoint) return res.status(400).json({ error: 'Geen endpoint' });
-  savePushSubs(loadPushSubs().filter(s => s.endpoint !== endpoint));
+  await deletePushSub(endpoint);
   res.json({ ok: true });
 });
 
@@ -2925,20 +2777,8 @@ async function scheduleCLVCheck(bet) {
       const clvPct = +((loggedOdds - closingOdds) / closingOdds * 100).toFixed(2);
       const clvIcon = clvPct > 0 ? '✅' : '❌';
 
-      // Schrijf CLV naar Google Sheet (kolommen O en P)
-      const sh  = getSheetsClient();
-      const { tab } = await getSheetMeta();
-      const { bets: allBets } = await readBets();
-      const betIdx = allBets.findIndex(b => b.id === bet.id);
-      if (betIdx >= 0) {
-        const rowNum = BET_START_ROW + betIdx;
-        await sh.spreadsheets.values.update({
-          spreadsheetId: SHEET_ID,
-          range: `${tab}!O${rowNum}:P${rowNum}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [[closingOdds, clvPct]] },
-        });
-      }
+      // Schrijf CLV naar Supabase
+      await supabase.from('bets').update({ clv_odds: closingOdds, clv_pct: clvPct }).eq('bet_id', bet.id);
 
       await tg(`📊 CLV: ${matchName}\n🏦 ${usedBookie} | Gelogd: ${loggedOdds} → Slotlijn: ${closingOdds} | CLV: ${clvPct > 0 ? '+' : ''}${clvPct}% ${clvIcon}`).catch(() => {});
     } catch (err) {
@@ -2985,42 +2825,13 @@ app.post('/api/bets', async (req, res) => {
 app.put('/api/bets/:id', async (req, res) => {
   try {
     const { uitkomst, odds, units, tip } = req.body;
-    // Als alleen uitkomst: gebruik bestaande flow
-    if (uitkomst && !odds && !units && !tip) {
-      await updateBetOutcome(req.params.id, uitkomst);
-    } else {
-      // Edit odds/units/uitkomst
-      const sh = getSheetsClient();
-      const { tab } = await getSheetMeta();
-      const { _raw } = await readBets();
-      const id = parseFloat(req.params.id);
-      for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
-        if (parseFloat(_raw[i]?.[0]) !== id) continue;
-        const rowNum = i + 1;
-        if (odds != null) {
-          await sh.spreadsheets.values.update({
-            spreadsheetId: SHEET_ID, range: `${tab}!F${rowNum}`,
-            valueInputOption: 'RAW', requestBody: { values: [[parseFloat(odds)]] }
-          });
-        }
-        if (units != null) {
-          const u = parseFloat(units);
-          const inzet = +(u * UNIT_EUR).toFixed(2);
-          await sh.spreadsheets.values.update({
-            spreadsheetId: SHEET_ID, range: `${tab}!G${rowNum}:H${rowNum}`,
-            valueInputOption: 'RAW', requestBody: { values: [[u, inzet]] }
-          });
-        }
-        if (tip) {
-          await sh.spreadsheets.values.update({
-            spreadsheetId: SHEET_ID, range: `${tab}!I${rowNum}`,
-            valueInputOption: 'RAW', requestBody: { values: [[tip]] }
-          });
-        }
-        if (uitkomst) await updateBetOutcome(id, uitkomst);
-        break;
-      }
-    }
+    const id = parseFloat(req.params.id);
+    const updates = {};
+    if (odds != null) updates.odds = parseFloat(odds);
+    if (units != null) { updates.units = parseFloat(units); updates.inzet = +(parseFloat(units) * UNIT_EUR).toFixed(2); }
+    if (tip) updates.tip = tip;
+    if (Object.keys(updates).length) await supabase.from('bets').update(updates).eq('bet_id', id);
+    if (uitkomst) await updateBetOutcome(id, uitkomst);
     res.json(await readBets());
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3028,65 +2839,31 @@ app.put('/api/bets/:id', async (req, res) => {
 // W/L herberekenen voor alle settled bets (fix na inzet-bug)
 app.post('/api/bets/recalculate', async (req, res) => {
   try {
-    const sh = getSheetsClient();
-    const { tab } = await getSheetMeta();
-    const { bets, _raw } = await readBets();
-    const pf = v => parseFloat(String(v||'').replace(',','.')) || 0;
     let fixed = 0;
-    // Bouw een map van betIndex → gecorrigeerde wl
-    const corrections = new Map(); // betId → corrected wl
-    for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
-      const row = _raw[i];
-      if (!row || !row[0]) continue;
-      const uitkomst = row[9] || '';
-      if (uitkomst !== 'W' && uitkomst !== 'L') continue;
-      const odds  = pf(row[5]);
-      const units = pf(row[6]);
-      const inzet = pf(row[7]) || +(units * UNIT_EUR).toFixed(2);
-      const wl    = uitkomst === 'W' ? +((odds-1)*inzet).toFixed(2) : +(-inzet).toFixed(2);
-      const currentWl = pf(row[10]);
-      if (Math.abs(currentWl - wl) < 0.01) continue;
-      await sh.spreadsheets.values.update({
-        spreadsheetId: SHEET_ID,
-        range: `${tab}!K${i+1}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[wl]] },
-      });
-      corrections.set(parseFloat(row[0]), wl);
-      fixed++;
-      await sleep(80);
+    const { data: settledBets } = await supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
+    for (const bet of (settledBets || [])) {
+      const inzet = bet.inzet || +(bet.units * UNIT_EUR).toFixed(2);
+      const wl = bet.uitkomst === 'W' ? +((bet.odds-1)*inzet).toFixed(2) : +(-inzet).toFixed(2);
+      if (Math.abs((bet.wl || 0) - wl) >= 0.01) {
+        await supabase.from('bets').update({ wl }).eq('bet_id', bet.bet_id);
+        fixed++;
+      }
     }
-    // Pas bets in-memory aan (niet opnieuw lezen — Sheets is soms traag)
-    const correctedBets = bets.map(b => {
-      if (corrections.has(b.id)) return { ...b, wl: corrections.get(b.id) };
-      return b;
-    });
+    const { bets } = await readBets();
     const users = await loadUsers().catch(() => []);
     const user  = users.find(u => u.id === req.user?.id);
     const sb = user?.settings?.startBankroll ?? START_BANKROLL;
     const ue = user?.settings?.unitEur       ?? UNIT_EUR;
-    res.json({ fixed, bets: correctedBets, stats: calcStats(correctedBets, sb, ue) });
+    res.json({ fixed, bets, stats: calcStats(bets, sb, ue) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Debug: raw sheet data voor L bets (tijdelijk — voor bankroll diagnose)
+// Debug: settled bets data (voor bankroll diagnose)
 app.get('/api/debug/wl', requireAdmin, async (req, res) => {
   try {
-    const { bets, _raw } = await readBets();
-    const lBets = [];
-    for (let i = BET_START_ROW - 1; i < _raw.length; i++) {
-      const row = _raw[i];
-      if (!row || !row[0]) continue;
-      if ((row[9]||'') === 'L' || (row[9]||'') === 'W') {
-        lBets.push({
-          row: i+1, id: row[0], uitkomst: row[9],
-          odds_raw: row[5], units_raw: row[6], inzet_raw: row[7], wl_raw: row[10],
-          odds_type: typeof row[5], units_type: typeof row[6], inzet_type: typeof row[7], wl_type: typeof row[10],
-          parsed_bet: bets.find(b => b.id === parseFloat(row[0]))
-        });
-      }
-    }
-    res.json({ settledCount: lBets.length, bets: lBets, stats: calcStats(bets) });
+    const { bets } = await readBets();
+    const settled = bets.filter(b => b.uitkomst === 'W' || b.uitkomst === 'L');
+    res.json({ settledCount: settled.length, bets: settled, stats: calcStats(bets) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3218,7 +2995,7 @@ app.get('/api/status', (req, res) => {
         updatedAt: afRateLimit.updatedAt,
       },
       espn: { status: 'active', plan: 'Free', note: 'Onbeperkt — live scores auto-refresh' },
-      googleSheets: { status: 'active', plan: 'Free', note: 'Database voor bets + users' },
+      supabase: { status: 'active', plan: 'Free', note: 'Database voor bets + users + calibratie' },
       telegram: { status: 'active', plan: 'Free', note: 'Picks, alerts, model updates' },
       render: { status: 'active', plan: 'Free', note: 'Hosting + keep-alive elke 14 min' },
     },
@@ -3619,9 +3396,7 @@ app.get('/api/live-events/:id', async (req, res) => {
 // Eenmalig: kickofftijden invullen voor bets zonder tijd
 app.post('/api/backfill-times', async (req, res) => {
   try {
-    const { bets, _raw } = await readBets();
-    const sh  = getSheetsClient();
-    const { tab } = await getSheetMeta();
+    const { bets } = await readBets();
     const results = [];
 
     for (let i = 0; i < bets.length; i++) {
@@ -3629,7 +3404,6 @@ app.post('/api/backfill-times', async (req, res) => {
       // altijd overschrijven zodat foute tijden gecorrigeerd worden
 
       // Zoek fixture op datum + teamnaam
-      const [teamA] = b.wedstrijd.split(' vs ').map(t => t.trim());
       const dateStr = b.datum.split('-').reverse().join('-'); // dd-mm-yyyy → yyyy-mm-dd
       const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', { date: dateStr });
       await sleep(200);
@@ -3661,14 +3435,8 @@ app.post('/api/backfill-times', async (req, res) => {
         hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam'
       });
 
-      // Schrijf naar kolom L van de juiste rij
-      const rowNum = BET_START_ROW + i; // 1-gebaseerd
-      await sh.spreadsheets.values.update({
-        spreadsheetId: SHEET_ID,
-        range: `${tab}!L${rowNum}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[tijd]] },
-      });
+      // Schrijf naar Supabase
+      await supabase.from('bets').update({ tijd }).eq('bet_id', b.id);
 
       results.push({ id: b.id, status: 'bijgewerkt', wedstrijd: b.wedstrijd, tijd, rawDate });
     }
@@ -3898,8 +3666,10 @@ app.listen(PORT, () => {
   console.log(`   Live scan     : POST /api/live`);
   console.log(`   Bet tracker   : GET/POST /api/bets\n`);
   seedAdminUser().catch(e => console.error('Seed admin fout:', e.message));
+  loadCalibAsync().then(() => console.log('📊 Calibratie geladen')).catch(() => {});
+  loadSignalWeightsAsync().then(() => console.log('🔧 Signal weights geladen')).catch(() => {});
   loadScanHistoryFromSheets().then(h => console.log(`📜 Scan history geladen: ${h.length} entries`)).catch(() => {});
-  loadPushSubsFromSheets().then(s => console.log(`🔔 Push subs geladen: ${s.length}`)).catch(() => {});
+  loadPushSubs().then(s => console.log(`🔔 Push subs geladen: ${s.length}`)).catch(() => {});
   scheduleDailyResultsCheck();
   scheduleDailyScan();
   scheduleOddsMonitor();
