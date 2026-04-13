@@ -1590,7 +1590,7 @@ function go(name) {
   document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', TAB_IDS[i] === name));
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  if (name === 'tracker') { loadBets(); loadCorrelations(); }
+  if (name === 'tracker') { loadBets().then(() => { setPeriodToday(); }); loadCorrelations(); }
   if (name === 'data')    loadBets().then(d => redrawCharts(d));
   if (name === 'live')    { requestNotifPermission(); if (!betData) loadBets().then(() => fetchLive()); else fetchLive(); }
   if (name === 'analyse') refreshAnalyse();
@@ -1809,6 +1809,16 @@ function formatPeriodStats(s, prefix = '') {
         <div style="font-size:10px;color:var(--muted)">Bets</div>
       </div>
     </div>`;
+}
+
+function setPeriodToday() {
+  const to = new Date();
+  const from = new Date(Date.now() - 86400000);
+  const fmt = d => d.toISOString().slice(0, 10);
+  document.getElementById('f-to').value   = fmt(to);
+  document.getElementById('f-from').value = fmt(from);
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.toggle('active', b.textContent.trim() === 'Vandaag'));
+  applyPeriodFilter();
 }
 
 function setPeriod(days) {
