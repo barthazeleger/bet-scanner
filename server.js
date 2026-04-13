@@ -768,7 +768,18 @@ const get    = (url) => fetch(url, { headers: H }).then(r => r.json()).catch(() 
 const toD    = f => { if (!f || !f.includes('/')) return null; const [n,d] = f.split('/').map(Number); return +(1 + n/d).toFixed(2); };
 const clamp  = (v, lo, hi) => Math.round(Math.min(hi, Math.max(lo, v)));
 const sleep  = ms => new Promise(r => setTimeout(r, ms));
-const tg     = async (text) => fetch(TG_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ chat_id: CHAT, text }) }).catch(() => {});
+const tgRaw  = async (text) => fetch(TG_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ chat_id: CHAT, text }) }).catch(() => {});
+
+// Stuur naar Telegram EN sla op in Supabase notifications tabel
+const tg = async (text, type = 'info') => {
+  tgRaw(text).catch(() => {});
+  // Bepaal titel uit eerste regel
+  const lines = text.split('\n');
+  const title = lines[0].replace(/[^\w\s€%·:→←↑↓+\-.,!?()]/g, '').trim().slice(0, 100);
+  supabase.from('notifications').insert({
+    type, title, body: text, read: false
+  }).then(() => {}).catch(() => {});
+};
 
 // ── FORM & SIGNALS ─────────────────────────────────────────────────────────────
 function calcForm(evts, tid) {
@@ -3081,6 +3092,24 @@ app.get('/api/model-feed', (req, res) => {
 });
 
 // Notifications — API alerts + calibratie inzichten
+// In-app notifications (opgeslagen in Supabase)
+app.get('/api/inbox-notifications', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('notifications')
+      .select('*').order('created_at', { ascending: false }).limit(50);
+    if (error) throw error;
+    const unread = (data || []).filter(n => !n.read).length;
+    res.json({ notifications: data || [], unread });
+  } catch { res.status(500).json({ error: 'Interne fout' }); }
+});
+
+app.put('/api/inbox-notifications/read', async (req, res) => {
+  try {
+    await supabase.from('notifications').update({ read: true }).eq('read', false);
+    res.json({ ok: true });
+  } catch { res.status(500).json({ error: 'Interne fout' }); }
+});
+
 app.get('/api/notifications', async (req, res) => {
   try {
     const alerts = [];
