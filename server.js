@@ -1133,6 +1133,7 @@ const sportRateLimits = {
 (async () => {
   try {
     const todayStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+    // Totaal
     const { data } = await supabase.from('api_usage').select('*').eq('date', todayStr).single();
     if (data) {
       afRateLimit = { remaining: data.remaining, limit: data.api_limit || 7500, updatedAt: data.updated_at, callsToday: data.calls || 0, date: data.date };
@@ -1140,15 +1141,34 @@ const sportRateLimits = {
       afRateLimit.date = todayStr;
       afRateLimit.callsToday = 0;
     }
+    // Per sport
+    const { data: sportRows } = await supabase.from('api_usage').select('*').like('date', `${todayStr}_%`);
+    for (const row of (sportRows || [])) {
+      const sport = row.date.split('_')[1];
+      if (sport && sportRateLimits[sport]) {
+        sportRateLimits[sport].callsToday = row.calls || 0;
+        sportRateLimits[sport].date = todayStr;
+      }
+    }
   } catch { afRateLimit.date = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }); }
 })();
 
 function saveAfUsage() {
+  // Totaal opslaan
   supabase.from('api_usage').upsert({
     date: afRateLimit.date, calls: afRateLimit.callsToday,
     remaining: afRateLimit.remaining, api_limit: afRateLimit.limit,
     updated_at: new Date().toISOString()
   }).then(() => {}).catch(() => {});
+  // Per sport opslaan (date = "2026-04-13_football" etc)
+  for (const [sport, srl] of Object.entries(sportRateLimits)) {
+    if (srl.callsToday > 0) {
+      supabase.from('api_usage').upsert({
+        date: `${afRateLimit.date}_${sport}`, calls: srl.callsToday,
+        api_limit: 7500, updated_at: new Date().toISOString()
+      }).then(() => {}).catch(() => {});
+    }
+  }
 }
 
 async function afGet(host, path, params = {}) {
