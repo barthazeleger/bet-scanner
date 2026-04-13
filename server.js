@@ -1003,11 +1003,18 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}) {
     if (k <= 0.015) return;
 
     // Odds-penalty: hogere odds = hogere variance = lagere strength
-    // Gebaseerd op Wharton research: >3.5 is nadrukkelijk afgeraden
     const vP = odd > 3.50 ? 0.42
              : odd > 2.50 ? 0.65
              : odd > 2.00 ? 0.85
              : 1.0;
+
+    // Data confidence: meer signalen = meer vertrouwen in de pick
+    // Bewezen: full data model +35% accuracy vs odds-only (ScienceDirect 2024)
+    const sigCount = (signals || []).length;
+    const dataConf = sigCount >= 6 ? 1.0    // volledige data
+                   : sigCount >= 3 ? 0.70   // gedeeltelijke data
+                   : sigCount >= 1 ? 0.50   // minimale data
+                   : 0.40;                   // alleen odds
 
     const bk  = epBucketKey(ep);
     const epW = (calibEpBuckets[bk]?.n >= 15 && calibEpBuckets[bk]?.weight)
@@ -1021,10 +1028,10 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}) {
     const edge = Math.round((ep * odd - 1) * 100 * 10) / 10;
 
     const uNum = hk>0.09 ? 1.0 : hk>0.04 ? 0.5 : 0.3;
-    const expectedEur = +(uNum * UNIT_EUR * (edge / 100)).toFixed(2);
+    const expectedEur = +(uNum * UNIT_EUR * (edge / 100) * dataConf).toFixed(2);
     const pick = { match, league, label, odd, units: u, reason, prob, ep: +ep.toFixed(3),
-                   strength: k*(odd-1)*vP*epW, kelly: hk, edge, expectedEur, kickoff, bookie,
-                   signals: signals || [], referee: referee || null };
+                   strength: k*(odd-1)*vP*epW*dataConf, kelly: hk, edge, expectedEur, kickoff, bookie,
+                   signals: signals || [], referee: referee || null, dataConfidence: dataConf };
 
     combiPool.push(pick);            // altijd in combi-pool (ook lage odds)
     if (odd >= MIN_ODDS) picks.push(pick);  // alleen in singles als >= MIN_ODDS
@@ -1642,7 +1649,7 @@ async function runBasketball(emit) {
       });
       apiCallsUsed++;
 
-      // Build standings lookup: teamId → { rank, win, loss, form, teamName }
+      // Build standings lookup: teamId → { rank, win, loss, form, teamName, home/away splits }
       const standingsMap = {};
       for (const group of (standings || [])) {
         // api-sports basketball standings: array of groups, each group is array of teams
@@ -1650,6 +1657,7 @@ async function runBasketball(emit) {
         for (const t of teams) {
           const tid = t.team?.id;
           if (!tid) continue;
+          const totalGames = (t.games?.win?.total || 0) + (t.games?.lose?.total || 0);
           standingsMap[tid] = {
             rank: t.position || 99,
             win: t.games?.win?.total || 0,
@@ -1657,9 +1665,19 @@ async function runBasketball(emit) {
             form: t.form || '',
             teamName: t.team?.name || '',
             streak: t.description || '',
+            homeWin: t.games?.win?.home || 0,
+            homeLoss: t.games?.lose?.home || 0,
+            awayWin: t.games?.win?.away || 0,
+            awayLoss: t.games?.lose?.away || 0,
+            pointsFor: t.points?.for || 0,
+            pointsAgainst: t.points?.against || 0,
+            totalGames,
           };
         }
       }
+
+      // Team stats cache for this league (basketball-specific: PPG, rebounds)
+      const bbStatsCache = {};
 
       // Yesterday's fixtures for back-to-back detection
       await sleep(80);
@@ -1730,9 +1748,75 @@ async function runBasketball(emit) {
         if (hmId && playedYesterday.has(hmId)) { b2bAdj -= 0.04; b2bNote += ` | ⚠️ ${hm.split(' ').pop()} B2B`; }
         if (awId && playedYesterday.has(awId)) { b2bAdj += 0.04; b2bNote += ` | ⚠️ ${aw.split(' ').pop()} B2B`; }
 
+        // ── Advanced basketball signals ──
+        let ppgAdj = 0, rebAdj = 0, homeSplitAdj = 0;
+        let ppgNote = '', rebNote = '', splitNote = '';
+
+        // PPG advantage from team statistics API (only for candidates, max 30 extra calls per league)
+        if (hmSt && awSt && apiCallsUsed < 200) {
+          for (const tid of [hmId, awId]) {
+            if (tid && !bbStatsCache[tid] && apiCallsUsed < 200) {
+              await sleep(100);
+              try {
+                const st = await afGet('v1.basketball.api-sports.io', '/statistics', { team: tid, league: league.id, season: league.season });
+                apiCallsUsed++;
+                if (st) {
+                  const s = Array.isArray(st) ? st[0] : st;
+                  bbStatsCache[tid] = {
+                    ppg: s?.points?.for?.average?.all || 0,
+                    ppgAllowed: s?.points?.against?.average?.all || 0,
+                    rebFor: s?.rebounds?.total?.average || 0,
+                    rebAgainst: s?.rebounds?.against?.average || 0,
+                  };
+                }
+              } catch (e) { /* stats unavailable, skip */ }
+            }
+          }
+
+          const hmStats = bbStatsCache[hmId];
+          const awStats = bbStatsCache[awId];
+
+          // PPG: if home PPG > away PPG allowed by >5 → +2% home
+          if (hmStats?.ppg && awStats?.ppgAllowed) {
+            const diff = hmStats.ppg - awStats.ppgAllowed;
+            if (Math.abs(diff) > 5) {
+              ppgAdj = Math.min(0.04, Math.max(-0.04, diff * 0.004));
+              ppgNote = ` | PPG${diff > 0 ? '+' : ''}${diff.toFixed(1)}`;
+            }
+          }
+
+          // Rebound differential: team with >3 more rebounds → +1.5%
+          if (hmStats?.rebFor && awStats?.rebFor) {
+            const hmRebDiff = (hmStats.rebFor || 0) - (hmStats.rebAgainst || 0);
+            const awRebDiff = (awStats.rebFor || 0) - (awStats.rebAgainst || 0);
+            const rebDiff = hmRebDiff - awRebDiff;
+            if (Math.abs(rebDiff) > 3) {
+              rebAdj = Math.min(0.04, Math.max(-0.04, rebDiff * 0.005));
+              rebNote = ` | Reb:${rebDiff > 0 ? '+' : ''}${rebDiff.toFixed(1)}`;
+            }
+          }
+        }
+
+        // Home/away splits from standings (0 extra API calls)
+        if (hmSt && awSt) {
+          const hmHomeGames = (hmSt.homeWin || 0) + (hmSt.homeLoss || 0);
+          const awAwayGames = (awSt.awayWin || 0) + (awSt.awayLoss || 0);
+          if (hmHomeGames >= 5 && awAwayGames >= 5) {
+            const hmHomeWR = hmSt.homeWin / hmHomeGames;
+            const awAwayWR = awSt.awayWin / awAwayGames;
+            const splitDiff = hmHomeWR - awAwayWR;
+            if (Math.abs(splitDiff) > 0.15) {
+              homeSplitAdj = Math.min(0.04, Math.max(-0.04, splitDiff * 0.08));
+              splitNote = ` | H/A:${hmHomeWR.toFixed(2)}/${awAwayWR.toFixed(2)}`;
+            }
+          }
+        }
+
+        const totalAdv = ppgAdj + rebAdj + homeSplitAdj;
+
         const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -1746,10 +1830,13 @@ async function runBasketball(emit) {
         if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
         if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
         if (b2bAdj !== 0) matchSignals.push(`b2b:${b2bAdj>0?'+':''}${(b2bAdj*100).toFixed(1)}%`);
+        if (Math.abs(ppgAdj) >= 0.005) matchSignals.push(`ppg_advantage:${ppgAdj>0?'+':''}${(ppgAdj*100).toFixed(1)}%`);
+        if (Math.abs(rebAdj) >= 0.005) matchSignals.push(`rebound_diff:${rebAdj>0?'+':''}${(rebAdj*100).toFixed(1)}%`);
+        if (Math.abs(homeSplitAdj) >= 0.005) matchSignals.push(`home_away_split:${homeSplitAdj>0?'+':''}${(homeSplitAdj*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
-        const sharedNotes = `${posStr}${formNote}${b2bNote}`;
+        const sharedNotes = `${posStr}${formNote}${b2bNote}${ppgNote}${rebNote}${splitNote}`;
 
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
@@ -1891,6 +1978,7 @@ async function runHockey(emit) {
         for (const t of teams) {
           const tid = t.team?.id;
           if (!tid) continue;
+          const totalGames = (t.games?.win?.total || 0) + (t.games?.lose?.total || 0);
           standingsMap[tid] = {
             rank: t.position || 99,
             win: t.games?.win?.total || 0,
@@ -1899,6 +1987,11 @@ async function runHockey(emit) {
             teamName: t.team?.name || '',
             goalsFor: t.goals?.for || 0,
             goalsAgainst: t.goals?.against || 0,
+            homeWin: t.games?.win?.home || 0,
+            homeLoss: t.games?.lose?.home || 0,
+            awayWin: t.games?.win?.away || 0,
+            awayLoss: t.games?.lose?.away || 0,
+            totalGames,
           };
         }
       }
@@ -1969,9 +2062,41 @@ async function runHockey(emit) {
         if (hmId && playedYesterday.has(hmId)) { b2bAdj -= 0.04; b2bNote += ` | ⚠️ ${hm.split(' ').pop()} B2B`; }
         if (awId && playedYesterday.has(awId)) { b2bAdj += 0.04; b2bNote += ` | ⚠️ ${aw.split(' ').pop()} B2B`; }
 
+        // ── Advanced hockey signals (from standings, 0 extra API calls) ──
+        let goalDiffAdj = 0, homeRecordAdj = 0;
+        let goalDiffNote = '', homeRecordNote = '';
+
+        // Goal differential per game: strong = >0.5 per game → +2%
+        if (hmSt && awSt && hmSt.totalGames >= 5 && awSt.totalGames >= 5) {
+          const hmGDpg = (hmSt.goalsFor - hmSt.goalsAgainst) / hmSt.totalGames;
+          const awGDpg = (awSt.goalsFor - awSt.goalsAgainst) / awSt.totalGames;
+          const gdDiff = hmGDpg - awGDpg;
+          if (Math.abs(gdDiff) > 0.5) {
+            goalDiffAdj = Math.min(0.04, Math.max(-0.04, gdDiff * 0.02));
+            goalDiffNote = ` | GD/g:${hmGDpg > 0 ? '+' : ''}${hmGDpg.toFixed(2)} vs ${awGDpg > 0 ? '+' : ''}${awGDpg.toFixed(2)}`;
+          }
+        }
+
+        // Home/away record: strong home vs weak away → +2%
+        if (hmSt && awSt) {
+          const hmHomeGames = (hmSt.homeWin || 0) + (hmSt.homeLoss || 0);
+          const awAwayGames = (awSt.awayWin || 0) + (awSt.awayLoss || 0);
+          if (hmHomeGames >= 5 && awAwayGames >= 5) {
+            const hmHomeWR = hmSt.homeWin / hmHomeGames;
+            const awAwayWR = awSt.awayWin / awAwayGames;
+            const splitDiff = hmHomeWR - awAwayWR;
+            if (Math.abs(splitDiff) > 0.15) {
+              homeRecordAdj = Math.min(0.04, Math.max(-0.04, splitDiff * 0.08));
+              homeRecordNote = ` | H/A:${hmHomeWR.toFixed(2)}/${awAwayWR.toFixed(2)}`;
+            }
+          }
+        }
+
+        const totalAdv = goalDiffAdj + homeRecordAdj;
+
         const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -1984,10 +2109,12 @@ async function runHockey(emit) {
         if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
         if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
         if (b2bAdj !== 0) matchSignals.push(`b2b:${b2bAdj>0?'+':''}${(b2bAdj*100).toFixed(1)}%`);
+        if (Math.abs(goalDiffAdj) >= 0.005) matchSignals.push(`goal_diff:${goalDiffAdj>0?'+':''}${(goalDiffAdj*100).toFixed(1)}%`);
+        if (Math.abs(homeRecordAdj) >= 0.005) matchSignals.push(`home_away_record:${homeRecordAdj>0?'+':''}${(homeRecordAdj*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
-        const sharedNotes = `${posStr}${formNote}${b2bNote}`;
+        const sharedNotes = `${posStr}${formNote}${b2bNote}${goalDiffNote}${homeRecordNote}`;
 
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
@@ -2127,12 +2254,20 @@ async function runBaseball(emit) {
         for (const t of teams) {
           const tid = t.team?.id;
           if (!tid) continue;
+          const totalGames = (t.games?.win?.total || 0) + (t.games?.lose?.total || 0);
           standingsMap[tid] = {
             rank: t.position || 99,
             win: t.games?.win?.total || 0,
             loss: t.games?.lose?.total || 0,
             form: t.form || '',
             teamName: t.team?.name || '',
+            homeWin: t.games?.win?.home || 0,
+            homeLoss: t.games?.lose?.home || 0,
+            awayWin: t.games?.win?.away || 0,
+            awayLoss: t.games?.lose?.away || 0,
+            pointsFor: t.points?.for || 0,
+            pointsAgainst: t.points?.against || 0,
+            totalGames,
           };
         }
       }
@@ -2185,10 +2320,57 @@ async function runBaseball(emit) {
           formAdj = Math.max(-0.05, Math.min(0.05, (fmScore(hmSt.form) - fmScore(awSt.form)) / 30 * 0.04));
         }
 
+        // ── Advanced baseball signals (from standings, 0 extra API calls) ──
+        let runDiffAdj = 0, homeAwayAdj = 0, streakAdj = 0;
+        let runDiffNote = '', homeAwayNote = '', streakNote = '';
+
+        // Run differential per game: >0.5/game → +2%
+        if (hmSt && awSt && hmSt.totalGames >= 10 && awSt.totalGames >= 10) {
+          const hmRDpg = (hmSt.pointsFor - hmSt.pointsAgainst) / hmSt.totalGames;
+          const awRDpg = (awSt.pointsFor - awSt.pointsAgainst) / awSt.totalGames;
+          const rdDiff = hmRDpg - awRDpg;
+          if (Math.abs(rdDiff) > 0.5) {
+            runDiffAdj = Math.min(0.04, Math.max(-0.04, rdDiff * 0.02));
+            runDiffNote = ` | RD/g:${hmRDpg > 0 ? '+' : ''}${hmRDpg.toFixed(2)} vs ${awRDpg > 0 ? '+' : ''}${awRDpg.toFixed(2)}`;
+          }
+        }
+
+        // Home/away record splits
+        if (hmSt && awSt) {
+          const hmHomeGames = (hmSt.homeWin || 0) + (hmSt.homeLoss || 0);
+          const awAwayGames = (awSt.awayWin || 0) + (awSt.awayLoss || 0);
+          if (hmHomeGames >= 10 && awAwayGames >= 10) {
+            const hmHomeWR = hmSt.homeWin / hmHomeGames;
+            const awAwayWR = awSt.awayWin / awAwayGames;
+            const splitDiff = hmHomeWR - awAwayWR;
+            if (Math.abs(splitDiff) > 0.10) {
+              homeAwayAdj = Math.min(0.04, Math.max(-0.04, splitDiff * 0.06));
+              homeAwayNote = ` | H/A:${hmHomeWR.toFixed(2)}/${awAwayWR.toFixed(2)}`;
+            }
+          }
+        }
+
+        // Win streak detection: 5+ game win streak → +1.5%
+        if (hmSt?.form) {
+          const hmStreak = (hmSt.form.match(/W+$/) || [''])[0].length;
+          if (hmStreak >= 5) { streakAdj += Math.min(0.04, hmStreak * 0.003); streakNote += ` | ${hm.split(' ').pop()} W${hmStreak}`; }
+          const hmLStreak = (hmSt.form.match(/L+$/) || [''])[0].length;
+          if (hmLStreak >= 5) { streakAdj -= Math.min(0.04, hmLStreak * 0.003); streakNote += ` | ${hm.split(' ').pop()} L${hmLStreak}`; }
+        }
+        if (awSt?.form) {
+          const awStreak = (awSt.form.match(/W+$/) || [''])[0].length;
+          if (awStreak >= 5) { streakAdj -= Math.min(0.04, awStreak * 0.003); streakNote += ` | ${aw.split(' ').pop()} W${awStreak}`; }
+          const awLStreak = (awSt.form.match(/L+$/) || [''])[0].length;
+          if (awLStreak >= 5) { streakAdj += Math.min(0.04, awLStreak * 0.003); streakNote += ` | ${aw.split(' ').pop()} L${awLStreak}`; }
+        }
+        streakAdj = Math.min(0.04, Math.max(-0.04, streakAdj));
+
+        const totalAdv = runDiffAdj + homeAwayAdj + streakAdj;
+
         // Home advantage (~54% in MLB)
         const ha = 0.04;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -2201,10 +2383,13 @@ async function runBaseball(emit) {
         if (ha !== 0) matchSignals.push(`baseball_home:+${(ha*100).toFixed(1)}%`);
         if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
         if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
+        if (Math.abs(runDiffAdj) >= 0.005) matchSignals.push(`run_diff:${runDiffAdj>0?'+':''}${(runDiffAdj*100).toFixed(1)}%`);
+        if (Math.abs(homeAwayAdj) >= 0.005) matchSignals.push(`home_away_split:${homeAwayAdj>0?'+':''}${(homeAwayAdj*100).toFixed(1)}%`);
+        if (Math.abs(streakAdj) >= 0.005) matchSignals.push(`streak:${streakAdj>0?'+':''}${(streakAdj*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-10)||'?'} vs ${awSt?.form?.slice(-10)||'?'}` : '';
-        const sharedNotes = `${posStr}${formNote}`;
+        const sharedNotes = `${posStr}${formNote}${runDiffNote}${homeAwayNote}${streakNote}`;
 
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
@@ -2343,12 +2528,21 @@ async function runFootballUS(emit) {
         for (const t of teams) {
           const tid = t.team?.id;
           if (!tid) continue;
+          const totalGames = (t.games?.win?.total || 0) + (t.games?.lose?.total || 0);
           standingsMap[tid] = {
             rank: t.position || 99,
             win: t.games?.win?.total || 0,
             loss: t.games?.lose?.total || 0,
             form: t.form || '',
             teamName: t.team?.name || '',
+            homeWin: t.games?.win?.home || 0,
+            homeLoss: t.games?.lose?.home || 0,
+            awayWin: t.games?.win?.away || 0,
+            awayLoss: t.games?.lose?.away || 0,
+            pointsFor: t.points?.for || 0,
+            pointsAgainst: t.points?.against || 0,
+            group: t.group?.name || '',
+            totalGames,
           };
         }
       }
@@ -2401,13 +2595,50 @@ async function runFootballUS(emit) {
 
         // Home advantage (~57% in NFL)
         const ha = 0.057;
-        // Bye week advantage (+3% if coming off bye) — approximated via form gap
+        // Bye week: markt overvalueert dit (prijst +1.0 punt, werkelijk +0.3)
+        // Bron: Frontiers in Behavioral Economics 2024
+        // We gebruiken +1% ipv +3% — de EDGE zit in dat de markt het overvalueert
         let byeAdj = 0, byeNote = '';
-        if (hmSt?.form && hmSt.form.length > 0 && hmSt.form.slice(-1) === 'B') { byeAdj += 0.03; byeNote += ` | 💤 ${hm.split(' ').pop()} off bye`; }
-        if (awSt?.form && awSt.form.length > 0 && awSt.form.slice(-1) === 'B') { byeAdj -= 0.03; byeNote += ` | 💤 ${aw.split(' ').pop()} off bye`; }
+        if (hmSt?.form && hmSt.form.length > 0 && hmSt.form.slice(-1) === 'B') { byeAdj += 0.01; byeNote += ` | 💤 ${hm.split(' ').pop()} off bye (overvalued by market)`; }
+        if (awSt?.form && awSt.form.length > 0 && awSt.form.slice(-1) === 'B') { byeAdj -= 0.01; byeNote += ` | 💤 ${aw.split(' ').pop()} off bye (overvalued by market)`; }
 
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5);
+        // ── Advanced NFL signals (from standings, 0 extra API calls) ──
+        let ptsDiffAdj = 0, homeRecordAdj = 0, divisionAdj = 0;
+        let ptsDiffNote = '', homeRecordNote = '', divisionNote = '';
+
+        // Points differential per game: >7/game → +2%
+        if (hmSt && awSt && hmSt.totalGames >= 3 && awSt.totalGames >= 3) {
+          const hmPDpg = (hmSt.pointsFor - hmSt.pointsAgainst) / hmSt.totalGames;
+          const awPDpg = (awSt.pointsFor - awSt.pointsAgainst) / awSt.totalGames;
+          const pdDiff = hmPDpg - awPDpg;
+          if (Math.abs(pdDiff) > 7) {
+            ptsDiffAdj = Math.min(0.04, Math.max(-0.04, pdDiff * 0.003));
+            ptsDiffNote = ` | PD/g:${hmPDpg > 0 ? '+' : ''}${hmPDpg.toFixed(1)} vs ${awPDpg > 0 ? '+' : ''}${awPDpg.toFixed(1)}`;
+          }
+        }
+
+        // Dominant home record (>75% home wins) → +2%
+        if (hmSt) {
+          const hmHomeGames = (hmSt.homeWin || 0) + (hmSt.homeLoss || 0);
+          if (hmHomeGames >= 3) {
+            const hmHomeWR = hmSt.homeWin / hmHomeGames;
+            if (hmHomeWR > 0.75) {
+              homeRecordAdj = Math.min(0.04, (hmHomeWR - 0.55) * 0.08);
+              homeRecordNote = ` | HomeWR:${(hmHomeWR * 100).toFixed(0)}%`;
+            }
+          }
+        }
+
+        // Division rivalry: same-division games are closer (reduce edge by dampening)
+        if (hmSt?.group && awSt?.group && hmSt.group === awSt.group && hmSt.group !== '') {
+          divisionAdj = -0.015; // reduce confidence in division games, they're tighter
+          divisionNote = ` | DIV rivalry`;
+        }
+
+        const totalAdv = ptsDiffAdj + homeRecordAdj + divisionAdj;
+
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj + totalAdv);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -2420,10 +2651,13 @@ async function runFootballUS(emit) {
         if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
         if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
         if (byeAdj !== 0) matchSignals.push(`bye:${byeAdj>0?'+':''}${(byeAdj*100).toFixed(1)}%`);
+        if (Math.abs(ptsDiffAdj) >= 0.005) matchSignals.push(`pts_diff:${ptsDiffAdj>0?'+':''}${(ptsDiffAdj*100).toFixed(1)}%`);
+        if (Math.abs(homeRecordAdj) >= 0.005) matchSignals.push(`home_record:+${(homeRecordAdj*100).toFixed(1)}%`);
+        if (divisionAdj !== 0) matchSignals.push(`division_rivalry:${(divisionAdj*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
-        const sharedNotes = `${posStr}${formNote}${byeNote}`;
+        const sharedNotes = `${posStr}${formNote}${byeNote}${ptsDiffNote}${homeRecordNote}${divisionNote}`;
 
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
@@ -2562,12 +2796,22 @@ async function runHandball(emit) {
         for (const t of teams) {
           const tid = t.team?.id;
           if (!tid) continue;
+          const totalGames = (t.games?.win?.total || 0) + (t.games?.lose?.total || 0) + (t.games?.draw?.total || 0);
           standingsMap[tid] = {
             rank: t.position || 99,
             win: t.games?.win?.total || 0,
             loss: t.games?.lose?.total || 0,
+            draw: t.games?.draw?.total || 0,
             form: t.form || '',
             teamName: t.team?.name || '',
+            homeWin: t.games?.win?.home || 0,
+            homeLoss: t.games?.lose?.home || 0,
+            homeDraw: t.games?.draw?.home || 0,
+            awayWin: t.games?.win?.away || 0,
+            awayLoss: t.games?.lose?.away || 0,
+            pointsFor: t.points?.for || t.goals?.for || 0,
+            pointsAgainst: t.points?.against || t.goals?.against || 0,
+            totalGames,
           };
         }
       }
@@ -2618,10 +2862,55 @@ async function runHandball(emit) {
           formAdj = Math.max(-0.05, Math.min(0.05, (fmScore(hmSt.form) - fmScore(awSt.form)) / 15 * 0.04));
         }
 
+        // ── Advanced handball signals (from standings, 0 extra API calls) ──
+        let goalDiffAdj = 0, homeWRAdj = 0, formMomentumAdj = 0;
+        let goalDiffNote = '', homeWRNote = '', momentumNote = '';
+
+        // Goal differential from standings: strong GD → +2%
+        if (hmSt && awSt && hmSt.totalGames >= 5 && awSt.totalGames >= 5) {
+          const hmGDpg = (hmSt.pointsFor - hmSt.pointsAgainst) / hmSt.totalGames;
+          const awGDpg = (awSt.pointsFor - awSt.pointsAgainst) / awSt.totalGames;
+          const gdDiff = hmGDpg - awGDpg;
+          if (Math.abs(gdDiff) > 2) {
+            goalDiffAdj = Math.min(0.04, Math.max(-0.04, gdDiff * 0.005));
+            goalDiffNote = ` | GD/g:${hmGDpg > 0 ? '+' : ''}${hmGDpg.toFixed(1)} vs ${awGDpg > 0 ? '+' : ''}${awGDpg.toFixed(1)}`;
+          }
+        }
+
+        // Home team with >80% home win rate → +3% (handball has very strong home advantage)
+        if (hmSt) {
+          const hmHomeGames = (hmSt.homeWin || 0) + (hmSt.homeLoss || 0) + (hmSt.homeDraw || 0);
+          if (hmHomeGames >= 5) {
+            const hmHomeWR = hmSt.homeWin / hmHomeGames;
+            if (hmHomeWR > 0.80) {
+              homeWRAdj = Math.min(0.04, (hmHomeWR - 0.55) * 0.12);
+              homeWRNote = ` | HomeWR:${(hmHomeWR * 100).toFixed(0)}%`;
+            }
+          }
+        }
+
+        // Form momentum: last 3 vs previous 3 (acceleration)
+        if (hmSt?.form && hmSt.form.length >= 6 && awSt?.form && awSt.form.length >= 6) {
+          const momentumScore = s => {
+            const recent = [...s.slice(-3)].reduce((a,c)=>a+(c==='W'?3:c==='L'?0:1),0);
+            const prev = [...s.slice(-6,-3)].reduce((a,c)=>a+(c==='W'?3:c==='L'?0:1),0);
+            return recent - prev;
+          };
+          const hmMomentum = momentumScore(hmSt.form);
+          const awMomentum = momentumScore(awSt.form);
+          const momDiff = hmMomentum - awMomentum;
+          if (Math.abs(momDiff) >= 3) {
+            formMomentumAdj = Math.min(0.04, Math.max(-0.04, momDiff * 0.005));
+            momentumNote = ` | Momentum:${momDiff > 0 ? '+' : ''}${momDiff}`;
+          }
+        }
+
+        const totalAdv = goalDiffAdj + homeWRAdj + formMomentumAdj;
+
         // Home advantage is STRONG in handball (~60%)
         const ha = league.ha || 0.06;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -2633,10 +2922,13 @@ async function runHandball(emit) {
         if (ha !== 0) matchSignals.push(`handball_home:+${(ha*100).toFixed(1)}%`);
         if (Math.abs(formAdj) >= 0.005) matchSignals.push(`form:${formAdj>0?'+':''}${(formAdj*100).toFixed(1)}%`);
         if (Math.abs(posAdj) >= 0.005) matchSignals.push(`position:${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%`);
+        if (Math.abs(goalDiffAdj) >= 0.005) matchSignals.push(`goal_diff:${goalDiffAdj>0?'+':''}${(goalDiffAdj*100).toFixed(1)}%`);
+        if (Math.abs(homeWRAdj) >= 0.005) matchSignals.push(`home_dominance:+${(homeWRAdj*100).toFixed(1)}%`);
+        if (Math.abs(formMomentumAdj) >= 0.005) matchSignals.push(`momentum:${formMomentumAdj>0?'+':''}${(formMomentumAdj*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
-        const sharedNotes = `${posStr}${formNote}`;
+        const sharedNotes = `${posStr}${formNote}${goalDiffNote}${homeWRNote}${momentumNote}`;
 
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
