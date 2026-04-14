@@ -2,6 +2,12 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.7] - 2026-04-14
+
+### Debug
+- MLB run-line pool dump in scan log voor diagnose Dodgers-mysterie. Toont per game: preferredBookies, fpHome/fpAway, en exacte pool entries (`bookie:point@price` per side). Ook log wanneer `bestSpreadPick` null returnt zodat we weten of het edge of pool was.
+- Tijdelijk; verwijderen na root-cause vastgesteld.
+
 ## [10.7.6] - 2026-04-14
 
 ### Fixed (KRITIEK — Dodgers-mysterie opgelost)

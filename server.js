@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.6';
+const APP_VERSION    = '10.7.7';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -3987,12 +3987,24 @@ async function runBaseball(emit) {
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
           const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
+          // DEBUG (remove after Dodgers-mysterie opgelost): dump pool entries voor MLB run-line
+          // zodat we de exacte bookies/prijzen zien wanneer geen pick gegenereerd wordt.
+          if (homeSpr.length || awaySpr.length) {
+            const dumpPool = (label, arr) => {
+              if (!arr.length) return `${label}=[]`;
+              return `${label}=[${arr.map(s => `${s.bookie}:${s.point}@${s.price}`).join(', ')}]`;
+            };
+            const prefStr = _preferredBookiesLower?.join(',') || 'all';
+            emit({ log: `🔍 MLB ${hm} vs ${aw} runline pool · pref=[${prefStr}] · fpHome=${fpHome.toFixed(3)} fpAway=${fpAway.toFixed(3)} · ${dumpPool('home', homeSpr)} · ${dumpPool('away', awaySpr)}` });
+          }
           const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
           if (bH) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
               `Run Line | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
               Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
+          } else if (homeSpr.length) {
+            emit({ log: `🔍 MLB ${hm} home -1.5: bestSpreadPick returned null (mogelijk edge<minEdge of pool leeg na preferred filter)` });
           }
           const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
           if (bA) {
