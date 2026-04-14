@@ -1014,6 +1014,15 @@ function poisson(k, lambda) {
   return result;
 }
 
+function poissonOver(lambda, line) {
+  if (typeof lambda !== 'number' || !isFinite(lambda) || lambda < 0) return 0;
+  if (typeof line !== 'number' || !isFinite(line)) return 0;
+  const threshold = Math.floor(line);
+  let cumulative = 0;
+  for (let k = 0; k <= threshold; k++) cumulative += poisson(k, lambda);
+  return Math.max(0, Math.min(1, 1 - cumulative));
+}
+
 function poisson3Way(expHome, expAway, maxGoals = 12) {
   let pHome = 0, pTie = 0, pAway = 0;
   for (let h = 0; h <= maxGoals; h++) {
@@ -1241,6 +1250,50 @@ test('poisson3Way: low-scoring → higher draw %', () => {
 test('poisson3Way: zero goals handled', () => {
   const r = poisson3Way(0, 0);
   assert.ok(r.pDraw > 0.99, '0 goals → bijna zeker 0-0 draw');
+});
+
+// ── poissonOver: P(X > line) met Poisson ───────────────────────────────────
+
+test('poissonOver: lambda=3 line 1.5 ≈ 0.8 (NHL team total)', () => {
+  const p = poissonOver(3.0, 1.5);
+  // P(X > 1.5) = P(X >= 2) = 1 - P(0) - P(1) = 1 - 0.0498 - 0.1494 = ~0.801
+  assert.ok(Math.abs(p - 0.801) < 0.005, `got ${p}, expected ~0.801`);
+});
+
+test('poissonOver: lambda=3 line 2.5 ≈ 0.58', () => {
+  const p = poissonOver(3.0, 2.5);
+  // P(X > 2.5) = P(X >= 3) = 1 - 0.0498 - 0.1494 - 0.224 = ~0.577
+  assert.ok(Math.abs(p - 0.577) < 0.01, `got ${p}, expected ~0.577`);
+});
+
+test('poissonOver: lambda=2 line 3.5 ≈ 0.14', () => {
+  const p = poissonOver(2.0, 3.5);
+  // Under-scoring scenario
+  assert.ok(p < 0.2 && p > 0.1, `got ${p}`);
+});
+
+test('poissonOver: high line ≈ 0', () => {
+  const p = poissonOver(3.0, 10.5);
+  assert.ok(p < 0.01, 'line 10.5 onwaarschijnlijk bij lambda 3');
+});
+
+test('poissonOver: low line ≈ 1', () => {
+  const p = poissonOver(3.0, 0.5);
+  // P(X > 0) = 1 - P(0) = 1 - e^-3 ≈ 0.95
+  assert.ok(p > 0.94 && p <= 1.0, `got ${p}`);
+});
+
+test('poissonOver: invalid inputs return 0', () => {
+  assert.strictEqual(poissonOver(NaN, 2.5), 0);
+  assert.strictEqual(poissonOver(-1, 2.5), 0);
+  assert.strictEqual(poissonOver(3, NaN), 0);
+  assert.strictEqual(poissonOver('string', 2.5), 0);
+});
+
+test('poissonOver: lambda=0 edge case', () => {
+  // Bij lambda=0 is P(X > any positive line) = 0
+  assert.strictEqual(poissonOver(0, 0.5), 0);
+  assert.strictEqual(poissonOver(0, 1.5), 0);
 });
 
 // ── Integration scenario's ──────────────────────────────────────────────────
