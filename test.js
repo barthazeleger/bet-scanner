@@ -12,6 +12,8 @@ const {
   normalizeTeamName, teamMatchScore, normalizeSport, detectMarket,
   pitcherAdjustment, shotsDifferentialAdjustment, recomputeWl,
   NHL_OT_HOME_SHARE, MODEL_MARKET_DIVERGENCE_THRESHOLD,
+  bayesSmooth, hierarchicalMultiplier, HIER_CALIB_PRIOR, HIER_CALIB_MIN_N, HIER_CALIB_K,
+  residualModelDelta, residualModelActive, RESIDUAL_MIN_TRAINING_PICKS,
 } = modelMath;
 
 // Voor tests die nog factorial/poissonProb (oude naam) nodig hebben; wrappers via lib.
@@ -1617,6 +1619,293 @@ test('snapshot writers: Supabase-exceptie wordt gevangen, geen rethrow', async (
   await snap.writeOddsSnapshots(errorSupabase, 1, [{ bookmaker: 'X', market_type: 'ml', selection_key: 'home', odds: 1.9 }]);
   await snap.writeMarketConsensus(errorSupabase, { fixtureId: 1, marketType: 'threeway', consensusProb: { home: 0.5, draw: 0.2, away: 0.3 } });
   await snap.writeFeatureSnapshot(errorSupabase, 1, { test: true });
+});
+
+// ── Hierarchical calibration + Residual model framework ────────────────────
+
+console.log('\n  Hierarchical calibration + residual framework:');
+
+test('bayesSmooth: n=0 → parent, n→∞ → own', () => {
+  assert.strictEqual(bayesSmooth(1.20, 0, 1.00), 1.00, 'geen data → terugvallen op parent');
+  // n veel groter dan K → own dominant
+  const big = bayesSmooth(1.20, 10000, 1.00);
+  assert.ok(Math.abs(big - 1.20) < 0.01, 'veel data → own multiplier');
+});
+
+test('bayesSmooth: n=K → 50/50 blend', () => {
+  const r = bayesSmooth(1.20, HIER_CALIB_K, 1.00);
+  assert.ok(Math.abs(r - 1.10) < 1e-9, 'n=K → midpoint');
+});
+
+test('hierarchicalMultiplier: lege buckets → 1.0 (prior)', () => {
+  const r = hierarchicalMultiplier({});
+  assert.strictEqual(r, 1.0);
+});
+
+test('hierarchicalMultiplier: clamped op [0.5, 1.5]', () => {
+  // Forceer extreme waardes
+  const high = hierarchicalMultiplier({
+    sport_league_market: { multiplier: 5.0, n: 1000 },
+    sport_market: { multiplier: 5.0, n: 1000 },
+    sport: { multiplier: 5.0, n: 1000 },
+  });
+  assert.ok(high <= 1.5, 'clamped to 1.5');
+  const low = hierarchicalMultiplier({
+    sport_league_market: { multiplier: 0.1, n: 1000 },
+    sport_market: { multiplier: 0.1, n: 1000 },
+    sport: { multiplier: 0.1, n: 1000 },
+  });
+  assert.ok(low >= 0.5, 'clamped to 0.5');
+});
+
+test('hierarchicalMultiplier: child met weinig data smoothed naar parent', () => {
+  // Sport_market heeft 100 bets, league_market heeft maar 5 bets
+  const r = hierarchicalMultiplier({
+    sport: { multiplier: 1.0, n: 500 },
+    sport_market: { multiplier: 1.20, n: 100 },
+    sport_league_market: { multiplier: 0.80, n: 5 },
+  });
+  // League smoothed naar market (1.20), zou rond 1.15-1.18 moeten zijn
+  assert.ok(r > 1.10 && r < 1.22, `r=${r} should be smoothed toward market`);
+});
+
+test('residualModelDelta: zonder coefficients → 0 (skeleton)', () => {
+  assert.strictEqual(residualModelDelta({}, null), 0);
+  assert.strictEqual(residualModelDelta({}, { weights: [] }), 0);
+});
+
+test('residualModelDelta: met coefficients berekent sigmoid delta', () => {
+  const coef = {
+    bias: 0,
+    weights: [0.5, -0.3],
+    featureNames: ['form', 'rest_diff'],
+  };
+  const r = residualModelDelta({ form: 1, rest_diff: 0 }, coef);
+  // z = 0 + 0.5*1 = 0.5; sigmoid(0.5) ≈ 0.622; (0.622 - 0.5) * 0.30 ≈ 0.0366
+  assert.ok(r > 0.02 && r < 0.05, `delta ${r} expected ~0.037`);
+});
+
+test('residualModelDelta: clamped binnen ±0.15', () => {
+  const coef = { bias: 100, weights: [], featureNames: [] };
+  const r = residualModelDelta({}, coef);
+  assert.ok(r <= 0.15);
+  const coefNeg = { bias: -100, weights: [], featureNames: [] };
+  const rN = residualModelDelta({}, coefNeg);
+  assert.ok(rN >= -0.15);
+});
+
+test('residualModelActive: drempel = RESIDUAL_MIN_TRAINING_PICKS', () => {
+  assert.strictEqual(residualModelActive(499), false);
+  assert.strictEqual(residualModelActive(500), true);
+  assert.strictEqual(residualModelActive(1000), true);
+  assert.strictEqual(residualModelActive(0), false);
+  assert.strictEqual(residualModelActive(null), false);
+});
+
+// ── INTEGRATION: end-to-end snapshot flow met mock supabase ────────────────
+
+console.log('\n  Snapshot integration (mock supabase):');
+
+function makeMockSupabase() {
+  const tables = { fixtures: [], odds_snapshots: [], feature_snapshots: [], market_consensus: [], model_versions: [], model_runs: [], pick_candidates: [] };
+  let nextId = 1;
+  const builder = (tableName) => {
+    const tbl = tables[tableName] = tables[tableName] || [];
+    return {
+      _whereChain: [],
+      _selectFields: null,
+      select(fields) { this._selectFields = fields; return this; },
+      eq(col, val) { this._whereChain.push({ col, val }); return this; },
+      gte() { return this; },
+      lte() { return this; },
+      not() { return this; },
+      is() { return this; },
+      order() { return this; },
+      limit() { return this; },
+      maybeSingle() {
+        const filtered = this._whereChain.length ? tbl.filter(r => this._whereChain.every(w => r[w.col] === w.val)) : tbl;
+        return Promise.resolve({ data: filtered[0] || null, error: null });
+      },
+      single() {
+        const filtered = this._whereChain.length ? tbl.filter(r => this._whereChain.every(w => r[w.col] === w.val)) : tbl;
+        return Promise.resolve({ data: filtered[0] || null, error: filtered.length ? null : { message: 'not found' } });
+      },
+      insert(row) {
+        const rows = Array.isArray(row) ? row : [row];
+        for (const r of rows) {
+          tbl.push({ ...r, id: nextId++ });
+        }
+        return {
+          select: () => ({ single: () => Promise.resolve({ data: tbl[tbl.length - 1], error: null }) }),
+          then: (cb) => Promise.resolve({ data: rows, error: null }).then(cb),
+          catch: () => Promise.resolve({ data: rows, error: null }),
+        };
+      },
+      upsert(row) {
+        const rows = Array.isArray(row) ? row : [row];
+        for (const r of rows) {
+          const existingIdx = tbl.findIndex(x => x.id === r.id);
+          if (existingIdx >= 0) tbl[existingIdx] = { ...tbl[existingIdx], ...r };
+          else tbl.push({ ...r });
+        }
+        return Promise.resolve({ data: rows, error: null });
+      },
+      update(row) {
+        return {
+          eq: (col, val) => {
+            const updated = [];
+            for (const r of tbl) {
+              if (r[col] === val) { Object.assign(r, row); updated.push(r); }
+            }
+            return Promise.resolve({ data: updated, error: null });
+          },
+        };
+      },
+    };
+  };
+  const sb = { from: builder, _tables: tables };
+  return sb;
+}
+
+test('integration: upsertFixture schrijft naar fixtures tabel', async () => {
+  const sb = makeMockSupabase();
+  await snap.upsertFixture(sb, {
+    id: 999, sport: 'hockey', leagueId: 57, leagueName: 'NHL',
+    homeTeamName: 'Vegas', awayTeamName: 'Winnipeg',
+    startTime: Date.now(), status: 'scheduled',
+  });
+  assert.strictEqual(sb._tables.fixtures.length, 1);
+  assert.strictEqual(sb._tables.fixtures[0].id, 999);
+  assert.strictEqual(sb._tables.fixtures[0].sport, 'hockey');
+});
+
+test('integration: upsertFixture is idempotent (zelfde id 2x → 1 row)', async () => {
+  const sb = makeMockSupabase();
+  const fix = { id: 1, sport: 'hockey', homeTeamName: 'A', awayTeamName: 'B', startTime: Date.now() };
+  await snap.upsertFixture(sb, fix);
+  await snap.upsertFixture(sb, { ...fix, status: 'finished' });
+  assert.strictEqual(sb._tables.fixtures.length, 1);
+  assert.strictEqual(sb._tables.fixtures[0].status, 'finished');
+});
+
+test('integration: writeOddsSnapshots schrijft per-row + filter ongeldige odds', async () => {
+  const sb = makeMockSupabase();
+  await snap.writeOddsSnapshots(sb, 100, [
+    { bookmaker: 'Bet365', market_type: '1x2', selection_key: 'home', odds: 2.0 },
+    { bookmaker: 'Unibet', market_type: '1x2', selection_key: 'draw', odds: 3.5 },
+    { bookmaker: 'Bet365', market_type: '1x2', selection_key: 'away', odds: 0 }, // invalid
+    { bookmaker: 'Bet365', market_type: 'total', selection_key: 'over', line: 2.5, odds: 1.85 },
+  ]);
+  assert.strictEqual(sb._tables.odds_snapshots.length, 3, '3 valid rows (1 met odds=0 gefilterd)');
+  const home = sb._tables.odds_snapshots.find(r => r.selection_key === 'home');
+  assert.strictEqual(home.fixture_id, 100);
+  assert.strictEqual(home.bookmaker, 'Bet365');
+});
+
+test('integration: writeMarketConsensus schrijft consensus + inverse odds', async () => {
+  const sb = makeMockSupabase();
+  await snap.writeMarketConsensus(sb, {
+    fixtureId: 100, marketType: '1x2', line: null,
+    consensusProb: { home: 0.5, draw: 0.25, away: 0.25 },
+    bookmakerCount: 8, overround: 0.04, qualityScore: 1.0,
+  });
+  assert.strictEqual(sb._tables.market_consensus.length, 1);
+  const row = sb._tables.market_consensus[0];
+  assert.strictEqual(row.bookmaker_count, 8);
+  // consensus_odds = inverse: 1/0.5=2, 1/0.25=4, 1/0.25=4
+  assert.ok(row.consensus_odds.home === 2);
+  assert.ok(row.consensus_odds.draw === 4);
+});
+
+test('integration: registerModelVersion is idempotent', async () => {
+  const sb = makeMockSupabase();
+  const id1 = await snap.registerModelVersion(sb, {
+    name: 'edgepickr-heuristic', sport: 'multi', marketType: 'multi',
+    versionTag: 'v9.8.0', featureSetVersion: 'v9.6.0',
+  });
+  const id2 = await snap.registerModelVersion(sb, {
+    name: 'edgepickr-heuristic', sport: 'multi', marketType: 'multi',
+    versionTag: 'v9.8.0', featureSetVersion: 'v9.6.0',
+  });
+  assert.strictEqual(id1, id2, 'Tweede call returnt hetzelfde id');
+  assert.strictEqual(sb._tables.model_versions.length, 1, 'Geen duplicaat row');
+});
+
+test('integration: writeModelRun returnt id voor latere referentie', async () => {
+  const sb = makeMockSupabase();
+  const runId = await snap.writeModelRun(sb, {
+    fixtureId: 100, modelVersionId: 1, marketType: 'moneyline_incl_ot',
+    baselineProb: { home: 0.5, away: 0.5 },
+    finalProb: { home: 0.55, away: 0.45 },
+  });
+  assert.ok(runId > 0, 'returnt id');
+  assert.strictEqual(sb._tables.model_runs.length, 1);
+});
+
+test('integration: recordMl2WayEvaluation schrijft 1 model_run + 2 candidates', async () => {
+  const sb = makeMockSupabase();
+  await snap.recordMl2WayEvaluation({
+    supabase: sb, modelVersionId: 1, fixtureId: 100, marketType: 'moneyline',
+    fpHome: 0.5, fpAway: 0.5, adjHome: 0.55, adjAway: 0.45,
+    bH: { price: 2.0, bookie: 'Bet365' }, bA: { price: 1.95, bookie: 'Unibet' },
+    homeEdge: 0.10, awayEdge: -0.122, minEdge: 0.055,
+    matchSignals: ['ha:+5%'],
+  });
+  assert.strictEqual(sb._tables.model_runs.length, 1);
+  assert.strictEqual(sb._tables.pick_candidates.length, 2);
+  const home = sb._tables.pick_candidates.find(c => c.selection_key === 'home');
+  const away = sb._tables.pick_candidates.find(c => c.selection_key === 'away');
+  assert.strictEqual(home.passed_filters, true, 'home edge 10% > 5.5% min → accepted');
+  assert.strictEqual(away.passed_filters, false, 'away edge negatief → rejected');
+  assert.ok(away.rejected_reason.includes('edge_below_min'));
+});
+
+test('integration: recordMl2WayEvaluation extraGate werkt (bv. OT-bookie filter)', async () => {
+  const sb = makeMockSupabase();
+  await snap.recordMl2WayEvaluation({
+    supabase: sb, modelVersionId: 1, fixtureId: 100, marketType: 'moneyline_incl_ot',
+    fpHome: 0.5, fpAway: 0.5, adjHome: 0.55, adjAway: 0.45,
+    bH: { price: 2.0, bookie: 'Unibet' }, bA: { price: 1.95, bookie: 'Bet365' },
+    homeEdge: 0.10, awayEdge: 0.10, minEdge: 0.055,
+    extraGate: (side, bookie) => bookie?.toLowerCase().includes('unibet') ? 'bookie_not_inc_ot' : null,
+  });
+  const home = sb._tables.pick_candidates.find(c => c.selection_key === 'home');
+  const away = sb._tables.pick_candidates.find(c => c.selection_key === 'away');
+  assert.strictEqual(home.passed_filters, false, 'Unibet bookie wordt afgekapt door extraGate');
+  assert.strictEqual(home.rejected_reason, 'bookie_not_inc_ot');
+  assert.strictEqual(away.passed_filters, true, 'Bet365 home → toegelaten');
+});
+
+test('integration: complete scan-flow simulatie (4 entiteiten geschreven)', async () => {
+  const sb = makeMockSupabase();
+  // Simuleer wat één hockey-game in de scan zou doen
+  const gameId = 416908;
+  await snap.upsertFixture(sb, { id: gameId, sport: 'hockey', homeTeamName: 'Vegas', awayTeamName: 'Winnipeg', startTime: Date.now() });
+  await snap.writeOddsSnapshots(sb, gameId, [
+    { bookmaker: 'Bet365', market_type: '1x2', selection_key: 'home', odds: 2.0 },
+    { bookmaker: 'Bet365', market_type: 'total', selection_key: 'over', line: 5.5, odds: 1.95 },
+  ]);
+  await snap.writeMarketConsensus(sb, {
+    fixtureId: gameId, marketType: 'threeway',
+    consensusProb: { home: 0.45, draw: 0.20, away: 0.35 },
+    bookmakerCount: 8, overround: 0.05, qualityScore: 1.0,
+  });
+  await snap.writeFeatureSnapshot(sb, gameId, { sport: 'hockey', adjHome: 0.50 }, { standings_present: true });
+  await snap.recordMl2WayEvaluation({
+    supabase: sb, modelVersionId: 1, fixtureId: gameId, marketType: 'moneyline_incl_ot',
+    fpHome: 0.55, fpAway: 0.45, adjHome: 0.55, adjAway: 0.45,
+    bH: { price: 1.86, bookie: 'Bet365' }, bA: { price: 2.10, bookie: 'Bet365' },
+    homeEdge: 0.023, awayEdge: -0.055, minEdge: 0.055,
+  });
+  // Verify alle vier entiteiten
+  assert.strictEqual(sb._tables.fixtures.length, 1);
+  assert.strictEqual(sb._tables.odds_snapshots.length, 2);
+  assert.strictEqual(sb._tables.market_consensus.length, 1);
+  assert.strictEqual(sb._tables.feature_snapshots.length, 1);
+  assert.strictEqual(sb._tables.model_runs.length, 1);
+  assert.strictEqual(sb._tables.pick_candidates.length, 2);
+  // Beide candidates rejected (home edge te laag)
+  assert.strictEqual(sb._tables.pick_candidates.filter(c => c.passed_filters).length, 0);
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────

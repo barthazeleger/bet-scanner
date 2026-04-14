@@ -12,6 +12,50 @@ const webpush        = require('web-push');
 const snap = require('./lib/snapshots');
 let _currentModelVersionId = null; // gevuld bij boot (registerModelVersion)
 
+// ── KILL-SWITCH CACHE ──────────────────────────────────────────────────────
+// Set van market-keys (sport_market) die geblokkeerd zijn op basis van negatieve CLV.
+// Refreshed elke 30 min uit /api/admin/v2/clv-stats logica.
+const KILL_SWITCH = {
+  set: new Set(),
+  thresholds: { kill_min_n: 30, watchlist_clv: -2.0, auto_disable_clv: -5.0 },
+  lastRefreshed: 0,
+  enabled: true, // master flag; admin kan dit later via UI uitzetten
+};
+
+async function refreshKillSwitch() {
+  if (!KILL_SWITCH.enabled) { KILL_SWITCH.set.clear(); return; }
+  try {
+    const { data: bets } = await supabase.from('bets')
+      .select('sport, markt, clv_pct').not('clv_pct', 'is', null);
+    const all = (bets || []).filter(b => typeof b.clv_pct === 'number' && !isNaN(b.clv_pct));
+    const byMarket = {};
+    for (const b of all) {
+      const s = normalizeSport(b.sport || 'football');
+      const mk = detectMarket(b.markt || 'other');
+      const key = `${s}_${mk}`;
+      if (!byMarket[key]) byMarket[key] = { n: 0, sumClv: 0 };
+      byMarket[key].n++;
+      byMarket[key].sumClv += b.clv_pct;
+    }
+    const newSet = new Set();
+    for (const [k, d] of Object.entries(byMarket)) {
+      const avgClv = d.sumClv / d.n;
+      if (d.n >= KILL_SWITCH.thresholds.kill_min_n && avgClv < KILL_SWITCH.thresholds.auto_disable_clv) {
+        newSet.add(k);
+      }
+    }
+    KILL_SWITCH.set = newSet;
+    KILL_SWITCH.lastRefreshed = Date.now();
+    if (newSet.size) console.log(`🛑 Kill-switch: ${newSet.size} markten geblokkeerd: ${[...newSet].join(', ')}`);
+  } catch (e) { /* swallow */ }
+}
+
+function isMarketKilled(sport, marktLabel) {
+  if (!KILL_SWITCH.enabled || !KILL_SWITCH.set.size) return false;
+  const key = `${normalizeSport(sport)}_${modelMath.detectMarket(marktLabel || 'other')}`;
+  return KILL_SWITCH.set.has(key);
+}
+
 // Pure math & model helpers — geïmporteerd uit lib zodat test.js dezelfde code test
 const modelMath = require('./lib/model-math');
 const {
@@ -175,7 +219,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.8.0';
+const APP_VERSION    = '9.9.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5591,6 +5635,108 @@ app.get('/api/admin/v2/clv-stats', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/admin/v2/kill-switch — huidige status + actieve killed markten
+app.get('/api/admin/v2/kill-switch', requireAdmin, (req, res) => {
+  res.json({
+    enabled: KILL_SWITCH.enabled,
+    activeKills: [...KILL_SWITCH.set],
+    thresholds: KILL_SWITCH.thresholds,
+    lastRefreshed: KILL_SWITCH.lastRefreshed ? new Date(KILL_SWITCH.lastRefreshed).toISOString() : null,
+  });
+});
+
+// POST /api/admin/v2/kill-switch — admin override (toggle enabled, manual add/remove)
+app.post('/api/admin/v2/kill-switch', requireAdmin, async (req, res) => {
+  try {
+    const { enabled, addKey, removeKey, refresh } = req.body || {};
+    if (typeof enabled === 'boolean') KILL_SWITCH.enabled = enabled;
+    if (typeof addKey === 'string' && addKey) KILL_SWITCH.set.add(addKey);
+    if (typeof removeKey === 'string' && removeKey) KILL_SWITCH.set.delete(removeKey);
+    if (refresh) await refreshKillSwitch();
+    res.json({
+      enabled: KILL_SWITCH.enabled,
+      activeKills: [...KILL_SWITCH.set],
+      lastRefreshed: KILL_SWITCH.lastRefreshed ? new Date(KILL_SWITCH.lastRefreshed).toISOString() : null,
+    });
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
+});
+
+// GET /api/admin/v2/walkforward?sport=hockey&days=30
+// Walk-forward evaluatie: voor elke historische pick_candidate die settled is,
+// vergelijk model-prob met outcome. Berekent Brier score (model accuracy).
+// Brier < 0.20 = uitstekend, 0.25 = neutraal, > 0.30 = slecht.
+app.get('/api/admin/v2/walkforward', requireAdmin, async (req, res) => {
+  try {
+    const sport = req.query.sport ? normalizeSport(req.query.sport) : null;
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
+    const sinceIso = new Date(Date.now() - days * 86400000).toISOString();
+
+    // Stap 1: pak picks die zijn geplaatst en al een uitkomst hebben
+    const { data: bets, error: betsErr } = await supabase.from('bets')
+      .select('bet_id, sport, markt, odds, uitkomst, wl, clv_pct, datum').in('uitkomst', ['W', 'L']);
+    if (betsErr) return res.status(500).json({ error: betsErr.message });
+    const all = (bets || []).filter(b => {
+      if (sport && normalizeSport(b.sport) !== sport) return false;
+      // Datum filter (parse dd-mm-yyyy)
+      const dm = (b.datum || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (!dm) return false;
+      const iso = `${dm[3]}-${dm[2]}-${dm[1]}`;
+      return iso >= sinceIso.slice(0, 10);
+    });
+
+    if (!all.length) return res.json({ days, sport, n: 0, message: 'Te weinig settled bets in window' });
+
+    // Brier score: gemiddelde van (predicted_prob - actual_outcome)^2
+    // We hebben geen model-prob in bets; gebruiken impliciete prob uit logged odds als proxy.
+    let brierSum = 0;
+    let logLossSum = 0;
+    const buckets = { '0-30': { n: 0, w: 0 }, '30-50': { n: 0, w: 0 }, '50-70': { n: 0, w: 0 }, '70-100': { n: 0, w: 0 } };
+    for (const b of all) {
+      const odds = parseFloat(b.odds);
+      if (!odds || odds <= 1) continue;
+      const impliedP = 1 / odds;
+      const actual = b.uitkomst === 'W' ? 1 : 0;
+      brierSum += Math.pow(impliedP - actual, 2);
+      // Log loss: −[y log(p) + (1-y) log(1-p)], met clamping
+      const p = Math.max(1e-6, Math.min(1 - 1e-6, impliedP));
+      logLossSum += -(actual * Math.log(p) + (1 - actual) * Math.log(1 - p));
+      // Calibration buckets op impliedP
+      const pct = impliedP * 100;
+      let bk;
+      if (pct < 30) bk = '0-30';
+      else if (pct < 50) bk = '30-50';
+      else if (pct < 70) bk = '50-70';
+      else bk = '70-100';
+      buckets[bk].n++;
+      if (b.uitkomst === 'W') buckets[bk].w++;
+    }
+    const brier = +(brierSum / all.length).toFixed(4);
+    const logLoss = +(logLossSum / all.length).toFixed(4);
+
+    // Calibration error: |actual_winrate - predicted_winrate| per bucket
+    const calibration = {};
+    for (const [bk, d] of Object.entries(buckets)) {
+      if (!d.n) continue;
+      calibration[bk] = {
+        n: d.n,
+        actual_wr: +(d.w / d.n).toFixed(3),
+        predicted_wr_mid: { '0-30': 0.15, '30-50': 0.40, '50-70': 0.60, '70-100': 0.85 }[bk],
+      };
+    }
+
+    res.json({
+      days, sport, n: all.length,
+      brier_score: brier,
+      log_loss: logLoss,
+      interpretation: brier < 0.20 ? 'EXCELLENT' : brier < 0.25 ? 'GOOD' : brier < 0.30 ? 'NEUTRAL' : 'POOR',
+      calibration,
+      note: 'Gebruikt impliciete prob uit logged odds als baseline. Pas wanneer pick_candidates volume ≥500 hebben kunnen we walk-forward op echte model-prob doen.',
+    });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  }
+});
+
 // GET /api/admin/v2/snapshot-counts — quick health check op v2 tabellen
 app.get('/api/admin/v2/snapshot-counts', requireAdmin, async (req, res) => {
   try {
@@ -8106,6 +8252,10 @@ app.listen(PORT, () => {
   scheduleDailyScan();
   scheduleOddsMonitor();
   scheduleFixtureSnapshotPolling();
+
+  // Kill-switch initial load + 30-min refresh
+  refreshKillSwitch().then(() => console.log(`🛑 Kill-switch geladen (${KILL_SWITCH.set.size} actief)`));
+  setInterval(refreshKillSwitch, 30 * 60 * 1000);
 
   // Registreer huidige model_version (idempotent) zodat model_runs ernaar kunnen wijzen
   snap.registerModelVersion(supabase, {
