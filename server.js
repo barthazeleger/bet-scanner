@@ -2479,13 +2479,24 @@ async function runHockey(emit) {
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
         const sharedNotes = `${posStr}${formNote}${b2bNote}${goalDiffNote}${homeRecordNote}`;
 
+        // Per-game diagnostics (admin-only)
+        const picksBefore = picks.length;
+        const diag = [];
+
         // ── 2-way ML MET MARKET-SANITY-CHECK ──
-        // Probleem: api-sports 'Home/Away' kan per bookie 60-min-met-push of incl-OT zijn.
-        // Oplossing: derive fair inc-OT prob uit 3-way markt consensus; accepteer 2-way pick
-        // alleen als ons model-prob binnen threshold van market-derived prob zit.
-        // Dit filtert false edges die ontstaan door product-mismatch of model-overconfidence.
         const marketFairReg = parsed.threeWay?.length ? consensus3Way(parsed.threeWay) : null;
         const marketFairIncOT = marketFairReg ? deriveIncOTProbFrom3Way(marketFairReg) : null;
+        if (!marketFairIncOT) diag.push('geen 3-way markt → geen 2-way sanity mogelijk');
+        if (!homeOddsOT.length) diag.push('geen OT-bookie odds home');
+        if (!awayOddsOT.length) diag.push('geen OT-bookie odds away');
+        if (homeEdge < MIN_EDGE) diag.push(`home 2-way edge ${(homeEdge*100).toFixed(1)}% < ${(MIN_EDGE*100).toFixed(1)}%`);
+        if (awayEdge < MIN_EDGE) diag.push(`away 2-way edge ${(awayEdge*100).toFixed(1)}% < ${(MIN_EDGE*100).toFixed(1)}%`);
+        if (marketFairIncOT) {
+          const sH = modelMarketSanityCheck(adjHome, marketFairIncOT.home);
+          const sA = modelMarketSanityCheck(adjAway, marketFairIncOT.away);
+          if (!sH.agree) diag.push(`2-way home sanity FAIL: model ${(sH.modelProb*100).toFixed(1)}% vs markt ${(sH.marketProb*100).toFixed(1)}% (div ${(sH.divergence*100).toFixed(1)}%)`);
+          if (!sA.agree) diag.push(`2-way away sanity FAIL: model ${(sA.modelProb*100).toFixed(1)}% vs markt ${(sA.marketProb*100).toFixed(1)}% (div ${(sA.divergence*100).toFixed(1)}%)`);
+        }
 
         if (marketFairIncOT) {
           const sanityHome = modelMarketSanityCheck(adjHome, marketFairIncOT.home);
@@ -2688,6 +2699,11 @@ async function runHockey(emit) {
                 `Odd/Even: ${((1-oddP)*100).toFixed(1)}% even | ${bestEven.bookie}: ${bestEven.price}${sharedNotes} | ${ko}`,
                 Math.round((1-oddP)*100), evenEdge * 0.16, kickoffTime, bestEven.bookie, matchSignals);
           }
+        }
+
+        // Admin-only: als deze game geen pick opleverde, log waarom
+        if (picks.length === picksBefore && diag.length) {
+          emit({ log: `  └─ ${hm} vs ${aw}: ${diag.slice(0, 3).join(' · ')}` });
         }
       }
       await sleep(200);
