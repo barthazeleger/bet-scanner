@@ -2,6 +2,86 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [9.9.0] - 2026-04-14
+
+### Added
+- **Kill-switch enforcement** met auto-disable bij avg CLV < -5% over ≥30 settled bets
+- **Walk-forward backtest** endpoint: Brier + log loss + calibration buckets per sport
+- **Hierarchical calibration** met Bayesian smoothing (global → sport → market → league)
+- **Residual model framework** skeleton (logistic regression delta, activeert bij ≥500 picks/markt)
+- Admin endpoints: `/api/admin/v2/kill-switch`, `/api/admin/v2/walkforward`
+
+### Changed
+- Architectuur opgeschoond: images naar `img/`, docs naar `docs/`
+
+### Tests
+- 9 nieuwe (169 totaal): hierarchical multiplier clamping, residual sigmoid, sample-size threshold
+
+## [9.8.0] - 2026-04-14
+
+### Added
+- `/api/admin/v2/clv-stats` endpoint: per sport + (sport, markt) bucket → avg CLV%, % positief, total PnL
+- Kill-switch eligibility detection: WATCHLIST tier (-5% < CLV < -2%) en AUTO_DISABLE (CLV < -5%)
+- CLV als hoofd-KPI (winrate is te noisy bij kleine samples)
+
+## [9.7.1] - 2026-04-14
+
+### Added
+- Pick candidates voor alle 6 sporten (basketball, baseball, NFL, handbal, football)
+- `recordMl2WayEvaluation` helper voor 2-way ML pattern hergebruik
+- Admin endpoints `pick-candidates-summary` en `snapshot-counts`
+
+## [9.7.0] - 2026-04-14
+
+### Added (Sprint 2: Pick Pipeline)
+- `model_versions`, `model_runs`, `pick_candidates` Supabase tabellen
+- Hockey scan schrijft model_run + pick_candidates met expliciete rejected_reason categorisatie
+- Helpers: `registerModelVersion`, `writeModelRun`, `writePickCandidate`
+
+### Migration
+- `migrations/v9.7.0_v2_pick_pipeline.sql`
+
+## [9.6.1] - 2026-04-14
+
+### Added
+- Football snapshot integratie (1X2 consensus, h2h canonicalisatie)
+- Fixture snapshot polling job (elke 90 min, 30 fixtures cap)
+
+## [9.6.0] - 2026-04-14
+
+### Added (Sprint 1: v2 Foundation)
+- 4 snapshot tabellen: `fixtures`, `odds_snapshots`, `feature_snapshots`, `market_consensus`
+- `lib/snapshots.js` met fail-safe writers (Supabase-down = scan gaat door)
+- Integratie in alle non-football scans
+- Quality scores (bookmaker count + overround penalty)
+
+### Migration
+- `migrations/v9.6.0_v2_foundation.sql`
+
+## [9.5.0] - 2026-04-14
+
+### Refactor
+- Pure helpers naar `lib/model-math.js` zodat tests echte productie-code testen (geen mirrors meer)
+- NHL shots-differential signal via `api-web.nhle.com` (publiek, gratis)
+
+### Added
+- `shotsDifferentialAdjustment`: SF% diff × 0.45, clamped ±3%, vereist ≥20 GP
+
+## [9.4.1] - 2026-04-14
+
+### Fixed (uit externe code-review)
+- 2FA verify-code controleert nu account.status (blocked/pending) vóór JWT
+- Scheduler slaat handles op in userScanTimers[admin.id] → geen dubbele scans
+- PUT /api/bets/:id herberekent wl bij odds/units edit van settled bet
+
+## [9.4.0] - 2026-04-14
+
+### Added
+- Hockey team totals via Poisson (📈/📉)
+- Voetbal Double Chance (1X/X2/12) afgeleid uit 1X2 consensus
+- MLB starting pitcher signal via `statsapi.mlb.com` (free public API)
+- F5 (1st 5 innings) markt parser + pick generation met pitcher 3x versterkt
+
 ## [9.3.0] - 2026-04-14
 
 ### Added
