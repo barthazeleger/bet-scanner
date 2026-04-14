@@ -1839,8 +1839,11 @@ function doScan(type) {
               const d = JSON.parse(line.slice(5).trim());
               if (d.log)   addLog(logEl, d.log, d.done ? 'ok' : d.error ? 'err' : '');
               if (d.error) addLog(logEl, '❌ ' + d.error, 'err');
-              if (d.picks && d.picks.length) { scanPicks[type] = d.picks; renderPicks(pEl, d.picks); }
-              if (d.done) finish();
+              // Final-only rendering: alleen picks tonen als scan klaar is (geen flicker)
+              if (d.done) {
+                if (d.picks) { scanPicks[type] = d.picks; renderPicks(pEl, d.picks); }
+                finish();
+              }
             } catch {}
           }
           pump();

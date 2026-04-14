@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.1.8';
+const APP_VERSION    = '9.2.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1751,10 +1751,25 @@ function poisson3Way(expHome, expAway, maxGoals = 12) {
   return { pHome: pHome / total, pDraw: pTie / total, pAway: pAway / total };
 }
 
-// Best odds from parsed odds array
+// Scan-wide filter: alleen odds van deze bookies tellen mee voor pick generation.
+// Consensus/fair-probability blijft uit ALLE bookies berekend (markt-truth).
+let _preferredBookiesLower = null;
+function setPreferredBookies(list) {
+  if (Array.isArray(list) && list.length) {
+    _preferredBookiesLower = list.map(x => (x || '').toString().toLowerCase()).filter(Boolean);
+  } else {
+    _preferredBookiesLower = null;
+  }
+}
+
+// Best odds uit parsed array; als preferredBookies is ingesteld, alleen die tellen.
 function bestFromArr(arr) {
-  if (!arr.length) return { price: 0, bookie: '' };
-  return arr.reduce((best, o) => o.price > best.price ? { price: +o.price.toFixed(3), bookie: o.bookie } : best, { price: 0, bookie: '' });
+  let pool = arr || [];
+  if (_preferredBookiesLower && pool.length) {
+    pool = pool.filter(o => _preferredBookiesLower.some(p => (o.bookie || '').toLowerCase().includes(p)));
+  }
+  if (!pool.length) return { price: 0, bookie: '' };
+  return pool.reduce((best, o) => o.price > best.price ? { price: +o.price.toFixed(3), bookie: o.bookie } : best, { price: 0, bookie: '' });
 }
 
 async function runBasketball(emit) {
@@ -4101,22 +4116,7 @@ async function runPrematch(emit) {
 
   emit({ log: `📋 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} pre-match picks` });
 
-  // ── STAP 2b: LIVE PICKS mengen ───────────────────────────────────────────
-  // Haalt live wedstrijden op met xG + live odds. Picks getagd als scanType:'live'.
-  // Geen eigen Telegram · alles gaat samen in de finale pool.
-  emit({ log: '🔴 Live wedstrijden checken...' });
-  try {
-    const livePicks = await getLivePicks(emit, calib.epBuckets || {});
-    for (const lp of livePicks) {
-      picks.push(lp);
-      combiPool.push(lp);
-    }
-    emit({ log: `✅ ${livePicks.length} live pick(s) toegevoegd aan pool` });
-  } catch (e) {
-    emit({ log: `⚠️ Live check overgeslagen: ${e.message}` });
-  }
-
-  emit({ log: `📋 Totaal ${picks.length} kandidaten (pre + live) | Combi's berekenen...` });
+  emit({ log: `📋 Totaal ${picks.length} kandidaten | Combi's berekenen...` });
 
   // ── STAP 3: COMBI'S (2-beners + 3-beners) ───────────────────────────────
   // Alle EV+ picks (ook odds < 1.60) komen in de combiPool.
@@ -4358,7 +4358,6 @@ async function runLive(emit) {
   const livePicks = await getLivePicks(emit, calib.epBuckets || {});
 
   if (!livePicks.length) {
-    await tg(`🔴 Live check · geen kwalificerende situaties op dit moment.`).catch(()=>{});
     emit({ log: '📭 Geen picks.', picks: [] });
     return [];
   }
@@ -4723,7 +4722,18 @@ app.post('/api/prematch', (req, res) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  runPrematch(emit)
+  // Zet preferred bookies VOOR de scan, zodat edge-evaluatie alleen op jouw bookies gebeurt.
+  // bestFromArr filtert op deze lijst. Consensus/fair-prob blijft uit ALLE bookies (markt-truth).
+  (async () => {
+    try {
+      const users = await loadUsers().catch(() => []);
+      const me = users.find(u => u.id === req.user?.id) || users.find(u => u.role === 'admin');
+      const prefs = me?.settings?.preferredBookies;
+      setPreferredBookies(prefs);
+      if (prefs?.length) emit({ log: `🏦 Edge-evaluatie op jouw bookies: ${prefs.join(', ')}` });
+    } catch {}
+    return runPrematch(emit);
+  })()
     .then(async footballPicks => {
       // Also run basketball + hockey + baseball + NFL + handball (errors don't break the scan)
       emit({ log: '🏀🏒⚾🏈🤾 Multi-sport scans starten...' });
@@ -4736,23 +4746,7 @@ app.post('/api/prematch', (req, res) => {
       ]);
 
       let allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks, ...mlbPicks, ...nflPicks, ...handballPicks];
-
-      // Filter op user's preferred bookies (als ingesteld). Default: Bet365+Unibet.
-      try {
-        const users = await loadUsers().catch(() => []);
-        const me = users.find(u => u.id === req.user?.id) || users.find(u => u.role === 'admin');
-        const prefs = me?.settings?.preferredBookies;
-        if (Array.isArray(prefs) && prefs.length) {
-          const lower = prefs.map(x => (x || '').toLowerCase());
-          const before = allPicks.length;
-          allPicks = allPicks.filter(p => {
-            const b = (p.bookie || '').toLowerCase();
-            return lower.some(pref => b.includes(pref));
-          });
-          if (before !== allPicks.length) emit({ log: `🏦 Bookie-filter: ${before} → ${allPicks.length} picks (${prefs.join(', ')})` });
-        }
-      } catch {}
-
+      // Preferred-bookies filter is al in bestFromArr toegepast: elke pick.bookie hoort bij jouw bookies.
       allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
 
       // Top 5 picks over alle sporten (gesorteerd op verwachte waarde)
@@ -4792,8 +4786,9 @@ app.post('/api/prematch', (req, res) => {
         return pick;
       });
       emit({ done: true, picks: safePicks }); res.end(); scanRunning = false;
+      setPreferredBookies(null); // reset scan-wide filter
     })
-    .catch(err  => { emit({ error: 'Scan mislukt' }); res.end(); scanRunning = false; });
+    .catch(err  => { emit({ error: 'Scan mislukt' }); res.end(); scanRunning = false; setPreferredBookies(null); });
 });
 
 // Live scan · SSE streaming
