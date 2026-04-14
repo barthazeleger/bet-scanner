@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════════
--- EdgePickr v9.11.0 — v2 Completion Tables
+-- EdgePickr v10.0.0 — v2 Completion Tables
 -- Sluit de reviewer's volledige tabelset af. Naast bestaande tabellen.
 -- ═══════════════════════════════════════════════════════════════════════════════
 
