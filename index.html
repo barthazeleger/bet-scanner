@@ -722,23 +722,23 @@
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
         <div style="font-size:20px;font-weight:700;color:var(--accent)">0.5U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 3–5% · €12,50</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 3–6% · €12,50</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
         <div style="font-size:20px;font-weight:700;color:var(--accent)">0.75U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 5–8% · €18,75</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 6–10% · €18,75</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
         <div style="font-size:20px;font-weight:700;color:var(--yellow)">1.0U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 8–12% · €25</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 10–14% · €25</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
         <div style="font-size:20px;font-weight:700;color:var(--green)">1.5U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 12–18% · €37,50</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 14–20% · €37,50</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
         <div style="font-size:20px;font-weight:700;color:var(--red)">2.0U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &gt; 18% · €50</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &gt; 20% · €50</div>
       </div>
     </div>
     <div style="margin-top:12px;font-size:12px;color:var(--muted)">
@@ -3322,7 +3322,7 @@ function updatePayout() {
   const edge = ((odds - fairOdds) / fairOdds * 100);
   const kelly = Math.max(0, (prob * (odds - 1) - (1 - prob)) / (odds - 1));
   const hk = kelly * 0.5;
-  let recUnits = hk < 0.015 ? 0 : hk < 0.04 ? 0.3 : hk < 0.08 ? 0.5 : hk < 0.12 ? 1.0 : 2.0;
+  let recUnits = hk < 0.015 ? 0 : hk < 0.03 ? 0.3 : hk < 0.05 ? 0.5 : hk < 0.07 ? 0.75 : hk < 0.10 ? 1.0 : 2.0;
   // Cap: nooit hoger dan scanner advies (modal mist model-dampings)
   recUnits = Math.min(recUnits, origUnits);
   const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
