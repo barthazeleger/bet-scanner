@@ -2,6 +2,17 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.2] - 2026-04-14
+
+### Added (multi-sport stakes signal)
+- `calcStakesByRank(rank, totalTeams, sport)` — rank-based stakes-detectie per sport met sport-specifieke playoff/relegatie drempels:
+  - **NBA/NHL**: top 20% = titelrace, top 50% = playoff-strijd, bottom 20% = onderaan
+  - **MLB**: top 17% = titelrace, top 33% = playoff, bottom 17% = onderaan
+  - **NFL**: top 25% = titelrace, top 44% = playoff, bottom 25% = onderaan
+  - **Handball**: top 20% = titelrace, top 40% = euro-strijd, bottom 20% = degradatie
+- Picks krijgen nu een `stakes` signal tag met adj-verschil tussen home/away. Weight start op 0 (logged-only), auto-promote via CLV als het signaal bewezen voorspellend is.
+- Football had al `calcStakes` via gap-based logica; blijft zo voor preciezere detectie met punt-gaps.
+
 ## [10.7.1] - 2026-04-14
 
 ### Added (multi-sport injuries — scaffolding, conservatief)
