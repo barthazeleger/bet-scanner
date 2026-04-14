@@ -10,6 +10,7 @@ const webpush        = require('web-push');
 
 // Snapshot layer (v2 foundation): point-in-time logging voor learning + backtesting
 const snap = require('./lib/snapshots');
+let _currentModelVersionId = null; // gevuld bij boot (registerModelVersion)
 
 // Pure math & model helpers — geïmporteerd uit lib zodat test.js dezelfde code test
 const modelMath = require('./lib/model-math');
@@ -174,7 +175,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.6.1';
+const APP_VERSION    = '9.7.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2730,6 +2731,60 @@ async function runHockey(emit) {
           three_way_bookies: marketFairReg?.bookieCount || 0,
           shots_signal_valid: shotsSig.valid,
         }).catch(() => {});
+
+        // ── v2 MODEL RUN + PICK CANDIDATES voor hockey 2-way ML ──────────
+        // Bewaar elke evaluatie (passed of niet) zodat we later signal-lift kunnen meten.
+        if (marketFairIncOT && _currentModelVersionId) {
+          (async () => {
+            try {
+              const runId = await snap.writeModelRun(supabase, {
+                fixtureId: gameId, modelVersionId: _currentModelVersionId,
+                marketType: 'moneyline_incl_ot', line: null,
+                baselineProb: { home: marketFairIncOT.home, away: marketFairIncOT.away },
+                modelDelta: { home: adjHome - marketFairIncOT.home, away: adjAway - marketFairIncOT.away },
+                finalProb: { home: adjHome, away: adjAway },
+                debug: { lambda_h: expHome, lambda_a: expAway, ha, signals: matchSignals },
+              });
+              if (!runId) return;
+              // Home candidate
+              const homeAccepted = homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && isOTBookieHockey(bH.bookie) && sanityHome?.agree;
+              let homeReason = null;
+              if (!homeAccepted) {
+                if (bH.price < 1.60) homeReason = 'price_too_low';
+                else if (bH.price > MAX_WINNER_ODDS) homeReason = 'price_too_high';
+                else if (!isOTBookieHockey(bH.bookie)) homeReason = 'bookie_not_inc_ot';
+                else if (homeEdge < MIN_EDGE) homeReason = `edge_below_min (${(homeEdge*100).toFixed(1)}%)`;
+                else if (sanityHome && !sanityHome.agree) homeReason = `sanity_fail (div ${(sanityHome.divergence*100).toFixed(1)}%)`;
+                else homeReason = 'unknown';
+              }
+              snap.writePickCandidate(supabase, {
+                modelRunId: runId, fixtureId: gameId, selectionKey: 'home',
+                bookmaker: bH.bookie || 'none', bookmakerOdds: bH.price,
+                fairProb: adjHome, edgePct: homeEdge,
+                passedFilters: homeAccepted, rejectedReason: homeReason,
+                signals: matchSignals,
+              }).catch(() => {});
+              // Away candidate
+              const awayAccepted = awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && isOTBookieHockey(bA.bookie) && sanityAway?.agree;
+              let awayReason = null;
+              if (!awayAccepted) {
+                if (bA.price < 1.60) awayReason = 'price_too_low';
+                else if (bA.price > MAX_WINNER_ODDS) awayReason = 'price_too_high';
+                else if (!isOTBookieHockey(bA.bookie)) awayReason = 'bookie_not_inc_ot';
+                else if (awayEdge < MIN_EDGE) awayReason = `edge_below_min (${(awayEdge*100).toFixed(1)}%)`;
+                else if (sanityAway && !sanityAway.agree) awayReason = `sanity_fail (div ${(sanityAway.divergence*100).toFixed(1)}%)`;
+                else awayReason = 'unknown';
+              }
+              snap.writePickCandidate(supabase, {
+                modelRunId: runId, fixtureId: gameId, selectionKey: 'away',
+                bookmaker: bA.bookie || 'none', bookmakerOdds: bA.price,
+                fairProb: adjAway, edgePct: awayEdge,
+                passedFilters: awayAccepted, rejectedReason: awayReason,
+                signals: matchSignals,
+              }).catch(() => {});
+            } catch (e) { /* swallow */ }
+          })();
+        }
         const sanityHome = marketFairIncOT ? modelMarketSanityCheck(adjHome, marketFairIncOT.home) : null;
         const sanityAway = marketFairIncOT ? modelMarketSanityCheck(adjAway, marketFairIncOT.away) : null;
 
@@ -7768,6 +7823,17 @@ app.listen(PORT, () => {
   scheduleDailyScan();
   scheduleOddsMonitor();
   scheduleFixtureSnapshotPolling();
+
+  // Registreer huidige model_version (idempotent) zodat model_runs ernaar kunnen wijzen
+  snap.registerModelVersion(supabase, {
+    name: 'edgepickr-heuristic',
+    sport: 'multi', marketType: 'multi',
+    versionTag: APP_VERSION,
+    featureSetVersion: snap.FEATURE_SET_VERSION,
+    status: 'active',
+  }).then(id => {
+    if (id) { _currentModelVersionId = id; console.log(`📐 Model version ${APP_VERSION} geregistreerd (id=${id})`); }
+  }).catch(() => {});
 
   // Herplan pre-kickoff checks en CLV checks voor alle open bets bij herstart
   readBets().then(({ bets }) => {

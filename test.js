@@ -1560,6 +1560,49 @@ test('snapshot writers: zijn no-op bij ontbrekende data (geen exceptions)', asyn
   // Geen assertion nodig: als er een exception was, falt de test
 });
 
+test('registerModelVersion: ontbrekende versionTag → null', async () => {
+  const fakeSb = { from: () => { throw new Error('mag niet bellen'); } };
+  const result = await snap.registerModelVersion(fakeSb, {});
+  assert.strictEqual(result, null);
+});
+
+test('writeModelRun: ontbrekende velden → null, geen exception', async () => {
+  const fakeSb = { from: () => { throw new Error('mag niet bellen'); } };
+  assert.strictEqual(await snap.writeModelRun(fakeSb, {}), null);
+  assert.strictEqual(await snap.writeModelRun(fakeSb, { fixtureId: 1 }), null);
+  assert.strictEqual(await snap.writeModelRun(fakeSb, { fixtureId: 1, modelVersionId: 1 }), null);
+  // Met alle required maar throwing supabase
+  const errSb = { from: () => ({ insert: () => ({ select: () => ({ single: () => Promise.reject(new Error('down')) }) }) }) };
+  const r = await snap.writeModelRun(errSb, {
+    fixtureId: 1, modelVersionId: 1, marketType: 'threeway',
+    baselineProb: { home: 0.5 }, finalProb: { home: 0.55 },
+  });
+  assert.strictEqual(r, null);
+});
+
+test('writePickCandidate: rejected pick met reason wordt accepted', async () => {
+  let captured = null;
+  const fakeSb = { from: () => ({ insert: (row) => { captured = row; return Promise.resolve({ error: null }); } }) };
+  await snap.writePickCandidate(fakeSb, {
+    modelRunId: 5, fixtureId: 100, selectionKey: 'home',
+    bookmaker: 'Bet365', bookmakerOdds: 1.86, fairProb: 0.55, edgePct: 2.3,
+    passedFilters: false, rejectedReason: 'edge_below_min (2.3%)',
+    signals: ['form:+1.2%'],
+  });
+  assert.ok(captured);
+  assert.strictEqual(captured.passed_filters, false);
+  assert.strictEqual(captured.rejected_reason, 'edge_below_min (2.3%)');
+  assert.strictEqual(captured.bookmaker, 'Bet365');
+  assert.strictEqual(captured.signals.length, 1);
+});
+
+test('writePickCandidate: ontbrekende fields → no-op', async () => {
+  const fakeSb = { from: () => { throw new Error('mag niet bellen'); } };
+  await snap.writePickCandidate(fakeSb, {});
+  await snap.writePickCandidate(fakeSb, { modelRunId: 1 });
+  await snap.writePickCandidate(fakeSb, { modelRunId: 1, fixtureId: 1, selectionKey: 'home' }); // mist bookmaker
+});
+
 test('snapshot writers: Supabase-exceptie wordt gevangen, geen rethrow', async () => {
   const errorSupabase = {
     from: () => ({
