@@ -1192,25 +1192,7 @@ nav::-webkit-scrollbar { display: none; }
           <div style="font-size:11px;color:var(--muted)">Start: 13-04-2026</div>
         </div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);opacity:0.55">
-        <div>
-          <div style="font-weight:600;text-decoration:line-through">Google Sheets</div>
-          <div style="color:var(--muted);font-size:12px;margin-top:2px">Vervangen door Supabase (sneller, schaalbaar, persistent)</div>
-        </div>
-        <div style="text-align:right;flex-shrink:0;margin-left:12px">
-          <div style="font-size:11px;color:var(--muted)">Gemigreerd: 13-04-2026</div>
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);opacity:0.55">
-        <div>
-          <div style="font-weight:600;text-decoration:line-through">The Odds API</div>
-          <div style="color:var(--muted);font-size:12px;margin-top:2px">Vervangen door api-football Pro</div>
-        </div>
-        <div style="text-align:right;flex-shrink:0;margin-left:12px">
-          <div style="font-size:11px;color:var(--muted)">Opgezegd: 12-04-2026</div>
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0">
         <div>
           <div style="font-weight:600">Render.com <span style="font-size:10px;color:var(--green);font-weight:700">FREE</span></div>
           <div style="color:var(--muted);font-size:12px;margin-top:2px">Hosting + keep-alive · Node.js backend · auto-deploy bij push naar master</div>
@@ -1218,15 +1200,6 @@ nav::-webkit-scrollbar { display: none; }
         <div style="text-align:right;flex-shrink:0;margin-left:12px">
           <div style="font-weight:700;color:var(--green)">Gratis</div>
           <div style="font-size:11px;color:var(--muted)">Start: 13-04-2026</div>
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0">
-        <div>
-          <div style="font-weight:600">MLB StatsAPI · NHL public API · ESPN · OpenWeatherMap <span style="font-size:10px;color:var(--green);font-weight:700">FREE</span></div>
-          <div style="color:var(--muted);font-size:12px;margin-top:2px">Pitchers, shots-differential, live scores, weer — aanvullende databronnen zonder abonnement</div>
-        </div>
-        <div style="text-align:right;flex-shrink:0;margin-left:12px">
-          <div style="font-weight:700;color:var(--green)">Gratis</div>
         </div>
       </div>
     </div>
@@ -3802,18 +3775,20 @@ async function loadModelLog() {
     badge.style.display = hasNew ? 'inline-block' : 'none';
 
     body.innerHTML = d.modelLog.map(e => {
-      const dir     = e.newMult > e.oldMult ? '📈' : '📉';
-      const dirClr  = e.newMult > e.oldMult ? 'var(--green)' : 'var(--red)';
+      const hasMult = typeof e.oldMult === 'number' && typeof e.newMult === 'number';
+      const iconByType = { milestone: '🏆', signal_tuning: '🔧', insight: '💡' };
+      const dir     = hasMult ? (e.newMult > e.oldMult ? '📈' : '📉') : (iconByType[e.type] || '🧠');
+      const dirClr  = hasMult ? (e.newMult > e.oldMult ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
       const dateStr = new Date(e.date).toLocaleDateString('nl-NL', { day:'2-digit', month:'short', year:'numeric' });
       const isNew   = new Date(e.date).getTime() > seenTs;
+      const meta    = hasMult
+        ? `Multiplier: <span style="color:${dirClr};font-weight:600">${e.oldMult.toFixed(2)} → ${e.newMult.toFixed(2)}</span>&nbsp;·&nbsp; ${e.n ?? 0} bets &nbsp;·&nbsp; ${e.winRate ?? 0}% winrate &nbsp;·&nbsp; ${dateStr}`
+        : dateStr;
       return `<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)${isNew?';background:rgba(99,102,241,0.04);margin:0 -4px;padding:10px 4px':''}">
         <span style="font-size:18px;flex-shrink:0">${dir}</span>
         <div style="flex:1">
           <div style="font-weight:${isNew?'600':'400'};color:var(--text)">${escHtml(e.note||'')}${isNew?' <span style="font-size:10px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:10px;vertical-align:middle">nieuw</span>':''}</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:3px">
-            Multiplier: <span style="color:${dirClr};font-weight:600">${e.oldMult.toFixed(2)} → ${e.newMult.toFixed(2)}</span>
-            &nbsp;·&nbsp; ${e.n} bets &nbsp;·&nbsp; ${e.winRate}% winrate &nbsp;·&nbsp; ${dateStr}
-          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">${meta}</div>
         </div>
       </div>`;
     }).join('');
