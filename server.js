@@ -12,6 +12,17 @@ const webpush        = require('web-push');
 const snap = require('./lib/snapshots');
 let _currentModelVersionId = null; // gevuld bij boot (registerModelVersion)
 
+// ── OPERATOR FAILSAFES (v10.2.1) ────────────────────────────────────────────
+// Minimale set toggles voor noodgevallen. Default: alles automatisch.
+// Reviewer-lijn: observability > bedienbaarheid. Niet meer dan dit toevoegen.
+const OPERATOR = {
+  master_scan_enabled: true,        // hard-stop voor alle scans (noodknop)
+  market_auto_kill_enabled: true,   // alias voor KILL_SWITCH.enabled
+  signal_auto_kill_enabled: true,   // CLV autotune mute mode
+  panic_mode: false,                 // alleen PROVEN markten + max 2 picks/dag
+  max_picks_per_day: 5,             // override default
+};
+
 // ── KILL-SWITCH CACHE ──────────────────────────────────────────────────────
 // Set van market-keys (sport_market) die geblokkeerd zijn op basis van negatieve CLV.
 // Refreshed elke 30 min uit /api/admin/v2/clv-stats logica.
@@ -308,7 +319,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.2.0';
+const APP_VERSION    = '10.2.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5911,6 +5922,22 @@ app.get('/api/admin/v2/walkforward', requireAdmin, async (req, res) => {
   }
 });
 
+// GET/POST /api/admin/v2/operator — minimal failsafe-toggles
+app.get('/api/admin/v2/operator', requireAdmin, (req, res) => {
+  res.json({ ...OPERATOR, kill_switch_active_count: KILL_SWITCH.set.size });
+});
+app.post('/api/admin/v2/operator', requireAdmin, (req, res) => {
+  const allowed = ['master_scan_enabled', 'market_auto_kill_enabled', 'signal_auto_kill_enabled', 'panic_mode', 'max_picks_per_day'];
+  for (const k of allowed) {
+    if (req.body && req.body[k] !== undefined) {
+      OPERATOR[k] = (k === 'max_picks_per_day') ? Math.max(1, Math.min(10, parseInt(req.body[k]) || 5)) : !!req.body[k];
+    }
+  }
+  // Sync gerelateerde state
+  KILL_SWITCH.enabled = OPERATOR.market_auto_kill_enabled;
+  res.json({ ...OPERATOR, kill_switch_active_count: KILL_SWITCH.set.size });
+});
+
 // POST /api/admin/v2/training-examples-build — schrijf training_examples voor settled bets
 app.post('/api/admin/v2/training-examples-build', requireAdmin, async (req, res) => {
   try {
@@ -5929,81 +5956,70 @@ app.get('/api/admin/v2/signal-performance', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// GET /api/admin/v2/drift?days=30 — vergelijk recente vs lange-termijn CLV per markt/signaal
-// Detecteert markten/signalen die recent verslechteren of verbeteren.
+// GET /api/admin/v2/drift — vergelijk windows 25/50/100 vs all-time per markt/signaal/bookie
+// Sample size altijd zichtbaar. Geen alert tier bij n < min_n om niet jezelf voor de gek te houden.
 app.get('/api/admin/v2/drift', requireAdmin, async (req, res) => {
   try {
-    const recentN = Math.max(10, Math.min(200, parseInt(req.query.recent) || 25));
     const { data: bets, error } = await supabase.from('bets')
-      .select('sport, markt, clv_pct, signals, datum, uitkomst').not('clv_pct', 'is', null)
+      .select('sport, markt, tip, clv_pct, signals, datum').not('clv_pct', 'is', null)
       .order('datum', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
 
     const all = (bets || []).filter(b => typeof b.clv_pct === 'number' && !isNaN(b.clv_pct));
-    if (all.length < recentN * 2) {
-      return res.json({ ok: false, reason: 'te weinig data', n_total: all.length, recent_window: recentN });
-    }
+    const WINDOWS = [25, 50, 100];
 
-    // Per markt drift
-    const marketStats = {};
-    for (let i = 0; i < all.length; i++) {
-      const b = all[i];
-      const key = `${normalizeSport(b.sport)}_${detectMarket(b.markt || 'other')}`;
-      if (!marketStats[key]) marketStats[key] = { all: [], recent: [] };
-      marketStats[key].all.push(b.clv_pct);
-      if (i < recentN) marketStats[key].recent.push(b.clv_pct);
-    }
-    const marketDrift = [];
-    for (const [k, s] of Object.entries(marketStats)) {
-      if (s.all.length < 10 || s.recent.length < 5) continue;
-      const avgAll = s.all.reduce((a, b) => a + b, 0) / s.all.length;
-      const avgRecent = s.recent.reduce((a, b) => a + b, 0) / s.recent.length;
-      const drift = avgRecent - avgAll;
-      let alert = null;
-      if (drift < -2) alert = '🔴 SLECHTER';
-      else if (drift > 2) alert = '✅ BETER';
-      marketDrift.push({
-        key, n_all: s.all.length, n_recent: s.recent.length,
-        avg_clv_all: +avgAll.toFixed(2), avg_clv_recent: +avgRecent.toFixed(2),
-        drift_pct: +drift.toFixed(2), alert,
-      });
-    }
-    marketDrift.sort((a, b) => a.drift_pct - b.drift_pct);
-
-    // Per signal drift
-    const signalStats = {};
-    for (let i = 0; i < all.length; i++) {
-      const b = all[i];
-      let sigs;
-      try { sigs = typeof b.signals === 'string' ? JSON.parse(b.signals) : b.signals; } catch { continue; }
-      if (!Array.isArray(sigs)) continue;
-      const isRecent = i < recentN;
-      for (const sig of sigs) {
-        const name = String(sig).split(':')[0];
-        if (!name) continue;
-        if (!signalStats[name]) signalStats[name] = { all: [], recent: [] };
-        signalStats[name].all.push(b.clv_pct);
-        if (isRecent) signalStats[name].recent.push(b.clv_pct);
+    const computeWindowed = (entityKey) => {
+      // entityKey(b) returns string key of entity, of array of keys (voor signals)
+      const stats = {};
+      for (let i = 0; i < all.length; i++) {
+        const b = all[i];
+        const keys = entityKey(b);
+        if (!keys) continue;
+        const arr = Array.isArray(keys) ? keys : [keys];
+        for (const k of arr) {
+          if (!stats[k]) stats[k] = { all: [], w25: [], w50: [], w100: [] };
+          stats[k].all.push(b.clv_pct);
+          if (i < 25) stats[k].w25.push(b.clv_pct);
+          if (i < 50) stats[k].w50.push(b.clv_pct);
+          if (i < 100) stats[k].w100.push(b.clv_pct);
+        }
       }
-    }
-    const signalDrift = [];
-    for (const [name, s] of Object.entries(signalStats)) {
-      if (s.all.length < 20 || s.recent.length < 5) continue;
-      const avgAll = s.all.reduce((a, b) => a + b, 0) / s.all.length;
-      const avgRecent = s.recent.reduce((a, b) => a + b, 0) / s.recent.length;
-      const drift = avgRecent - avgAll;
-      let alert = null;
-      if (drift < -1.5) alert = '🔴 verslechtert';
-      else if (drift > 1.5) alert = '✅ verbetert';
-      signalDrift.push({
-        name, n_all: s.all.length, n_recent: s.recent.length,
-        avg_clv_all: +avgAll.toFixed(2), avg_clv_recent: +avgRecent.toFixed(2),
-        drift_pct: +drift.toFixed(2), alert,
-      });
-    }
-    signalDrift.sort((a, b) => a.drift_pct - b.drift_pct);
+      return Object.entries(stats).map(([k, s]) => {
+        const avg = (arr) => arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : null;
+        const avgAll = avg(s.all);
+        const avg25 = avg(s.w25);
+        const avg50 = avg(s.w50);
+        const avg100 = avg(s.w100);
+        // Alert alleen bij n_recent ≥ 10 EN n_all ≥ 30 (anders geen vertrouwen)
+        let alert = null;
+        if (s.w25.length >= 10 && s.all.length >= 30 && avg25 != null && avgAll != null) {
+          const drift = avg25 - avgAll;
+          if (drift < -2) alert = '🔴 SLECHTER';
+          else if (drift > 2) alert = '✅ BETER';
+        }
+        return {
+          key: k,
+          n_all: s.all.length, n_25: s.w25.length, n_50: s.w50.length, n_100: s.w100.length,
+          avg_all: avgAll, avg_25: avg25, avg_50: avg50, avg_100: avg100, alert,
+        };
+      }).sort((a, b) => (a.avg_25 || 0) - (b.avg_25 || 0));
+    };
 
-    res.json({ ok: true, recent_window: recentN, marketDrift, signalDrift });
+    const marketDrift = computeWindowed(b => `${normalizeSport(b.sport)}_${detectMarket(b.markt || 'other')}`);
+    const bookieDrift = computeWindowed(b => (b.tip || 'unknown'));
+    const signalDrift = computeWindowed(b => {
+      try {
+        const sigs = typeof b.signals === 'string' ? JSON.parse(b.signals) : b.signals;
+        if (!Array.isArray(sigs)) return null;
+        return sigs.map(s => String(s).split(':')[0]).filter(Boolean);
+      } catch { return null; }
+    });
+
+    res.json({
+      ok: true, total_bets: all.length, windows: WINDOWS,
+      marketDrift, bookieDrift, signalDrift,
+      note: 'Alert alleen bij ≥10 in window én ≥30 totaal. Sample size altijd zichtbaar.',
+    });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
@@ -6032,11 +6048,33 @@ app.get('/api/admin/v2/why-this-pick', requireAdmin, async (req, res) => {
     // Pak pick_candidate
     const { data: candidates } = await supabase.from('pick_candidates')
       .select('*').eq('fixture_id', fxId).order('created_at', { ascending: false });
+    // Top 5 signal contributions: parse signals string voor magnitudes
+    let topContributions = [];
+    let allSignals = [];
+    try {
+      const sigsStr = bet.signals || '';
+      const sigs = typeof sigsStr === 'string' ? JSON.parse(sigsStr) : sigsStr;
+      if (Array.isArray(sigs)) {
+        allSignals = sigs;
+        topContributions = sigs.map(s => {
+          const str = String(s);
+          // Format: "name:+X.X%" of "name:flag"
+          const m = str.match(/^([^:]+):([+-]?[\d.]+)%?/);
+          if (m) return { name: m[1], magnitude_pct: parseFloat(m[2]) };
+          return { name: str, magnitude_pct: null };
+        }).filter(x => x.magnitude_pct !== null)
+          .sort((a, b) => Math.abs(b.magnitude_pct) - Math.abs(a.magnitude_pct))
+          .slice(0, 5);
+      }
+    } catch {}
+
     res.json({
       bet: { id: bet.bet_id, wedstrijd: bet.wedstrijd, markt: bet.markt, odds: bet.odds, uitkomst: bet.uitkomst, clv_pct: bet.clv_pct },
       market_baseline: matchingRun?.baseline_prob || null,
       model_delta: matchingRun?.model_delta || null,
       final_prob: matchingRun?.final_prob || null,
+      top_contributions: topContributions,
+      all_signals: allSignals,
       market_consensus: cons ? { type: cons.market_type, prob: cons.consensus_prob, bookies: cons.bookmaker_count, quality: cons.quality_score } : null,
       features: feat?.features || null,
       data_quality: feat?.quality || null,
@@ -6077,10 +6115,28 @@ app.get('/api/admin/v2/data-quality', requireAdmin, async (req, res) => {
     const featFixtures = new Set((feats || []).map(f => f.fixture_id));
     const missingOddsCount = [...featFixtures].filter(f => !fixtureWithOdds.has(f)).length;
 
+    // Freshness: oudste feature_snapshot in window
+    let oldestAgeMin = null;
+    if (feats && feats.length) {
+      const oldest = feats.reduce((min, f) => {
+        const t = new Date(f.captured_at).getTime();
+        return min == null || t < min ? t : min;
+      }, null);
+      if (oldest) oldestAgeMin = Math.round((Date.now() - oldest) / 60000);
+    }
+
+    // Average bookmaker count per consensus snapshot in window
+    const { data: cons } = await supabase.from('market_consensus')
+      .select('bookmaker_count, quality_score').gte('captured_at', sinceIso);
+    const avgBookies = (cons || []).length ? +(cons.reduce((s, c) => s + (c.bookmaker_count || 0), 0) / cons.length).toFixed(1) : null;
+    const avgQuality = (cons || []).length ? +(cons.reduce((s, c) => s + (c.quality_score || 0), 0) / cons.length).toFixed(3) : null;
+
     res.json({
       hours, totalFeatures: totalFeats,
       qualityIssues: issues,
       missingOdds: { fixtures_with_features_but_no_odds: missingOddsCount },
+      consensus: { snapshots: (cons || []).length, avg_bookmaker_count: avgBookies, avg_quality_score: avgQuality },
+      freshness: { oldest_feature_snapshot_age_min: oldestAgeMin },
       summary: {
         healthy_pct: totalFeats > 0 ? +((totalFeats - issues.no_standings - issues.lineup_missing) / totalFeats * 100).toFixed(1) : 100,
       },
@@ -6248,6 +6304,7 @@ app.delete('/api/push/subscribe', async (req, res) => {
 
 // Prematch scan · SSE streaming (inclusief live check op moment van draaien)
 app.post('/api/prematch', (req, res) => {
+  if (!OPERATOR.master_scan_enabled) return res.status(503).json({ error: 'Scans uitgeschakeld via operator failsafe' });
   if (scanRunning) return res.status(429).json({ error: 'Scan al bezig · wacht tot de huidige scan klaar is' });
   scanRunning = true;
   const isAdmin = req.user?.role === 'admin';
@@ -6316,12 +6373,23 @@ app.post('/api/prematch', (req, res) => {
       // Sorteer op expectedEur (hoogste eerst)
       allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
 
-      // ── DIVERSIFICATION (v10.0.1) ─────────────────────────────────────
+      // ── DIVERSIFICATION (v10.0.1, panic-aware v10.2.1) ────────────────
       // Reviewer: max 1 pick per match, max 2 per sport. Voorkomt over-exposure
       // op één wedstrijd (correlatierisico) en concentratie in 1 sport.
-      const MAX_PICKS = 5;            // maximum (kan minder zijn als minder kandidaten)
+      // Panic mode: max 2 picks total + alleen PROVEN markten (≥100 settled).
+      const MAX_PICKS = OPERATOR.panic_mode ? Math.min(2, OPERATOR.max_picks_per_day) : OPERATOR.max_picks_per_day;
       const MAX_PER_MATCH = 1;        // anti-correlatie
-      const MAX_PER_SPORT = 2;        // anti-concentratie
+      const MAX_PER_SPORT = OPERATOR.panic_mode ? 1 : 2; // panic = nog strenger
+      // Panic mode: filter alle non-PROVEN markten
+      if (OPERATOR.panic_mode) {
+        const beforePanic = allPicks.length;
+        allPicks = allPicks.filter(p => {
+          const key = `${normalizeSport(p.sport)}_${detectMarket(p.label)}`;
+          return (_marketSampleCache.data[key] || 0) >= 100;
+        });
+        const panicSkipped = beforePanic - allPicks.length;
+        if (panicSkipped) emit({ log: `🚨 Panic mode: ${panicSkipped} pick(s) geskipt (alleen PROVEN markten)` });
+      }
       const seenMatches = new Map();  // match key → count
       const seenSports = new Map();   // sport → count
       const topPicks = [];
