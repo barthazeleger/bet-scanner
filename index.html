@@ -178,6 +178,15 @@ nav::-webkit-scrollbar { display: none; }
 .scan-panel-pm { background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); color: #fff; }
 .scan-panel-lv { background: linear-gradient(135deg, #1a0a0a 0%, #4c0519 100%); color: #fff; }
 .scan-panel::before { content: ''; position: absolute; top: -40px; right: -40px; width: 160px; height: 160px; background: rgba(255,255,255,0.04); border-radius: 50%; pointer-events: none; }
+/* Light-mode: picks-sectie binnen de scan-panel breekt visueel uit naar page-bg */
+[data-theme="light"] .scan-panel .picks-wrap,
+[data-theme="light"] .scan-panel #picks-live,
+[data-theme="light"] .scan-panel #potd-wrap,
+[data-theme="light"] .scan-panel #potd-output,
+[data-theme="light"] .scan-panel #history-wrap { background: var(--bg); margin: 16px -24px -24px -24px; padding: 16px 24px; border-radius: 0 0 14px 14px; color: var(--text); }
+[data-theme="light"] .scan-panel .picks-hdr { color: var(--muted); }
+[data-theme="light"] .scan-panel .prob-bar  { background: var(--surface2); }
+[data-theme="light"] .scan-panel .prob-pct  { color: var(--muted); }
 .sp-icon { font-size: 32px; margin-bottom: 12px; display: block; }
 .sp-title { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
 .sp-sub { font-size: 12px; opacity: 0.55; margin-bottom: 16px; line-height: 1.5; }
