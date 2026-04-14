@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.5';
+const APP_VERSION    = '10.7.6';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2470,17 +2470,25 @@ function setPreferredBookies(list) {
 // Groepeer spreads per point-line en return beste edge-qualifying pick.
 // Voorkomt mixing-points bug waarbij bestFromArr over ALLE points zoekt en
 // pick wordt geskipt door de maxOdds-3.8 ceiling bij extreme point-lines.
+//
+// KRITIEKE FIX (v10.7.6): pre-filter per entry op [minOdds, maxOdds] vóór
+// groeperen. Anders kan één bookie-anomalie (bv Bet365 -1.5 @ 4.50 als
+// alternate line) de hele point-group killen, waardoor Unibet's legit 2.17
+// verloren gaat. Preferred pool met meer bookies mag NOOIT picks wegwerpen
+// die bij kleiner pool wél zouden doorgaan.
 function bestSpreadPick(spreads, fairProb, minEdge, minOdds = 1.60, maxOdds = 3.8) {
   if (!spreads || !spreads.length) return null;
   const byPoint = {};
   for (const s of spreads) {
+    if (!s || typeof s.price !== 'number') continue;
+    if (s.price < minOdds || s.price > maxOdds) continue; // anti-anomalie: filter per entry
     const k = String(s.point);
     (byPoint[k] = byPoint[k] || []).push(s);
   }
   let best = null;
   for (const [pt, pool] of Object.entries(byPoint)) {
     const top = bestFromArr(pool);
-    if (top.price < minOdds || top.price > maxOdds) continue;
+    if (top.price <= 0) continue;
     const edge = fairProb * top.price - 1;
     if (edge < minEdge) continue;
     if (!best || edge > best.edge) best = { ...top, point: parseFloat(pt), edge };
@@ -2937,30 +2945,22 @@ async function runBasketball(emit) {
         }
 
         // ── 1st Half Spread (basketball - research: mispriced vs full-game spread) ──
-        const h1HomeSpr = parsed.halfSpreads.filter(o => o.side === 'home');
-        const h1AwaySpr = parsed.halfSpreads.filter(o => o.side === 'away');
-        if (h1HomeSpr.length) {
-          const best = bestFromArr(h1HomeSpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpHome * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = h1HomeSpr[0].point > 0 ? `+${h1HomeSpr[0].point}` : `${h1HomeSpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, best.price,
-                `1st Half Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpHome*100), sEdge * 0.18, kickoffTime, best.bookie, matchSignals);
-            }
+        {
+          const h1HomeSpr = parsed.halfSpreads.filter(o => o.side === 'home');
+          const h1AwaySpr = parsed.halfSpreads.filter(o => o.side === 'away');
+          const bH = bestSpreadPick(h1HomeSpr, fpHome, MIN_EDGE + 0.01);
+          if (bH) {
+            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, bH.price,
+              `1st Half Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(fpHome*100), bH.edge * 0.18, kickoffTime, bH.bookie, matchSignals);
           }
-        }
-        if (h1AwaySpr.length) {
-          const best = bestFromArr(h1AwaySpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpAway * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = h1AwaySpr[0].point > 0 ? `+${h1AwaySpr[0].point}` : `${h1AwaySpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, best.price,
-                `1st Half Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpAway*100), sEdge * 0.18, kickoffTime, best.bookie, matchSignals);
-            }
+          const bA = bestSpreadPick(h1AwaySpr, fpAway, MIN_EDGE + 0.01);
+          if (bA) {
+            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, bA.price,
+              `1st Half Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(fpAway*100), bA.edge * 0.18, kickoffTime, bA.bookie, matchSignals);
           }
         }
       }
@@ -4461,30 +4461,22 @@ async function runFootballUS(emit) {
         }
 
         // ── 1st Half Spread (NFL - research: 1H spreads often mispriced vs full-game) ──
-        const h1HomeSpr = parsed.halfSpreads.filter(o => o.side === 'home');
-        const h1AwaySpr = parsed.halfSpreads.filter(o => o.side === 'away');
-        if (h1HomeSpr.length) {
-          const best = bestFromArr(h1HomeSpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpHome * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = h1HomeSpr[0].point > 0 ? `+${h1HomeSpr[0].point}` : `${h1HomeSpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, best.price,
-                `1st Half Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpHome*100), sEdge * 0.18, kickoffTime, best.bookie, matchSignals);
-            }
+        {
+          const h1HomeSpr = parsed.halfSpreads.filter(o => o.side === 'home');
+          const h1AwaySpr = parsed.halfSpreads.filter(o => o.side === 'away');
+          const bH = bestSpreadPick(h1HomeSpr, fpHome, MIN_EDGE + 0.01);
+          if (bH) {
+            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, bH.price,
+              `1st Half Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(fpHome*100), bH.edge * 0.18, kickoffTime, bH.bookie, matchSignals);
           }
-        }
-        if (h1AwaySpr.length) {
-          const best = bestFromArr(h1AwaySpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpAway * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = h1AwaySpr[0].point > 0 ? `+${h1AwaySpr[0].point}` : `${h1AwaySpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, best.price,
-                `1st Half Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpAway*100), sEdge * 0.18, kickoffTime, best.bookie, matchSignals);
-            }
+          const bA = bestSpreadPick(h1AwaySpr, fpAway, MIN_EDGE + 0.01);
+          if (bA) {
+            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, bA.price,
+              `1st Half Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(fpAway*100), bA.edge * 0.18, kickoffTime, bA.bookie, matchSignals);
           }
         }
 

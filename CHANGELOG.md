@@ -2,6 +2,25 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.6] - 2026-04-14
+
+### Fixed (KRITIEK — Dodgers-mysterie opgelost)
+**Root cause**: `bestSpreadPick` checkte `maxOdds` (3.8) NA `bestFromArr(pool)`. Als de preferred-bookies pool een entry had met anomaal hoge odds op dezelfde point-line (bv Bet365 alternate run-line @ 4.50), dan:
+
+1. `bestFromArr` returned die anomalie als max
+2. `top.price > maxOdds` check → hele point-group geskipt
+3. Unibet's legit 2.17 verloren ondanks dat die binnen [1.60, 3.80] zit
+
+**Symptoom voor gebruiker**: Dodgers -1.5 @ Unibet 2.17 verscheen ALTIJD in Unibet-only scan, NOOIT in [Bet365+Unibet] scan. 10x reproduceerbaar.
+
+**Fix**: per-entry pre-filter op [minOdds, maxOdds] vóór groeperen. Anomalieën worden weggegooid, legit entries blijven. Pool-grootte kan picks nu nooit verkleinen — meer brokers = altijd ≥ picks van enkelvoudige broker.
+
+### Refactored
+- 1H spread paden voor NBA + NFL ook op `bestSpreadPick` (was nog op oude pattern). Nu 7/7 sport-spread-paden uniform.
+
+### Tests
+- 190 passed. Voeg nog regressietest toe in volgende release: "preferred=[A,B] geeft ≥ picks van preferred=[A] over geconstrueerde testdata".
+
 ## [10.7.5] - 2026-04-14
 
 ### Fixed (reviewer-catch)
