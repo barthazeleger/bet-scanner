@@ -5504,11 +5504,21 @@ app.post('/api/clv/backfill', requireAdmin, async (req, res) => {
 app.get('/api/debug/odds', requireAdmin, async (req, res) => {
   try {
     const sport = normalizeSport(req.query.sport || 'hockey');
-    const date = req.query.date || new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+    const windowDays = req.query.wide === '1' ? [-2,-1,0,1] : [-1,0,1];
     const team = (req.query.team || '').toLowerCase();
     const cfg = getSportApiConfig(sport);
-    const games = await afGet(cfg.host, cfg.fixturesPath, { date }).catch(() => []);
-    const matches = (games || []).filter(g => {
+    const datesFromParam = req.query.date ? [req.query.date] : windowDays.map(o => {
+      const d = new Date(Date.now() + o * 86400000);
+      return d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+    });
+    let allGames = [];
+    const fetchedPerDate = {};
+    for (const date of datesFromParam) {
+      const games = await afGet(cfg.host, cfg.fixturesPath, { date }).catch(err => { console.error('debug odds fixtures fout', err); return []; });
+      fetchedPerDate[date] = (games || []).length;
+      for (const g of (games || [])) allGames.push(g);
+    }
+    const matches = allGames.filter(g => {
       const h = (g.teams?.home?.name || '').toLowerCase();
       const a = (g.teams?.away?.name || '').toLowerCase();
       return !team || h.includes(team) || a.includes(team);
@@ -5516,21 +5526,28 @@ app.get('/api/debug/odds', requireAdmin, async (req, res) => {
     const out = [];
     for (const g of matches) {
       const id = sport === 'football' ? g.fixture?.id : g.id;
-      const odds = await afGet(cfg.host, cfg.oddsPath, { [cfg.fixtureParam]: id }).catch(() => []);
-      const bookmakers = (odds?.[0]?.bookmakers || []).map(bk => ({
-        bookie: bk.name,
-        bets: (bk.bets || []).map(b => ({
-          id: b.id, name: b.name,
-          values: (b.values || []).map(v => ({ value: v.value, odd: v.odd })),
-          valueCount: (b.values || []).length,
-          is3Way: (b.values || []).filter(v => ['Home','Draw','Away','1','X','2'].includes((v.value||'').trim())).length === 3,
-        })),
+      if (!id) continue;
+      const odds = await afGet(cfg.host, cfg.oddsPath, { [cfg.fixtureParam]: id }).catch(err => { console.error('debug odds fout', err); return []; });
+      const first = Array.isArray(odds) ? odds[0] : odds;
+      const rawBookmakers = first?.bookmakers || [];
+      const bookmakers = rawBookmakers.map(bk => ({
+        bookie: bk?.name || 'unknown',
+        bets: (bk?.bets || []).map(b => {
+          const vals = Array.isArray(b?.values) ? b.values : [];
+          return {
+            id: b?.id, name: b?.name,
+            values: vals.map(v => ({ value: v?.value, odd: v?.odd })),
+            valueCount: vals.length,
+            is3Way: vals.filter(v => ['Home','Draw','Away','1','X','2'].includes((v?.value || '').trim())).length === 3,
+          };
+        }),
       }));
       out.push({ id, home: g.teams?.home?.name, away: g.teams?.away?.name, bookmakers });
     }
-    res.json({ sport, date, matchesFound: matches.length, matches: out });
+    res.json({ sport, datesSearched: datesFromParam, fetchedPerDate, matchesFound: matches.length, matches: out });
   } catch (e) {
-    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+    console.error('debug/odds fout:', e);
+    res.status(500).json({ error: (e && e.message) || 'Interne fout', stack: (e && e.stack) || null });
   }
 });
 
