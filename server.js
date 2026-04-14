@@ -175,7 +175,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.7.1';
+const APP_VERSION    = '9.8.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5503,6 +5503,91 @@ app.get('/api/admin/v2/pick-candidates-summary', requireAdmin, async (req, res) 
     });
   } catch (e) {
     res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
+// GET /api/admin/v2/clv-stats?days=30 — CLV-first KPI per sport + markt
+// Reviewer-aanbeveling: CLV is hoofd-KPI (winrate is te noisy bij kleine samples).
+// Toont per sport en per (sport,markt) bucket: sample size, avg CLV%, % positief.
+app.get('/api/admin/v2/clv-stats', requireAdmin, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
+    const sinceIso = new Date(Date.now() - days * 86400000).toISOString();
+    const { data: bets, error } = await supabase.from('bets')
+      .select('sport, markt, clv_pct, uitkomst, wl, datum')
+      .not('clv_pct', 'is', null);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const all = (bets || []).filter(b => typeof b.clv_pct === 'number' && !isNaN(b.clv_pct));
+    if (!all.length) return res.json({ days, totalBets: 0, bySport: {}, byMarket: {}, killEligible: [] });
+
+    // Per sport
+    const bySport = {};
+    for (const b of all) {
+      const s = normalizeSport(b.sport || 'football');
+      if (!bySport[s]) bySport[s] = { n: 0, sumClv: 0, positive: 0, sumPnl: 0, settledN: 0 };
+      bySport[s].n++;
+      bySport[s].sumClv += b.clv_pct;
+      if (b.clv_pct > 0) bySport[s].positive++;
+      if (b.uitkomst === 'W' || b.uitkomst === 'L') {
+        bySport[s].settledN++;
+        bySport[s].sumPnl += parseFloat(b.wl || 0);
+      }
+    }
+    const sportSummary = {};
+    for (const [s, d] of Object.entries(bySport)) {
+      sportSummary[s] = {
+        n: d.n,
+        avg_clv_pct: +(d.sumClv / d.n).toFixed(2),
+        positive_clv_pct: +(d.positive / d.n * 100).toFixed(1),
+        settled_n: d.settledN,
+        total_pnl_eur: +d.sumPnl.toFixed(2),
+      };
+    }
+
+    // Per (sport, marktcategorie) bucket
+    const byMarket = {};
+    for (const b of all) {
+      const s = normalizeSport(b.sport || 'football');
+      const mk = detectMarket(b.markt || 'other');
+      const key = `${s}_${mk}`;
+      if (!byMarket[key]) byMarket[key] = { n: 0, sumClv: 0, positive: 0, sumPnl: 0 };
+      byMarket[key].n++;
+      byMarket[key].sumClv += b.clv_pct;
+      if (b.clv_pct > 0) byMarket[key].positive++;
+      if (b.uitkomst === 'W' || b.uitkomst === 'L') byMarket[key].sumPnl += parseFloat(b.wl || 0);
+    }
+    const marketSummary = {};
+    for (const [k, d] of Object.entries(byMarket)) {
+      marketSummary[k] = {
+        n: d.n,
+        avg_clv_pct: +(d.sumClv / d.n).toFixed(2),
+        positive_clv_pct: +(d.positive / d.n * 100).toFixed(1),
+        total_pnl_eur: +d.sumPnl.toFixed(2),
+      };
+    }
+
+    // Kill-switch eligibility: markten die ≥30 bets hebben EN gemiddeld CLV < -2%.
+    // Reviewer-regel: structureel negatieve CLV → consider auto-disable.
+    const killEligible = [];
+    for (const [k, s] of Object.entries(marketSummary)) {
+      if (s.n >= 30 && s.avg_clv_pct < -2.0) {
+        killEligible.push({
+          key: k, n: s.n, avg_clv_pct: s.avg_clv_pct,
+          recommendation: s.avg_clv_pct < -5 ? 'AUTO_DISABLE' : 'WATCHLIST',
+        });
+      }
+    }
+
+    res.json({
+      days, totalBets: all.length,
+      bySport: sportSummary,
+      byMarket: marketSummary,
+      killEligible,
+      thresholds: { kill_min_n: 30, watchlist_clv: -2.0, auto_disable_clv: -5.0 },
+    });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
   }
 });
 
