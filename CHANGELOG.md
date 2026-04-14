@@ -2,6 +2,17 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.5.2] - 2026-04-14
+
+### Removed (clutter)
+- Onboarding tour (`TOUR_STEPS`, `startTour`, `restartTour`, tour-overlay, tour-tooltip HTML/CSS). Reden: werkte niet lekker en voegde niets toe.
+- Help-tip tooltips ("?"-icoontjes op Bankroll/ROI/Strike rate/CLV/Variance/Score/Edge). Reden: clutter op dashboard, user kent de metrics al.
+- Bijbehorende LANG keys (`tour_*`, `help_*`, `card_tour*`), CSS (`.help-tip`, `.help-text`, `.tour-*`), JS (`injectPickCardHelpTips`, `_origInitUserUI` tour hook).
+
+### Added (Info tab i18n)
+- `info_intro`, `info_model_body`, `info_subtitle`, `info_date` keys met NL + EN vertaling via `data-i18n-html`.
+- Card header "april 2026" is nu taalgevoelig → "April 2026" in EN.
+
 ## [10.5.1] - 2026-04-14
 
 ### Changed (score/unit alignment)
