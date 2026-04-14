@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.14] - 2026-04-14
+
+### Fixed (paired-devig pairing conventie)
+`buildSpreadFairProbFns` ging ervan uit dat pairing **altijd opposite-point** was (NBA/NFL conventie: Home -7.5 ↔ Away +7.5). Maar **MLB en NHL gebruiken same-point** (Home -1.5 ↔ Away -1.5, waar "Away -1.5" semantisch "Away side of -1.5 line" = bet-against-home betekent).
+
+**Gevolg in v10.7.13**: paired-devig faalde voor MLB → sanity check tot<1.00 → fallback `fpHome × 0.55` → Dodgers cover-prob op 0.347 ipv realistische 0.447.
+
+**Fix**: probeert BEIDE pairings, kiest die met plausibele vig (1.00-1.15). Lagere vig wint.
+
+**Resultaat**: cover-prob voor MLB Dodgers -1.5 klopt nu met sharp markt (~44.5%). Edge bij 2.17 = ~-3% = terecht geen pick.
+
+### Gevolg voor user
+Wat eerder vandaag een "16% edge 7/10 pick" leek, was grotendeels artefact van de score-bug. Correct gekalibreerd is de bet marginaal -EV. Variance beslist over 1 bet. Bet staat, CLV-capture doet werk.
+
 ## [10.7.13] - 2026-04-14
 
 ### Added (regressietests — voorkomt dat vandaag's bugs terugkeren)
