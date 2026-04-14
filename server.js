@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '8.3.0';
+const APP_VERSION    = '9.0.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -4287,8 +4287,15 @@ function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
   const potentialLoss = +todayBets.reduce((s, b) => s + b.inzet, 0).toFixed(2);
   const todayBetsCount = todayBets.length;
 
+  // Net units: wl in euro gedeeld door unit size (huidige unitEur als proxy).
+  // Voor een precieze berekening zou unit_at_time per bet opgeslagen moeten worden;
+  // voor nu gebruiken we de huidige unit size.
+  const netUnits  = unitEur > 0 ? +(wlEur / unitEur).toFixed(2) : 0;
+  const netProfit = +wlEur.toFixed(2);
+
   return { total, W, L, open, wlEur: +wlEur.toFixed(2), roi: +roi.toFixed(4),
            bankroll: +bankroll.toFixed(2), startBankroll, avgOdds, avgUnits, strikeRate, winU, lossU,
+           netUnits, netProfit,
            avgCLV, clvPositive, clvTotal,
            expectedWins, actualWins, variance, varianceStdDev, luckFactor,
            potentialWin, potentialLoss, todayBetsCount };
@@ -4678,24 +4685,64 @@ function getSportApiConfig(sport) {
   return configs[sport] || configs.football;
 }
 
+// Normaliseer teamnaam: accenten eraf, lowercase, veelvoorkomende prefixes strippen.
+// Gebruikt voor fuzzy matching over alle sporten (accented namen, Egyptische clubs, etc.).
+function normalizeTeamName(s) {
+  return (s || '').toString().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // accenten weg
+    .replace(/\bfc\b|\bcf\b|\bac\b|\bsc\b|\bbk\b/g, '') // veelvoorkomende prefixes/suffixes
+    .replace(/[^a-z0-9\s]/g, ' ') // rare tekens vervangen door spatie
+    .replace(/\s+/g, ' ').trim();
+}
+
+// Fuzzy team match: probeer exact, bevat, en woordoverlap.
+function teamMatchScore(apiName, queryName) {
+  const a = normalizeTeamName(apiName);
+  const q = normalizeTeamName(queryName);
+  if (!a || !q) return 0;
+  if (a === q) return 100;
+  if (a.includes(q) || q.includes(a)) return 80;
+  // Word overlap
+  const aw = new Set(a.split(' ').filter(w => w.length >= 3));
+  const qw = new Set(q.split(' ').filter(w => w.length >= 3));
+  if (!aw.size || !qw.size) return 0;
+  let overlap = 0;
+  for (const w of qw) if (aw.has(w)) overlap++;
+  const ratio = overlap / Math.max(aw.size, qw.size);
+  return Math.round(ratio * 70); // tot 70 voor gedeeltelijke overlap
+}
+
 // Zoek fixture/game ID op teamnamen voor elke sport
 async function findGameId(sport, matchName) {
   const cfg = getSportApiConfig(sport);
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  const parts = (matchName || '').split(' vs ').map(s => s.trim().toLowerCase());
+  const parts = (matchName || '').split(' vs ').map(s => s.trim());
   if (parts.length < 2) return null;
+  const [qHome, qAway] = parts;
 
   const games = await afGet(cfg.host, cfg.fixturesPath, { date: today }).catch(() => []);
-  const match = (games || []).find(g => {
-    // Football has teams under g.teams, other sports similar
-    const home = (g.teams?.home?.name || '').toLowerCase();
-    const away = (g.teams?.away?.name || '').toLowerCase();
-    return (home.includes(parts[0]) || parts[0].includes(home.split(' ').pop())) &&
-           (away.includes(parts[1]) || parts[1].includes(away.split(' ').pop()));
-  });
-  if (!match) return null;
+  const list = games || [];
+
+  // Scoor elke game en kies de beste
+  let best = null, bestScore = 0;
+  for (const g of list) {
+    const home = g.teams?.home?.name || '';
+    const away = g.teams?.away?.name || '';
+    const sHome = teamMatchScore(home, qHome);
+    const sAway = teamMatchScore(away, qAway);
+    const score = sHome + sAway;
+    // Minimum: beide teams moeten enige match hebben (geen 0)
+    if (sHome > 0 && sAway > 0 && score > bestScore) {
+      best = g; bestScore = score;
+    }
+  }
+
+  if (!best || bestScore < 60) {
+    console.warn(`[findGameId] geen match voor "${matchName}" in sport=${sport} (${list.length} games, beste score=${bestScore})`);
+    return null;
+  }
   // Football: match.fixture.id, other sports: match.id
-  return sport === 'football' ? match.fixture?.id : match.id;
+  return sport === 'football' ? best.fixture?.id : best.id;
 }
 
 // Haal odds op voor elke sport en match elke markt
@@ -5172,21 +5219,27 @@ app.get('/api/potd', requireAdmin, async (req, res) => {
 
 // Scan history · laatste N scans met picks
 app.get('/api/scan-history', async (req, res) => {
-  const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
-  if (userId) {
-    // Per-user scan history from Supabase
-    try {
-      const { data, error } = await supabase.from('scan_history').select('*')
-        .eq('user_id', userId).order('ts', { ascending: false }).limit(SCAN_HISTORY_MAX);
-      if (error) throw new Error(error.message);
-      const history = (data || []).map(r => ({
-        ts: r.ts, type: r.type, totalEvents: r.total_events, picks: r.picks || []
-      }));
-      return res.json(history);
-    } catch { /* fallback below */ }
+  const isAdmin = req.user?.role === 'admin';
+  // Admin sees ALL scan history (including null user_id entries from system scans).
+  // Non-admin users see only their own + global (null user_id) scans.
+  try {
+    let query = supabase.from('scan_history').select('*')
+      .order('ts', { ascending: false }).limit(SCAN_HISTORY_MAX);
+    if (!isAdmin && req.user?.id) {
+      // Try per-user + null filter. If user_id column doesn't exist, this fails silently below.
+      query = query.or(`user_id.eq.${req.user.id},user_id.is.null`);
+    }
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    const history = (data || []).map(r => ({
+      ts: r.ts, type: r.type, totalEvents: r.total_events, picks: r.picks || []
+    }));
+    return res.json(history);
+  } catch (e) {
+    console.error('scan-history query fout:', e.message);
+    const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
+    res.json(history);
   }
-  const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
-  res.json(history);
 });
 
 // ── MATCH ANALYSER ENDPOINT ──────────────────────────────────────────────────
@@ -5269,24 +5322,74 @@ app.post('/api/analyze', async (req, res) => {
     });
 
     if (!matches.length) {
-      // Try to find upcoming fixtures via API
+      // Try to find upcoming fixtures via API (wider search)
       const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
       const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
       let foundFixtures = [];
+      const liveStatuses = ['1H', '2H', 'HT', 'ET', 'BT', 'P', 'INT', 'LIVE'];
       try {
-        const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', {
+        // Eerste poging: gerichte search op teamA (strenge match)
+        let fixtures = await afGet('v3.football.api-sports.io', '/fixtures', {
           from: today, to: tomorrow, status: 'NS', search: teamA,
         });
+        // Fallback: bredere zoekopdracht op datum zonder team filter als niks gevonden.
+        // Dan kandidaten fuzzy matchen op beide teams.
+        if ((!fixtures || !fixtures.length)) {
+          const allToday = await afGet('v3.football.api-sports.io', '/fixtures', {
+            date: today,
+          }).catch(() => []);
+          const allTomorrow = await afGet('v3.football.api-sports.io', '/fixtures', {
+            date: tomorrow,
+          }).catch(() => []);
+          const pool = [...(allToday || []), ...(allTomorrow || [])];
+          fixtures = pool.filter(f => {
+            if (liveStatuses.includes(f.fixture?.status?.short)) return false;
+            const home = f.teams?.home?.name || '';
+            const away = f.teams?.away?.name || '';
+            const hs = teamA ? teamMatchScore(home, teamA) : 0;
+            const as = teamB ? teamMatchScore(away, teamB) : 0;
+            const anyMatch = Math.max(teamMatchScore(home, teamA), teamMatchScore(away, teamA)) >= 60;
+            return anyMatch && (teamB ? (hs + as) >= 100 : true);
+          }).slice(0, 10);
+        }
         if (fixtures && fixtures.length) {
-          foundFixtures = fixtures.map(f => ({
-            match: `${f.teams?.home?.name} vs ${f.teams?.away?.name}`,
-            league: f.league?.name || '',
-            kickoff: f.fixture?.date ? new Date(f.fixture.date).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' }) : '',
-          }));
+          // Live/bezig → geen pre-match analyse mogelijk
+          const liveOnes = fixtures.filter(f => liveStatuses.includes(f.fixture?.status?.short));
+          if (liveOnes.length && fixtures.length === liveOnes.length) {
+            return res.json({ error: 'Wedstrijd is al bezig. Pre-match analyse niet mogelijk.' });
+          }
+          foundFixtures = fixtures
+            .filter(f => !liveStatuses.includes(f.fixture?.status?.short))
+            .map(f => ({
+              match: `${f.teams?.home?.name} vs ${f.teams?.away?.name}`,
+              league: f.league?.name || '',
+              kickoff: f.fixture?.date ? new Date(f.fixture.date).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' }) : '',
+            }));
         }
       } catch {}
       return res.json({ error: `Geen analyse beschikbaar voor "${query}". Start een scan om deze wedstrijd te analyseren.`, matches: foundFixtures });
     }
+
+    // Check of deze wedstrijd al bezig is (live) – dan geen pre-match analyse.
+    const liveStatuses = ['1H', '2H', 'HT', 'ET', 'BT', 'P', 'INT', 'LIVE'];
+    try {
+      const bestMatchName = matches[0]?.match || '';
+      const bestSport = matches[0]?.sport || 'football';
+      if (bestSport === 'football' && bestMatchName) {
+        const todayIso = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+        const fxList = await afGet('v3.football.api-sports.io', '/fixtures', { date: todayIso }).catch(() => []);
+        const [qHome, qAway] = bestMatchName.split(' vs ').map(s => s.trim());
+        const hit = (fxList || []).find(f => {
+          const sHome = teamMatchScore(f.teams?.home?.name || '', qHome);
+          const sAway = teamMatchScore(f.teams?.away?.name || '', qAway);
+          return sHome >= 60 && sAway >= 60;
+        });
+        const status = hit?.fixture?.status?.short;
+        if (status && liveStatuses.includes(status)) {
+          return res.json({ error: 'Wedstrijd is al bezig. Pre-match analyse niet mogelijk.' });
+        }
+      }
+    } catch {}
 
     // If market specified, filter
     if (market) {
@@ -6350,6 +6453,31 @@ app.get('/api/timing-analysis', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
+// ── UNIT SIZE CHANGE LOGGING ─────────────────────────────────────────────────
+// UNIT_EUR is een const die wijzigt bij deploy. We loggen bij startup een event
+// in de notifications-tabel zodra de waarde verschilt van de laatst bekende.
+async function checkUnitSizeChange() {
+  try {
+    const { data: lastSetting } = await supabase.from('notifications').select('*')
+      .eq('type', 'unit_change').order('created_at', { ascending: false }).limit(1).single();
+    const lastUnit = lastSetting?.body?.match(/(\d+)/)?.[1];
+    if (lastUnit && parseInt(lastUnit) !== UNIT_EUR) {
+      await tg(`💰 Unit size gewijzigd: €${lastUnit} → €${UNIT_EUR} op ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
+      console.log(`💰 Unit size wijziging gelogd: €${lastUnit} → €${UNIT_EUR}`);
+    } else if (!lastUnit) {
+      // Geen eerdere setting: sla huidige waarde op als baseline
+      await tg(`💰 Unit baseline: €${UNIT_EUR} vanaf ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
+      console.log(`💰 Unit baseline gelogd: €${UNIT_EUR}`);
+    }
+  } catch (e) {
+    // Bij 'no rows' van single() komt hier ook een error – dan baseline schrijven
+    try {
+      await tg(`💰 Unit baseline: €${UNIT_EUR} vanaf ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
+      console.log(`💰 Unit baseline gelogd: €${UNIT_EUR}`);
+    } catch {}
+  }
+}
+
 // ── START ───────────────────────────────────────────────────────────────────
 const PORT = 3000;
 app.listen(PORT, () => {
@@ -6363,6 +6491,7 @@ app.listen(PORT, () => {
   loadSignalWeightsAsync().then(() => console.log('🔧 Signal weights geladen')).catch(() => {});
   loadScanHistoryFromSheets().then(h => console.log(`📜 Scan history geladen: ${h.length} entries`)).catch(() => {});
   loadPushSubs().then(s => console.log(`🔔 Push subs geladen: ${s.length}`)).catch(() => {});
+  checkUnitSizeChange().catch(e => console.error('Unit size check fout:', e.message));
   scheduleDailyResultsCheck();
   scheduleDailyScan();
   scheduleOddsMonitor();

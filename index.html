@@ -652,6 +652,7 @@ nav::-webkit-scrollbar { display: none; }
     <div class="stat-box"><div class="stat-val yellow" id="s-o">—</div><div class="stat-lbl">Open</div></div>
     <div class="stat-box"><div class="stat-val" id="s-sr">—</div><div class="stat-lbl">Strike Rate <span class="help-tip" tabindex="0">?<span class="help-text" data-i18n-text="help_strike_rate">Percentage van je bets dat gewonnen is</span></span></div></div>
     <div class="stat-box"><div class="stat-val" id="s-wl">—</div><div class="stat-lbl">W/L (€)</div></div>
+    <div class="stat-box"><div class="stat-val" id="s-net-units">—</div><div class="stat-lbl">Net Units</div></div>
     <div class="stat-box"><div class="stat-val" id="s-odds">—</div><div class="stat-lbl">Gem. odds</div></div>
     <div class="stat-box"><div class="stat-val green" id="s-pot-win">—</div><div class="stat-lbl" data-i18n="pot_win_today">Pot. winst vandaag</div></div>
   </div>
@@ -1947,6 +1948,11 @@ function renderStats(s) {
   const wl = document.getElementById('s-wl');
   wl.textContent = (s.wlEur >= 0 ? '+' : '') + '€' + s.wlEur;
   wl.className = 'stat-val ' + (s.wlEur >= 0 ? 'green' : 'red');
+  const netU = document.getElementById('s-net-units');
+  if (netU && s.netUnits != null) {
+    netU.textContent = (s.netUnits >= 0 ? '+' : '') + s.netUnits.toFixed(1) + 'U';
+    netU.className = 'stat-val ' + (s.netUnits >= 0 ? 'green' : 'red');
+  }
   document.getElementById('s-odds').textContent = s.avgOdds;
   // Potential day profit
   const potEl = document.getElementById('s-pot-win');
@@ -3552,7 +3558,7 @@ async function loadNotifications() {
 
     // Footer
     const footer = calibResp?.totalSettled > 0
-      ? `${calibResp.totalSettled} bets in model${calibResp.modelLastUpdated ? ' · model bijgewerkt ' + new Date(calibResp.modelLastUpdated).toLocaleDateString('nl-NL') : ''}`
+      ? `Calibratie: model heeft nu ${calibResp.totalSettled} settled bet${calibResp.totalSettled === 1 ? '' : 's'}${calibResp.modelLastUpdated ? ' · bijgewerkt ' + new Date(calibResp.modelLastUpdated).toLocaleDateString('nl-NL') : ''}`
       : (calibResp?.lastUpdated ? 'bijgewerkt ' + new Date(calibResp.lastUpdated).toLocaleDateString('nl-NL') : '');
     if (footer) body.innerHTML += `<div style="padding:8px 16px;font-size:11px;color:var(--muted);border-top:1px solid var(--border)">${footer}</div>`;
   } catch {
