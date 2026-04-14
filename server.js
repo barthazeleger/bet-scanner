@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.4';
+const APP_VERSION    = '10.7.5';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -3517,31 +3517,24 @@ async function runHockey(emit) {
           }
         }
 
-        // Puck line (spread) — NHL standard is ±1.5. Zelfde fix als MLB run line.
-        const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
-        const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
-        if (homeSpr.length) {
-          const best = bestFromArr(homeSpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpHome * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
-                `Puck Line | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+        // Puck line (spread) — NHL standard is ±1.5. Via bestSpreadPick zodat
+        // point-label uit daadwerkelijke best komt, niet uit arr[0].
+        {
+          const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
+          const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
+          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          if (bH) {
+            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+              `Puck Line | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-        }
-        if (awaySpr.length) {
-          const best = bestFromArr(awaySpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpAway * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
-                `Puck Line | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          if (bA) {
+            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+              `Puck Line | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
 
@@ -3991,30 +3984,22 @@ async function runBaseball(emit) {
         // Run Line (spread) — MLB standard is ±1.5. Eerder bug: pool mixte
         // verschillende point-lines (bv -1.5 @ 2.17 en -2.5 @ 4.20), waardoor
         // bestFromArr soms >3.8 terugkwam en pick geskipt werd. Nu filter op ±1.5.
-        const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
-        const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
-        if (homeSpr.length) {
-          const best = bestFromArr(homeSpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpHome * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
-                `Run Line | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+        {
+          const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
+          const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
+          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          if (bH) {
+            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+              `Run Line | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-        }
-        if (awaySpr.length) {
-          const best = bestFromArr(awaySpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpAway * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
-                `Run Line | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          if (bA) {
+            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+              `Run Line | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
 

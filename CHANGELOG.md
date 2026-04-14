@@ -2,6 +2,18 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.5] - 2026-04-14
+
+### Fixed (reviewer-catch)
+- **NHL + MLB spread**: nog op oude pattern `bestFromArr(homeSpr)` met label uit `homeSpr[0].point`. ±1.5-filter dempte de bug, maar label-mismatch was nog mogelijk (pick op Unibet -1.5 kon tonen als "-X" van andere bookie). Nu 5/5 sport-spread-paden uniform via `bestSpreadPick()`.
+
+### Clarified (was misleidend in eerdere release-notes)
+- **Stakes**: niet "logged-only" maar **scaffolded met weight=0 default**. Adj wordt gemultiplied met weight uit `signal_weights` store. Zolang CLV-autotune het signaal niet promoveert (weight blijft 0), effect is 0. Dit is bewust: als signaal werkt, promoveert het automatisch.
+- **Weather (NFL + MLB)**: **actief vanaf dag 1**, geen weight-gating. Regen/wind past direct `overP` aan voor O/U totals (zoals football weather al deed). Dit is bewust: weer is een fysiek feit, niet een signaal dat CLV-validatie nodig heeft.
+
+### Note
+- Testsuite dekt nog niet dat alle sport-spreads `bestSpreadPick` gebruiken én dat "logged-only" signalen geen score-impact hebben bij weight=0. Regressietest komt in volgende release.
+
 ## [10.7.4] - 2026-04-14
 
 ### Debug
