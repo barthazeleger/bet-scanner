@@ -1221,16 +1221,62 @@ nav::-webkit-scrollbar { display: none; }
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v9.3.0</span><br>
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v10.0.1</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Code-review v2 fixes: kill-switch enforcement + diversification + timeouts</div>
+          <div style="color:var(--muted);line-height:1.7">🛑 Kill-switch wordt nu écht geënforced in pick-selectie (was alleen detectie)<br>
+          🎯 Max 1 pick per wedstrijd (anti-correlatie) + max 2 per sport (anti-concentratie)<br>
+          ⏱️ 8s hard timeout op centrale api-sports client (geen scan-stalls meer)<br>
+          📜 Scan history bewaart nu alle picks (incl. niet-geselecteerde) voor audit<br>
+          ✅ 175 tests (4 nieuwe voor diversification + kill-switch)</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v10.0.0</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">v2 architectuur compleet: quantitative market-disagreement engine</div>
+          <div style="color:var(--muted);line-height:1.7">📦 11 nieuwe Supabase tabellen: snapshots / model_runs / pick_candidates / signal_stats / training_examples / etc<br>
+          🧪 v2 Pipeline Health dashboard in inbox (snapshots, CLV, walk-forward, kill-switch)<br>
+          📈 Walk-forward backtest (Brier + log loss + calibration buckets)<br>
+          🛑 Kill-switch detection per markt op CLV-thresholds<br>
+          🔁 Hiërarchische calibratie (global → sport → market → league) met Bayesian smoothing<br>
+          🤖 Residual model framework skeleton (activeert ≥500 picks/markt)<br>
+          📊 Per-signal CLV autotune (sneller signal dan W/L)</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v9.4-9.5</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">MLB pitchers + NHL shots + auth/scheduler hardening</div>
+          <div style="color:var(--muted);line-height:1.7">⚾ MLB starting pitcher signal via statsapi.mlb.com (gratis)<br>
+          🏒 NHL shots-differential signal via api-web.nhle.com<br>
+          🔐 2FA verify-code controleert nu account.status<br>
+          📅 Scheduler timer-handles correct opgeruimd (geen dubbele scans)<br>
+          🔧 Test-architectuur: pure helpers in lib/model-math.js (geen mirrors meer)</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v9.3</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
           <div style="font-weight:600;margin-bottom:5px">Market-sanity check: model vs markt vergelijking</div>
-          <div style="color:var(--muted);line-height:1.7">🛡️ Elke pick wordt nu gecheckt tegen devigged market consensus (3-way odds vanuit ~10 bookies)<br>
-          ❌ Picks met &gt;4% divergentie tussen model-prob en markt worden automatisch geskipt — voorkomt false edges<br>
-          🕐 NHL 2-way ML terug aan mét dubbele guardrail (OT-bookie + sanity)<br>
-          🧮 Nieuwe toolkit: <code>devigProportional</code>, <code>consensus3Way</code>, <code>deriveIncOTProbFrom3Way</code><br>
-          ✅ 108 unit tests (26 nieuwe voor market-derivation)</div>
+          <div style="color:var(--muted);line-height:1.7">🛡️ Picks gecheckt tegen devigged market consensus<br>
+          ❌ &gt;4% divergentie tussen model en markt → auto-skip<br>
+          🕐 NHL 2-way ML terug met dubbele guardrail (OT-bookie + sanity)<br>
+          🧮 devigProportional + consensus3Way + deriveIncOTProbFrom3Way</div>
         </div>
       </div>
 
