@@ -2,6 +2,17 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.12] - 2026-04-14
+
+### Fixed (score/edge bug op spread-markten)
+MLB run line en NHL puck line gebruikten `fpHome` (moneyline win-prob) direct voor spread edge-berekening. Dat overstelde de edge want "Home wins" ≠ "Home covers -1.5" (winnen met 2+ runs/goals is strikter dan simpelweg winnen).
+
+**Fix**: spread-specifieke devigged consensus uit `(home -1.5, away +1.5)` pool. Als pool te dun / te rare (vig buiten 0-15%), fallback naar `fpHome × 0.55` (historische ML→cover ratio voor MLB/NHL).
+
+**Impact**: edge op run-line / puck-line picks is nu realistisch. Score-mapping via hk blijft, maar hk krijgt correcte input. Geen meer 7/10 picks met eigenlijk marginale edge.
+
+**Gebruiker-bevestiging**: api-sports "-1.5 @ 2.55" = 3-way run line (push als eigen outcome, hogere odds voor strengere conditie). Dedupe-fix (v10.7.10/11) pakt main 2-way line.
+
 ## [10.7.11] - 2026-04-14
 
 ### Fixed (broader application van v10.7.10 fix)
