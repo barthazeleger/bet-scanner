@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.1] - 2026-04-14
+
+### Added (multi-sport injuries — scaffolding, conservatief)
+- `isInjured()` universele status-matcher: telt `out`, `doubt(ful)`, `question(able)`, `day-to-day`, `IR`, `injured`, `suspen(ded)`. Niet: `probable`, `healthy`, `active`, `resting`. Conservatief ("zekere voor onzekere").
+- **NBA `nba_injury_diff`**: nieuw signal via `/injuries` endpoint, weight=0 (logged-only), wordt auto-geactiveerd via CLV-autotune zodra n≥50 + CLV>0%. 0.6% per blessure-verschil bij weight 1.0.
+- **NHL `nhl_injury_diff`**: idem, 0.5% per verschil.
+- **MLB `mlb_injury_diff`**: idem, 0.3% per verschil (pitcher is dominant in baseball, overige blessures minder impactvol).
+- **Handball `handball_injury_diff`**: idem, 0.7% per verschil (kleinste roster = grootste impact per blessure).
+- **NFL** bestaande injury-signal geharmoniseerd met `isInjured()` helper.
+- Scan-output toont nu per competitie: `🏀/🏒/⚾/🏈/🤾 League: N blessures geladen (M teams)` voor transparantie.
+
+### Next
+- Stakes signal (playoffs/degradatie/titel/niets te spelen) per sport via rank/seizoen-progressie.
+
 ## [10.7.0] - 2026-04-14
 
 ### Fixed (KRITIEK — silent bugs gevonden tijdens scan-audit)

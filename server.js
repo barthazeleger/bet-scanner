@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.0';
+const APP_VERSION    = '10.7.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1644,6 +1644,18 @@ function convertAfOdds(afBookmakers, hm, aw) {
   }).filter(bk => bk.markets.length > 0);
 }
 
+// Conservatief: twijfel = blessure. Universele status-matcher voor alle sports.
+// Telt: out, doubtful, questionable, day-to-day, IR, injured, suspended (speelt niet).
+// Telt niet: probable (speelt waarschijnlijk wel), healthy, active, resting (coach-decision).
+function isInjured(status) {
+  if (!status) return false;
+  const s = String(status).toLowerCase();
+  if (s.includes('probable') || s.includes('healthy') || s.includes('active')) return false;
+  return s.includes('out') || s.includes('doubt') || s.includes('question') ||
+         s.includes('day-to-day') || s.includes('day to day') || s.includes('ir ') ||
+         s.includes('injured') || s.includes('suspen');
+}
+
 // Pre-fetch football fixtures om te bepalen welke leagues actief zijn vandaag.
 // Bespaart ~40 calls/scan door standings/injuries alleen te laden voor
 // competities die daadwerkelijk matches hebben in de window.
@@ -2541,6 +2553,24 @@ async function runBasketball(emit) {
       // Team stats cache for this league (basketball-specific: PPG, rebounds)
       const bbStatsCache = {};
 
+      // ── nba_injury_diff (logged-only, conservatief: twijfel = blessure) ──
+      await sleep(120);
+      const nbaInjResp = await afGet('v1.basketball.api-sports.io', '/injuries', {
+        league: league.id, season: league.season
+      }).catch(() => []);
+      apiCallsUsed++;
+      const nbaInjuryMap = {};
+      let nbaInjTotal = 0;
+      for (const inj of (nbaInjResp || [])) {
+        const tid = inj.team?.id;
+        if (!tid) continue;
+        if (isInjured(inj.player?.status || inj.status)) {
+          nbaInjuryMap[tid] = (nbaInjuryMap[tid] || 0) + 1;
+          nbaInjTotal++;
+        }
+      }
+      emit({ log: `🏀 ${league.name}: ${nbaInjTotal} blessures geladen (${Object.keys(nbaInjuryMap).length} teams)` });
+
       // Yesterday's fixtures for back-to-back detection
       await sleep(80);
       const yesterdayGames = await afGet('v1.basketball.api-sports.io', '/games', {
@@ -2714,15 +2744,20 @@ async function runBasketball(emit) {
 
         const totalAdv = ppgAdj + rebAdj + homeSplitAdj;
 
-        // Experimenteel: nba_rest_days_diff. Weight start op 0 (logged-only).
+        // Experimenteel: nba_rest_days_diff + nba_injury_diff. Weight start op 0 (logged-only).
         // Auto-promotie via autoTuneSignalsByClv zodra n≥50 en CLV > 0%.
         const _sw = loadSignalWeights();
         const restWeight = _sw.nba_rest_days_diff !== undefined ? _sw.nba_rest_days_diff : 0;
         const restAdj = nbaRestDaysDiff * 0.008 * restWeight; // 0.8% per dag verschil, gewogen
+        const nbaInjuryHome = nbaInjuryMap[hmId] || 0;
+        const nbaInjuryAway = nbaInjuryMap[awId] || 0;
+        const nbaInjuryDiff = nbaInjuryAway - nbaInjuryHome; // + = away meer blessures = home voordeel
+        const injWeight = _sw.nba_injury_diff !== undefined ? _sw.nba_injury_diff : 0;
+        const nbaInjAdj = nbaInjuryDiff * 0.006 * injWeight; // 0.6% per blessure-verschil (NBA impactvoller dan NFL door kleiner roster)
 
         const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + restAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - restAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + restAdj + nbaInjAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - restAdj * 0.5 - nbaInjAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -2739,8 +2774,9 @@ async function runBasketball(emit) {
         if (Math.abs(ppgAdj) >= 0.005) matchSignals.push(`ppg_advantage:${ppgAdj>0?'+':''}${(ppgAdj*100).toFixed(1)}%`);
         if (Math.abs(rebAdj) >= 0.005) matchSignals.push(`rebound_diff:${rebAdj>0?'+':''}${(rebAdj*100).toFixed(1)}%`);
         if (Math.abs(homeSplitAdj) >= 0.005) matchSignals.push(`home_away_split:${homeSplitAdj>0?'+':''}${(homeSplitAdj*100).toFixed(1)}%`);
-        // logged-only (nog niet in adjHome/adjAway gewogen): nba_rest_days_diff
+        // Logged-only experimentele signalen
         if (nbaRestDaysDiff !== 0) matchSignals.push(`nba_rest_days_diff:${nbaRestDaysDiff>0?'+':''}${nbaRestDaysDiff}`);
+        if (nbaInjuryDiff !== 0) matchSignals.push(`nba_injury_diff:${nbaInjuryDiff>0?'+':''}${nbaInjuryDiff}`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
@@ -2994,6 +3030,21 @@ async function runHockey(emit) {
         }
       }
 
+      // ── nhl_injury_diff scaffolding (logged-only, conservatief: twijfel = blessure) ──
+      await sleep(120);
+      const nhlInjResp = await afGet('v1.hockey.api-sports.io', '/injuries', {
+        league: league.id, season: league.season
+      }).catch(() => []);
+      apiCallsUsed++;
+      const nhlInjuryMap = {};
+      for (const inj of (nhlInjResp || [])) {
+        const tid = inj.team?.id;
+        if (!tid) continue;
+        if (isInjured(inj.player?.status || inj.status)) {
+          nhlInjuryMap[tid] = (nhlInjuryMap[tid] || 0) + 1;
+        }
+      }
+
       // Yesterday's fixtures for back-to-back detection
       await sleep(80);
       const yesterdayGames = await afGet('v1.hockey.api-sports.io', '/games', {
@@ -3115,9 +3166,17 @@ async function runHockey(emit) {
 
         const totalAdv = goalDiffAdj + homeRecordAdj + shotsSig.adj;
 
+        // ── nhl_injury_diff (logged-only, scaffolding) ──
+        const nhlInjHome = nhlInjuryMap[hmId] || 0;
+        const nhlInjAway = nhlInjuryMap[awId] || 0;
+        const nhlInjDiff = nhlInjAway - nhlInjHome;
+        const _swNhl = loadSignalWeights();
+        const nhlInjW = _swNhl.nhl_injury_diff !== undefined ? _swNhl.nhl_injury_diff : 0;
+        const nhlInjAdj = nhlInjDiff * 0.005 * nhlInjW; // 0.5% per blessure, gewogen
+
         const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + nhlInjAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - nhlInjAdj * 0.5);
 
         // Alleen 2-way ML bij bookies die inclusief OT settlen (anders overschat model de edge)
         const isOTBookieHockey = b => !HOCKEY_60MIN_BOOKIES.some(x => (b||'').toLowerCase().includes(x));
@@ -3137,6 +3196,7 @@ async function runHockey(emit) {
         if (Math.abs(goalDiffAdj) >= 0.005) matchSignals.push(`goal_diff:${goalDiffAdj>0?'+':''}${(goalDiffAdj*100).toFixed(1)}%`);
         if (Math.abs(homeRecordAdj) >= 0.005) matchSignals.push(`home_away_record:${homeRecordAdj>0?'+':''}${(homeRecordAdj*100).toFixed(1)}%`);
         if (shotsSig.valid && Math.abs(shotsSig.adj) >= 0.003) matchSignals.push(`nhl_shots_diff:${shotsSig.adj>0?'+':''}${(shotsSig.adj*100).toFixed(1)}%`);
+        if (nhlInjDiff !== 0) matchSignals.push(`nhl_injury_diff:${nhlInjDiff>0?'+':''}${nhlInjDiff}`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
@@ -3605,6 +3665,24 @@ async function runBaseball(emit) {
       });
       apiCallsUsed++;
 
+      // ── mlb_injury_diff (logged-only, conservatief) ──
+      await sleep(80);
+      const mlbInjResp = await afGet('v1.baseball.api-sports.io', '/injuries', {
+        league: league.id, season: league.season
+      }).catch(() => []);
+      apiCallsUsed++;
+      const mlbInjuryMap = {};
+      let mlbInjTotal = 0;
+      for (const inj of (mlbInjResp || [])) {
+        const tid = inj.team?.id;
+        if (!tid) continue;
+        if (isInjured(inj.player?.status || inj.status)) {
+          mlbInjuryMap[tid] = (mlbInjuryMap[tid] || 0) + 1;
+          mlbInjTotal++;
+        }
+      }
+      emit({ log: `⚾ ${league.name}: ${mlbInjTotal} blessures geladen (${Object.keys(mlbInjuryMap).length} teams)` });
+
       // Build standings lookup
       const standingsMap = {};
       for (const group of (standings || [])) {
@@ -3737,10 +3815,18 @@ async function runBaseball(emit) {
 
         const totalAdv = runDiffAdj + homeAwayAdj + streakAdj + pitcherSig.adj;
 
+        // ── mlb_injury_diff (logged-only scaffolding) ──
+        const mlbInjHome = mlbInjuryMap[hmId] || 0;
+        const mlbInjAway = mlbInjuryMap[awId] || 0;
+        const mlbInjDiff = mlbInjAway - mlbInjHome;
+        const _swMlb = loadSignalWeights();
+        const mlbInjW = _swMlb.mlb_injury_diff !== undefined ? _swMlb.mlb_injury_diff : 0;
+        const mlbInjAdj = mlbInjDiff * 0.003 * mlbInjW; // 0.3% per blessure (baseball: pitcher dominant, overige spelers minder impactvol)
+
         // Home advantage (~54% in MLB)
         const ha = 0.04;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + mlbInjAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - mlbInjAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -3759,6 +3845,7 @@ async function runBaseball(emit) {
         if (pitcherSig.valid && Math.abs(pitcherSig.adj) >= 0.005) {
           matchSignals.push(`pitcher_era_diff:${pitcherSig.adj>0?'+':''}${(pitcherSig.adj*100).toFixed(1)}%`);
         }
+        if (mlbInjDiff !== 0) matchSignals.push(`mlb_injury_diff:${mlbInjDiff>0?'+':''}${mlbInjDiff}`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-10)||'?'} vs ${awSt?.form?.slice(-10)||'?'}` : '';
@@ -4059,24 +4146,23 @@ async function runFootballUS(emit) {
         }
       }
 
-      // ── nfl_injury scaffolding (logged-only, geen scoring impact) ──
-      // Per-team injury count voor toekomstige activatie via CLV-bewijs.
-      // Endpoint: /injuries?league=&season= retourneert player-level injuries.
+      // ── nfl_injury_diff (logged-only, conservatief: twijfel = blessure) ──
       await sleep(120);
       const injuriesResp = await afGet('v1.american-football.api-sports.io', '/injuries', {
         league: league.id, season: league.season
       }).catch(() => []);
       apiCallsUsed++;
-      const injuryCountMap = {}; // teamId → count of currently injured (status != 'Healthy')
+      const injuryCountMap = {};
+      let nflInjTotal = 0;
       for (const inj of (injuriesResp || [])) {
         const tid = inj.team?.id;
         if (!tid) continue;
-        const status = (inj.player?.status || inj.status || '').toLowerCase();
-        // Tellen: out, doubtful, questionable. Niet: probable / healthy.
-        if (status.includes('out') || status.includes('doubt') || status.includes('question')) {
+        if (isInjured(inj.player?.status || inj.status)) {
           injuryCountMap[tid] = (injuryCountMap[tid] || 0) + 1;
+          nflInjTotal++;
         }
       }
+      emit({ log: `🏈 ${league.name}: ${nflInjTotal} blessures geladen (${Object.keys(injuryCountMap).length} teams)` });
 
       for (const g of games) {
         const gameId = g.id;
@@ -4421,6 +4507,24 @@ async function runHandball(emit) {
       emit({ log: `🤾 ${league.name}: ${games.length} wedstrijd(en)` });
       totalEvents += games.length;
 
+      // ── handball_injury_diff (logged-only, conservatief) ──
+      await sleep(80);
+      const hbInjResp = await afGet('v1.handball.api-sports.io', '/injuries', {
+        league: league.id, season: league.season
+      }).catch(() => []);
+      apiCallsUsed++;
+      const hbInjuryMap = {};
+      let hbInjTotal = 0;
+      for (const inj of (hbInjResp || [])) {
+        const tid = inj.team?.id;
+        if (!tid) continue;
+        if (isInjured(inj.player?.status || inj.status)) {
+          hbInjuryMap[tid] = (hbInjuryMap[tid] || 0) + 1;
+          hbInjTotal++;
+        }
+      }
+      emit({ log: `🤾 ${league.name}: ${hbInjTotal} blessures geladen (${Object.keys(hbInjuryMap).length} teams)` });
+
       // Standings
       await sleep(120);
       const standings = await afGet('v1.handball.api-sports.io', '/standings', {
@@ -4553,10 +4657,18 @@ async function runHandball(emit) {
 
         const totalAdv = goalDiffAdj + homeWRAdj + formMomentumAdj;
 
+        // ── handball_injury_diff (logged-only scaffolding) ──
+        const hbInjHome = hbInjuryMap[hmId] || 0;
+        const hbInjAway = hbInjuryMap[awId] || 0;
+        const hbInjDiff = hbInjAway - hbInjHome;
+        const _swHb = loadSignalWeights();
+        const hbInjW = _swHb.handball_injury_diff !== undefined ? _swHb.handball_injury_diff : 0;
+        const hbInjAdj = hbInjDiff * 0.007 * hbInjW; // 0.7% per blessure (handball: 7-speler roster, impact hoger)
+
         // Home advantage is STRONG in handball (~60%)
         const ha = league.ha || 0.06;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + hbInjAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - hbInjAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -4571,6 +4683,7 @@ async function runHandball(emit) {
         if (Math.abs(goalDiffAdj) >= 0.005) matchSignals.push(`goal_diff:${goalDiffAdj>0?'+':''}${(goalDiffAdj*100).toFixed(1)}%`);
         if (Math.abs(homeWRAdj) >= 0.005) matchSignals.push(`home_dominance:+${(homeWRAdj*100).toFixed(1)}%`);
         if (Math.abs(formMomentumAdj) >= 0.005) matchSignals.push(`momentum:${formMomentumAdj>0?'+':''}${(formMomentumAdj*100).toFixed(1)}%`);
+        if (hbInjDiff !== 0) matchSignals.push(`handball_injury_diff:${hbInjDiff>0?'+':''}${hbInjDiff}`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
