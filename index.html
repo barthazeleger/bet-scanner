@@ -195,17 +195,17 @@ nav::-webkit-scrollbar { display: none; }
 .picks-hdr { font-size: 11px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 10px; }
 .edge-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 10px; vertical-align: middle; margin-left: 6px; }
 .pick-card { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; transition: background 0.15s; }
-.pick-card:hover { background: rgba(255,255,255,0.12); }
+.pick-card:hover { background: var(--surface2); }
 .pick-card.top { border-left: 3px solid #60a5fa; }
-.pick-name { font-weight: 600; font-size: 13px; color: #fff; }
+.pick-name { font-weight: 600; font-size: 13px; color: var(--text); }
 .pick-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .prob-row  { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
 .prob-bar  { width: 70px; height: 3px; background: rgba(255,255,255,0.15); border-radius: 2px; }
 .prob-fill { height: 100%; border-radius: 2px; }
 .prob-pct  { font-size: 10.5px; color: rgba(255,255,255,0.5); }
 .pick-right { text-align: right; }
-.pick-odds  { font-size: 20px; font-weight: 800; color: #fff; line-height: 1.1; }
-.pick-units { font-size: 10px; color: rgba(255,255,255,0.45); margin-top: 2px; }
+.pick-odds  { font-size: 20px; font-weight: 800; color: var(--text); line-height: 1.1; }
+.pick-units { font-size: 10px; color: var(--muted); margin-top: 2px; }
 .pick-log-btn { margin-top: 6px; }
 
 /* ── RECENT BETS SIDEBAR ────────────────────────────────────────────────────── */
@@ -969,6 +969,13 @@ nav::-webkit-scrollbar { display: none; }
     <div id="signal-analysis" style="padding:8px 0"><div style="color:var(--muted);font-size:13px">Laden...</div></div>
   </div>
 
+  <!-- Experimentele signalen (logged-only, auto-activate) -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="margin-bottom:14px">🧪 Experimentele signalen</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Worden verzameld bij elke scan maar staan op weight=0 (geen scoring impact). Auto-activeren naar 0.5 zodra n≥50 picks + avg CLV > 0%. Telegram + inbox melding bij activatie.</div>
+    <div id="experimental-signals" style="font-size:13px"><div style="color:var(--muted)">Laden...</div></div>
+  </div>
+
   <!-- Model Updates (verhuisd uit Info) -->
   <div class="card" id="model-log-card">
     <div class="card-hd" style="margin-bottom:12px">
@@ -1064,8 +1071,13 @@ nav::-webkit-scrollbar { display: none; }
         • Adaptive MIN_EDGE: 8% voor onbewezen markten, 6.5% early, 5.5% proven<br>
         • Bootstrap mode: 5.5% overal tot 100 totaal settled bets<br>
         • Drift detection: alert als markt/signal recent verslechtert</div>
-        <div><strong style="color:var(--text)">6. Point-in-time logging (v2 pipeline)</strong><br>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">6. Point-in-time logging (v2 pipeline)</strong><br>
         12 Supabase tabellen voor reproduceerbaarheid: fixtures, odds_snapshots (90-min polling + kickoff windows), feature_snapshots, market_consensus, model_runs, pick_candidates (incl. rejected_reason), signal_stats, training_examples. Walk-forward backtest endpoint actief.</div>
+        <div><strong style="color:var(--text)">7. Experimentele signalen (logged-only, auto-activate)</strong><br>
+        Sommige signalen worden verzameld maar staan op weight=0 (geen scoring impact). Zodra n≥50 picks met dat signaal én avg CLV > 0%, wordt het automatisch geactiveerd op weight 0.5. Telegram/inbox melding bij activatie.<br>
+        • <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">nba_rest_days_diff</code> — rest-days verschil home vs away (NBA, sinds v10.4.1)<br>
+        • <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">nfl_injury_diff</code> — blessure-aantal verschil home vs away (NFL, sinds v10.4.1)<br>
+        Status zichtbaar op Model-tab onder "Huidige Signal Gewichten".</div>
       </div>
     </div>
 
@@ -1077,7 +1089,7 @@ nav::-webkit-scrollbar { display: none; }
           <span style="font-size:20px">🏆</span>
           <div>
             <div style="font-weight:600">api-sports All Sports <span style="font-size:10px;color:var(--accent);font-weight:700">PRIMAIR</span></div>
-            <div style="color:var(--muted);font-size:12px">6 sporten: voetbal, basketball, baseball, hockey, NFL, handball.<br>7.500 calls/dag per sport · odds, fixtures, standings, H2H, blessures, stats</div>
+            <div style="color:var(--muted);font-size:12px">6 sporten: voetbal, basketball, baseball, hockey, NFL, handball.<br>7.500 calls/dag per sport · odds, fixtures, standings, H2H, blessures, stats<br><strong>Sinds v10.4.1:</strong> NBA rest-days lookups (-2/-3 dagen) + NFL /injuries endpoint actief voor experimentele signalen.</div>
           </div>
         </div>
         <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
@@ -2058,14 +2070,14 @@ function renderPicks(el, picks) {
     const score = Math.min(10, Math.max(5, Math.round((hk2 - 0.015) / 0.135 * 5) + 5));
     const scoreCol = score >= 8 ? '#34d399' : score >= 5 ? '#fbbf24' : '#f87171';
     const scoreBadge = score != null
-      ? `<span class="edge-badge" style="background:${score>=8?'rgba(52,211,153,0.15)':score>=5?'rgba(251,191,36,0.15)':'rgba(248,113,113,0.15)'};color:${scoreCol};font-size:12px;font-weight:800;padding:2px 8px">${score}/10</span><span class="help-tip" tabindex="0" style="border-color:rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.5)">?<span class="help-text">${t('help_score')}</span></span>`
+      ? `<span class="edge-badge" style="background:${score>=8?'rgba(52,211,153,0.15)':score>=5?'rgba(251,191,36,0.15)':'rgba(248,113,113,0.15)'};color:${scoreCol};font-size:12px;font-weight:800;padding:2px 8px">${score}/10</span><span class="help-tip" tabindex="0" style="border-color:var(--border);background:var(--surface2);color:var(--muted)">?<span class="help-text">${t('help_score')}</span></span>`
       : '';
 
     const edgeVal  = p.edge != null ? p.edge : null;
-    const edgeHelpTip = `<span class="help-tip" tabindex="0" style="border-color:rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.5)">?<span class="help-text">${t('help_edge')}</span></span>`;
+    const edgeHelpTip = `<span class="help-tip" tabindex="0" style="border-color:var(--border);background:var(--surface2);color:var(--muted)">?<span class="help-text">${t('help_edge')}</span></span>`;
     const reasonHtml = p.reason
-      ? `<div class="pick-reason" id="reason-${i}" style="display:none;font-size:11px;color:rgba(255,255,255,0.5);margin-top:8px;line-height:1.6;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px">${edgeVal!=null?`<span style="color:#fbbf24;font-weight:600">Edge +${edgeVal}%</span>${edgeHelpTip} · `:''} ${p.reason}</div>
-         <button class="reason-toggle" onclick="toggleReason(${i})" style="background:none;border:none;cursor:pointer;font-size:11px;color:rgba(255,255,255,0.45);padding:4px 0 0 0">▼ analyse</button>`
+      ? `<div class="pick-reason" id="reason-${i}" style="display:none;font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6;border-top:1px solid var(--border);padding-top:8px">${edgeVal!=null?`<span style="color:var(--yellow);font-weight:600">Edge +${edgeVal}%</span>${edgeHelpTip} · `:''} ${p.reason}</div>
+         <button class="reason-toggle" onclick="toggleReason(${i})" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--muted);padding:4px 0 0 0">▼ analyse</button>`
       : '';
 
     const div = document.createElement('div');
@@ -4122,7 +4134,40 @@ async function loadModelTab() {
     renderInboxMarkets(d.markets);
   } catch {}
   loadSignalAnalysis();
+  loadExperimentalSignals();
   loadModelLog();
+}
+
+function loadExperimentalSignals() {
+  const el = document.getElementById('experimental-signals');
+  if (!el) return;
+  // Catalog van experimentele signalen — uitbreiden bij nieuwe scaffolding.
+  const catalog = [
+    { name: 'nba_rest_days_diff', sport: '🏀 NBA', desc: 'Rest-days verschil home vs away (1/2/3/4+)', since: 'v10.4.1', activationFormula: '0.8% per dag verschil × weight' },
+    { name: 'nfl_injury_diff',    sport: '🏈 NFL', desc: 'Blessure-aantal verschil away vs home (out/doubtful/questionable)', since: 'v10.4.1', activationFormula: '0.5% per blessure × weight' },
+  ];
+  const sw = (inboxData?.signalWeights) || {};
+  el.innerHTML = catalog.map(c => {
+    const w = sw[c.name];
+    const activated = typeof w === 'number' && w > 0;
+    const dotCol = activated ? 'var(--green)' : 'var(--muted)';
+    const stateLabel = activated ? `ACTIEF · weight ${w.toFixed(2)}` : 'LOGGED-ONLY · weight 0';
+    return `<div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);align-items:flex-start">
+      <span style="font-size:18px;flex-shrink:0">${c.sport.split(' ')[0]}</span>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap">
+          <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px;font-weight:600">${c.name}</code>
+          <span style="font-size:11px;color:var(--muted)">${c.sport} · ${c.since}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text);margin-bottom:3px">${c.desc}</div>
+        <div style="font-size:11px;color:var(--muted)">Formule bij activatie: ${c.activationFormula}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <div style="width:8px;height:8px;border-radius:50%;background:${dotCol}"></div>
+        <span style="font-size:11px;font-weight:600;color:${dotCol};white-space:nowrap">${stateLabel}</span>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 async function loadSignalAnalysis() {
