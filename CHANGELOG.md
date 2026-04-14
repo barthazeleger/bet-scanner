@@ -2,6 +2,12 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.6.2] - 2026-04-14
+
+### Fixed
+- **Dashboard flash voor login**: inline `<head>`-script redirect direct naar `/login.html` als `ep_token` mist. Rendert geen body meer zonder auth.
+- **Odds monitor spam**: geen dedup → elke 60 min zelfde alert bij stabiele drift. Nu: in-memory `lastAlerts` Map per bet, re-alert alleen bij Δ ≥3pp drift, richtingswissel (sharp↔fade), of ≥4u na laatste alert. Persistent sharp-moves krijgen alsnog een 4u-heartbeat.
+
 ## [10.6.1] - 2026-04-14
 
 ### Fixed
