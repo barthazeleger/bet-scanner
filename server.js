@@ -38,15 +38,42 @@ async function refreshKillSwitch() {
       byMarket[key].sumClv += b.clv_pct;
     }
     const newSet = new Set();
+    const newKills = []; // markten die nu nieuw geblokkeerd zijn
     for (const [k, d] of Object.entries(byMarket)) {
       const avgClv = d.sumClv / d.n;
       if (d.n >= KILL_SWITCH.thresholds.kill_min_n && avgClv < KILL_SWITCH.thresholds.auto_disable_clv) {
         newSet.add(k);
+        if (!KILL_SWITCH.set.has(k)) newKills.push({ key: k, avgClv: avgClv.toFixed(2), n: d.n });
       }
     }
+    const previousSet = KILL_SWITCH.set;
     KILL_SWITCH.set = newSet;
     KILL_SWITCH.lastRefreshed = Date.now();
     if (newSet.size) console.log(`🛑 Kill-switch: ${newSet.size} markten geblokkeerd: ${[...newSet].join(', ')}`);
+    // Inbox-notification per nieuw geblokkeerde markt
+    for (const k of newKills) {
+      try {
+        await supabase.from('notifications').insert({
+          type: 'kill_switch',
+          title: `🛑 Markt geblokkeerd: ${k.key}`,
+          body: `Auto-disable: gemiddelde CLV ${k.avgClv}% over ${k.n} settled bets is onder threshold (${KILL_SWITCH.thresholds.auto_disable_clv}%). Picks uit deze markt worden niet meer getoond. Override via admin endpoint.`,
+          read: false, user_id: null,
+        });
+      } catch { /* swallow */ }
+    }
+    // Notification als markt weer "leeft" (uit kill-set verdwenen)
+    for (const k of previousSet) {
+      if (!newSet.has(k)) {
+        try {
+          await supabase.from('notifications').insert({
+            type: 'kill_switch',
+            title: `✅ Markt heropend: ${k}`,
+            body: `Auto-restored: gemiddelde CLV is hersteld boven threshold. Picks uit deze markt zijn weer toegestaan.`,
+            read: false, user_id: null,
+          });
+        } catch { /* swallow */ }
+      }
+    }
   } catch (e) { /* swallow */ }
 }
 
@@ -271,7 +298,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.1.0';
+const APP_VERSION    = '10.1.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -6095,9 +6122,22 @@ app.post('/api/prematch', (req, res) => {
       // ── KILL-SWITCH ENFORCEMENT (v10.0.1) ─────────────────────────────
       // Filter picks die in een geblokkeerde markt vallen vóór ranking.
       const beforeKill = allPicks.length;
+      const killedPicks = allPicks.filter(p => isMarketKilled(p.sport, p.label));
       allPicks = allPicks.filter(p => !isMarketKilled(p.sport, p.label));
       const killedCount = beforeKill - allPicks.length;
-      if (killedCount > 0) emit({ log: `🛑 Kill-switch: ${killedCount} pick(s) geblokkeerd op markt-CLV regels` });
+      if (killedCount > 0) {
+        emit({ log: `🛑 Kill-switch: ${killedCount} pick(s) geblokkeerd op markt-CLV regels` });
+        // Inbox notification met details
+        try {
+          const sample = killedPicks.slice(0, 3).map(p => `${p.match} (${p.label})`).join('; ');
+          await supabase.from('notifications').insert({
+            type: 'kill_switch',
+            title: `🛑 ${killedCount} pick(s) geblokkeerd door kill-switch`,
+            body: `${killedCount} potentiële picks vielen weg omdat de markt structureel negatieve CLV heeft.\nVoorbeelden: ${sample}${killedPicks.length > 3 ? ` (+${killedPicks.length - 3} meer)` : ''}`,
+            read: false, user_id: null,
+          });
+        } catch { /* swallow */ }
+      }
 
       // Sorteer op expectedEur (hoogste eerst)
       allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
