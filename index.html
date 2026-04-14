@@ -667,6 +667,7 @@ nav::-webkit-scrollbar { display: none; }
     <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-ghost btn-sm" id="btn-check" onclick="checkResults()">📡 Check uitslagen</button>
       <button class="btn btn-ghost btn-sm" id="btn-recalc" onclick="recalcWL()">🔧 Herbereken W/L</button>
+      <button class="btn btn-ghost btn-sm" id="btn-clv-backfill" onclick="clvBackfill()">📊 Vul CLV aan</button>
       <span id="check-msg" style="font-size:12px;color:var(--muted)"></span>
     </div>
   </div>
@@ -3659,6 +3660,24 @@ async function loadModelLog() {
 }
 
 // ── CHECK UITSLAGEN ───────────────────────────────────────────────────────────
+async function clvBackfill() {
+  const btn = document.getElementById('btn-clv-backfill');
+  const msg = document.getElementById('check-msg');
+  if (!confirm('CLV aanvullen voor alle bets met lege closing line? Kan 10-30 sec duren.')) return;
+  btn.disabled = true; btn.textContent = '⏳ Bezig...';
+  try {
+    const d = await api('/api/clv/backfill', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true })
+    }).then(r => r?.json());
+    if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
+    msg.textContent = `✓ CLV backfill: ${d.filled} ingevuld, ${d.failed} overgeslagen (van ${d.scanned})`;
+    // Refresh bets
+    const bd = await api('/api/bets').then(r => r?.json());
+    if (bd) { betData = bd; renderStats(bd.stats); renderBetsTable(bd.bets); }
+  } catch { msg.textContent = 'Netwerkfout'; }
+  finally { btn.disabled = false; btn.textContent = '📊 Vul CLV aan'; }
+}
+
 async function recalcWL() {
   const btn = document.getElementById('btn-recalc');
   const msg = document.getElementById('check-msg');
