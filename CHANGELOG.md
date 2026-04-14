@@ -2,6 +2,16 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.11] - 2026-04-14
+
+### Fixed (broader application van v10.7.10 fix)
+- De dedupe-bug zat structureel in `parseGameOdds`, niet alleen in spreads. Nu dedupe toegepast in parseGameOdds zelf op ALLE market-arrays: moneyline, totals, spreads, halfML, halfTotals, halfSpreads, nrfi, oddEven, threeWay, teamTotals, doubleChance, dnb.
+- Key per markt: `(bookie, side)` voor ML-achtig, `(bookie, side, point)` voor spread/total-achtig, `(bookie, team, side, point)` voor teamTotals.
+- Dedupe houdt LAAGSTE prijs = main line. Alt-lines met vals-hoge odds worden overal automatisch weggegooid.
+
+### Rationale
+Dezelfde anomalie die Dodgers -1.5 rejecte kan ook Over 8.5 rejecten als Bet365 een alt Over 8.5 @ hogere odds aanbiedt, of half-spreads, enz. Fix bij de bron = afgedekt voor alle toekomstige markten.
+
 ## [10.7.10] - 2026-04-14
 
 ### Fixed (KRITIEK — Dodgers-mysterie DEFINITIEF opgelost)

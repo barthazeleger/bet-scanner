@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.10';
+const APP_VERSION    = '10.7.11';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2235,7 +2235,41 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
       }
     }
   }
-  return { moneyline: ml, totals: tots, spreads: spr, halfML, halfTotals, halfSpreads, nrfi, oddEven, threeWay, teamTotals, doubleChance, dnb };
+  // KRITIEKE FIX (v10.7.11): dedupe entries per bookie+side+point met LOWEST price.
+  // api-sports levert soms meerdere entries per bookie op dezelfde (side, point)
+  // key omdat alternate lines (main + alt) onder dezelfde bet.id kunnen vallen.
+  // Zonder dedupe pakt bestFromArr de alt-line (hogere odds = strengere conditie),
+  // edge wordt vals-hoog, ep valt onder MIN_EP, pick rejected.
+  // Main line = lowest price per bookie. Toegepast op alle spread/total-achtige
+  // markten waar point bestaat.
+  const dedupePool = (arr, keyFn) => {
+    if (!arr.length) return arr;
+    const seen = new Map();
+    for (const o of arr) {
+      const k = keyFn(o);
+      const prev = seen.get(k);
+      if (!prev || o.price < prev.price) seen.set(k, o);
+    }
+    return [...seen.values()];
+  };
+  const kSide  = o => `${(o.bookie||'').toLowerCase()}|${o.side}`;
+  const kPoint = o => `${(o.bookie||'').toLowerCase()}|${o.side}|${o.point}`;
+  const kTeam  = o => `${(o.bookie||'').toLowerCase()}|${o.team}|${o.side}|${o.point}`;
+
+  return {
+    moneyline:   dedupePool(ml,           kSide),
+    totals:      dedupePool(tots,         kPoint),
+    spreads:     dedupePool(spr,          kPoint),
+    halfML:      dedupePool(halfML,       kSide),
+    halfTotals:  dedupePool(halfTotals,   kPoint),
+    halfSpreads: dedupePool(halfSpreads,  kPoint),
+    nrfi:        dedupePool(nrfi,         kSide),
+    oddEven:     dedupePool(oddEven,      kSide),
+    threeWay:    dedupePool(threeWay,     kSide),
+    teamTotals:  dedupePool(teamTotals,   kTeam),
+    doubleChance: dedupePool(doubleChance, kSide),
+    dnb:         dedupePool(dnb,          kSide),
+  };
 }
 
 // poisson / poissonOver / poisson3Way / devigProportional / consensus3Way /
