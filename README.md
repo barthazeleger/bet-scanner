@@ -1,4 +1,4 @@
-# EdgePickr v10.3
+# EdgePickr v10.3.1
 
 **Quantitative market-disagreement engine** voor multi-sport betting analytics.
 Markt = baseline truth, model = residual overlay. Volledig autonoom met
@@ -19,7 +19,7 @@ Multi-sport betting analytics platform met een zelflerend Poisson-model per spor
 | **Model-vs-market sanity check** | Elke pick wordt gecheckt tegen devigged market consensus; picks waar model > 4% divergeert worden geskipt |
 | **3-way ML voor hockey/handbal** | Aparte 60-min regulation markt via bivariate Poisson, naast inc-OT 2-way ML. Voorkomt ambigue bookie-product settlements |
 | **Preferred bookies** | Edges worden berekend met odds van jouw bookies (Bet365 + Unibet default); consensus blijft market-truth |
-| **Kelly sizing** | Half-Kelly: 0.3U tot 2.0U, altijd gecapt op scanner-advies |
+| **Kelly sizing** | Half-Kelly · 6 tiers (0.3U/0.5U/0.75U/1.0U/1.5U/2.0U) gemapped op raw-Kelly% brackets, altijd gecapt op scanner-advies |
 | **CLV tracking** | Closing line odds 2 min voor aftrap, strict bookie match, fuzzy fixture match, backfill endpoint + UI-knop |
 | **Pre-kickoff check** | Drift-alert 30 min voor aftrap (±8% = markt-alarm) |
 | **Wedstrijd analyser** | Typ `Ajax vs PSV` of `NHL Rangers Bruins` → model-analyse on-the-fly (multi-sport, fuzzy) |

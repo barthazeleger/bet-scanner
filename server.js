@@ -345,7 +345,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.3.0';
+const APP_VERSION    = '10.3.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1294,10 +1294,10 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'footbal
     // Half-Kelly unit sizing met drawdown protection
     const ddMult = getDrawdownMultiplier();
     const hk = k * KELLY_FRACTION * ddMult;
-    const u  = hk>0.09?'1.0U' : hk>0.04?'0.5U' : '0.3U';
+    const u  = kellyToUnits(hk);
     const edge = Math.round((ep * odd - 1) * 100 * 10) / 10;
 
-    const uNum = hk>0.09 ? 1.0 : hk>0.04 ? 0.5 : 0.3;
+    const uNum = parseFloat(u);
     const expectedEur = +(uNum * UNIT_EUR * (edge / 100) * dataConf).toFixed(2);
     const pick = { match, league, label, odd, units: u, reason, prob, ep: +ep.toFixed(3),
                    strength: k*(odd-1)*vP*epW*dataConf, kelly: hk, edge, expectedEur, kickoff, bookie,

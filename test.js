@@ -156,19 +156,34 @@ test('kelly scales with half-kelly fraction', () => {
 // ── Unit Sizing ──────────────────────────────────────────────────────────────
 console.log('\n  Unit Sizing:');
 
-test('hk > 0.09 = 1.0U', () => {
-  assert.strictEqual(kellyToUnits(0.10), '1.0U');
-  assert.strictEqual(kellyToUnits(0.15), '1.0U');
+test('hk > 0.09 = 2.0U (raw Kelly > 18%)', () => {
+  assert.strictEqual(kellyToUnits(0.10), '2.0U');
+  assert.strictEqual(kellyToUnits(0.20), '2.0U');
 });
 
-test('hk 0.04-0.09 = 0.5U', () => {
-  assert.strictEqual(kellyToUnits(0.05), '0.5U');
-  assert.strictEqual(kellyToUnits(0.09), '0.5U');
+test('hk 0.06-0.09 = 1.5U (raw Kelly 12-18%)', () => {
+  assert.strictEqual(kellyToUnits(0.07), '1.5U');
+  assert.strictEqual(kellyToUnits(0.09), '1.5U');
 });
 
-test('hk <= 0.04 = 0.3U', () => {
-  assert.strictEqual(kellyToUnits(0.03), '0.3U');
+test('hk 0.04-0.06 = 1.0U (raw Kelly 8-12%)', () => {
+  assert.strictEqual(kellyToUnits(0.05), '1.0U');
+  assert.strictEqual(kellyToUnits(0.06), '1.0U');
+});
+
+test('hk 0.025-0.04 = 0.75U (raw Kelly 5-8%)', () => {
+  assert.strictEqual(kellyToUnits(0.03), '0.75U');
+  assert.strictEqual(kellyToUnits(0.04), '0.75U');
+});
+
+test('hk 0.015-0.025 = 0.5U (raw Kelly 3-5%)', () => {
+  assert.strictEqual(kellyToUnits(0.02), '0.5U');
+  assert.strictEqual(kellyToUnits(0.025), '0.5U');
+});
+
+test('hk <= 0.015 = 0.3U (raw Kelly < 3%)', () => {
   assert.strictEqual(kellyToUnits(0.01), '0.3U');
+  assert.strictEqual(kellyToUnits(0.015), '0.3U');
 });
 
 // ── Kelly Score ──────────────────────────────────────────────────────────────

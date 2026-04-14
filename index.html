@@ -838,12 +838,6 @@ nav::-webkit-scrollbar { display: none; }
       <div id="variance-analysis" style="padding:8px 0"></div>
     </div>
 
-    <!-- Signal Attribution (admin only) -->
-    <div class="chart-card admin-only" style="grid-column:span 2;display:none">
-      <div class="chart-title">🧠 Signal Attribution</div>
-      <div id="signal-analysis" style="padding:8px 0"></div>
-    </div>
-
     <!-- Timing Analyse (admin only) -->
     <div class="chart-card admin-only" style="grid-column:span 2;display:none">
       <div class="chart-title">&#9200; Timing analyse</div>
@@ -966,6 +960,13 @@ nav::-webkit-scrollbar { display: none; }
     <div id="inbox-per-sport" style="font-size:13px">
       <div style="color:var(--muted)">Nog geen data per sport</div>
     </div>
+  </div>
+
+  <!-- Signal Attribution (verhuisd uit Data) -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="margin-bottom:14px">🧠 Signal Attribution</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Hit rate per signal — welke signalen leveren echt edge.</div>
+    <div id="signal-analysis" style="padding:8px 0"><div style="color:var(--muted);font-size:13px">Laden...</div></div>
   </div>
 
   <!-- Model Updates (verhuisd uit Info) -->
@@ -1135,26 +1136,34 @@ nav::-webkit-scrollbar { display: none; }
   <!-- Inzet strategie (admin only) -->
   <div class="card admin-only" style="margin-bottom:16px;display:none">
     <div class="card-title" style="margin-bottom:12px">💰 Inzetstrategie</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px">
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:var(--accent)">0.3U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &lt; 4% · €3 · voorzichtig</div>
+        <div style="font-size:20px;font-weight:700;color:var(--muted)">0.3U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &lt; 3% · €7,50</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:var(--yellow)">0.5U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 4–8% · €5 · normaal</div>
+        <div style="font-size:20px;font-weight:700;color:var(--accent)">0.5U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 3–5% · €12,50</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:var(--green)">1.0U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 8–18% · €10 · sterk</div>
+        <div style="font-size:20px;font-weight:700;color:var(--accent)">0.75U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 5–8% · €18,75</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:var(--yellow)">1.0U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 8–12% · €25</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:var(--green)">1.5U</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly 12–18% · €37,50</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
         <div style="font-size:20px;font-weight:700;color:var(--red)">2.0U</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &gt; 18% · €20 · uitzonderlijk</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Kelly &gt; 18% · €50</div>
       </div>
     </div>
     <div style="margin-top:12px;font-size:12px;color:var(--muted)">
-      Startkapitaal €500 · 1 unit = €25 (5% bankroll) · max 5 picks/dag (max 1 per match, max 2 per sport) · min odds 1.60 · adaptive min edge 5.5–8% · bootstrap mode tot 100 settled bets
+      Startkapitaal €500 · 1 unit = €25 (5% bankroll) · half-Kelly · max 5 picks/dag (max 1 per match, max 2 per sport) · min odds 1.60 · adaptive min edge 5.5–8% · bootstrap mode tot 100 settled bets
     </div>
   </div>
 
@@ -2779,33 +2788,7 @@ async function redrawCharts(data) {
     varEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Variance tracker verschijnt na je eerste settled bets.</div>';
   }
 
-  // ── Signal Attribution ──────────────────────────────────────────────────
-  const sigEl = document.getElementById('signal-analysis');
-  try {
-    const sigData = await api('/api/signal-analysis').then(r => r?.json());
-    if (sigData?.signals?.length) {
-      const sigNames = { home_adv:'Thuisvoordeel', form:'Vorm', injuries:'Blessures', h2h:'Head-to-head',
-        position:'Positie', home_away_split:'Thuis/uit split', api_pred:'API predictie', lineup:'Opstelling',
-        team_stats:'Team stats', btts_scoring:'BTTS scoring', btts_cleansheet:'BTTS clean sheet' };
-      sigEl.innerHTML = sigData.signals.sort((a,b) => b.hitRate - a.hitRate).map(sig => {
-        const hit = Math.round(sig.hitRate * 100);
-        const col = hit >= 60 ? '#34d399' : hit >= 50 ? '#fbbf24' : '#f87171';
-        const name = sigNames[sig.name] || sig.name;
-        return `<div class="analysis-bar-row" style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-          <div style="width:120px;font-size:12px;font-weight:600;white-space:nowrap">${name}</div>
-          <div style="flex:1;background:var(--surface2);border-radius:6px;height:20px;position:relative;overflow:hidden">
-            <div style="width:${hit}%;background:${col}33;height:100%;border-radius:6px"></div>
-            <div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 8px;font-size:11px;font-weight:600">${hit}%</div>
-          </div>
-          <div style="font-size:11px;color:var(--muted);white-space:nowrap">${sig.betsCount} bets</div>
-        </div>`;
-      }).join('');
-    } else {
-      sigEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Signal data verschijnt na picks met signal tracking (nieuwe scans).</div>';
-    }
-  } catch {
-    sigEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Signal analyse laden mislukt.</div>';
-  }
+  // Signal Attribution verhuisd naar Model-tab — zie loadSignalAnalysis()
 
   // ── Timing Analyse ────────────────────────────────────────────────────
   const timEl = document.getElementById('timing-analysis');
@@ -4123,8 +4106,38 @@ async function loadModelTab() {
     renderInboxPerSport(d.perSport);
     renderInboxMarkets(d.markets);
   } catch {}
-  // Model log + version-string
+  loadSignalAnalysis();
   loadModelLog();
+}
+
+async function loadSignalAnalysis() {
+  const sigEl = document.getElementById('signal-analysis');
+  if (!sigEl) return;
+  try {
+    const sigData = await api('/api/signal-analysis').then(r => r?.json());
+    if (sigData?.signals?.length) {
+      const sigNames = { home_adv:'Thuisvoordeel', form:'Vorm', injuries:'Blessures', h2h:'Head-to-head',
+        position:'Positie', home_away_split:'Thuis/uit split', api_pred:'API predictie', lineup:'Opstelling',
+        team_stats:'Team stats', btts_scoring:'BTTS scoring', btts_cleansheet:'BTTS clean sheet' };
+      sigEl.innerHTML = sigData.signals.sort((a,b) => b.hitRate - a.hitRate).map(sig => {
+        const hit = Math.round(sig.hitRate * 100);
+        const col = hit >= 60 ? '#34d399' : hit >= 50 ? '#fbbf24' : '#f87171';
+        const name = sigNames[sig.name] || sig.name;
+        return `<div class="analysis-bar-row" style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+          <div style="width:120px;font-size:12px;font-weight:600;white-space:nowrap">${name}</div>
+          <div style="flex:1;background:var(--surface2);border-radius:6px;height:20px;position:relative;overflow:hidden">
+            <div style="width:${hit}%;background:${col}33;height:100%;border-radius:6px"></div>
+            <div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 8px;font-size:11px;font-weight:600">${hit}%</div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);white-space:nowrap">${sig.betsCount} bets</div>
+        </div>`;
+      }).join('');
+    } else {
+      sigEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Signal data verschijnt na picks met signal tracking (nieuwe scans).</div>';
+    }
+  } catch {
+    sigEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Signal analyse laden mislukt.</div>';
+  }
 }
 
 async function loadAppVersion() {

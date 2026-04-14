@@ -2,6 +2,16 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.3.1] - 2026-04-14
+
+### Changed (unit sizing granularity)
+- `kellyToUnits()` uitgebreid van 3 → 6 tiers: 0.3U / 0.5U / 0.75U / 1.0U / 1.5U / 2.0U
+- Brackets in raw-Kelly%: <3% / 3-5% / 5-8% / 8-12% / 12-18% / >18% (half-Kelly intern)
+- Inline duplicaten in server.js + lib/picks.js verwijderd → roepen nu kellyToUnits aan (geen drift meer)
+- Inzetstrategie UI toont alle 6 tiers met euro-bedragen (€7,50 t/m €50 bij 1U=€25)
+- Signal Attribution verhuisd van Data → Model tab (model-state, geen user analytics)
+- 6 tests toegevoegd voor nieuwe tiers (189 totaal)
+
 ## [10.3.0] - 2026-04-14
 
 ### Changed (IA reorganisatie)
