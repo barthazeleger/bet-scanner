@@ -2,6 +2,31 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.10] - 2026-04-14
+
+### Fixed (KRITIEK — Dodgers-mysterie DEFINITIEF opgelost)
+Via debug-log uit user's laatste scan bleek: api-sports levert per bookie soms MEERDERE entries op dezelfde spread-point (main line + alternate line). Voor Dodgers home -1.5 had Bet365 zowel @2.10 (main) als @2.55 (alt-line), en 1xbet/Betano ook dupes.
+
+**Bug-chain:**
+1. `bestFromArr` pakte max = Bet365 @2.55 (alt-line, anomaal hoog binnen range)
+2. Edge berekend op 2.55: 60% (vals-hoog door alt-line conditie)
+3. `mkP`: `ep = 1/2.55 + boost = 0.513` < `MIN_EP (0.52)` → REJECTED
+4. Legit Unibet @2.17 (edge 37%, ep 0.534 > 0.52) genegeerd
+
+**In Unibet-only mode**: pool filtered tot alleen Unibet entries → alt-line verdwijnt → Unibet 2.17 wint → pick fires.
+
+**Fix**: `bestSpreadPick` dedupeert per `(bookie, point)` met LOWEST price. Main line heeft per definitie lagere odds dan alt-line (strengere win-conditie = langere odds voor alt). Lowest per bookie = main line.
+
+Hiermee geldt eindelijk de invariant: **meer brokers in pool kan NOOIT picks verwijderen die bij single-broker wél zouden doorgaan.**
+
+### Removed
+- Debug-log in MLB run-line scan (doel bereikt, log was tijdelijk).
+
+## [10.7.9] - 2026-04-14
+
+### Fixed
+- `renderRecentBets` crashte op `Object.entries(c.markets)` als calib.markets null/undefined was. Defensive check toegevoegd.
+
 ## [10.7.8] - 2026-04-14
 
 ### Added
