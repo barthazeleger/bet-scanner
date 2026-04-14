@@ -7863,7 +7863,7 @@ app.get('/api/status', (req, res) => {
       },
       espn: { status: 'active', plan: 'Free', unlimited: true, note: 'Live scores auto-refresh' },
       supabase: { status: 'active', plan: 'Free', unlimited: true, note: 'PostgreSQL · 500MB · bets/users/calibratie/snapshots' },
-      telegram: { status: TOKEN ? 'active' : 'no token', plan: 'Free', unlimited: true, note: 'Picks, alerts, model updates' },
+      telegram: { status: (TOKEN || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || process.env.TG_TOKEN) ? 'active' : 'no token', plan: 'Free', unlimited: true, note: 'Picks, alerts, model updates' },
       webPush: { status: (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) ? 'active' : 'no key', plan: 'Free', unlimited: true, note: 'PWA browser push (VAPID)' },
       render: { status: 'active', plan: 'Free', unlimited: true, note: 'Hosting + keep-alive elke 14 min' },
       mlbStats: { status: 'active', plan: 'Free', unlimited: true, note: 'MLB pitcher stats (api.mlb.com/api/v1)' },
