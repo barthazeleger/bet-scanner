@@ -2,6 +2,18 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.4.1] - 2026-04-14
+
+### Added (NBA + NFL signal scaffolding — volledig autonoom)
+- **NBA `nba_rest_days_diff`**: per scan +2 extra api-sports calls per league (-2, -3 dagen). Berekent rest_days verschil home vs away (1/2/3/4+). Logged in matchSignals + feature_snapshots als `rest_days_home/away/diff`.
+- **NFL `nfl_injury_diff`**: per scan +1 api-sports call per league (`/injuries`). Telt out/doubtful/questionable per team. Logged als `injury_count_home/away/diff`.
+- **Auto-activatie pipeline**: beide signalen starten op weight=0 (geen scoring impact). `autoTuneSignalsByClv` v10.4.0 auto-promote-from-zero (n≥50 + CLV>0% → weight 0.5) activeert ze automatisch zodra bewezen. Telegram + inbox notification bij activatie. Geen handmatige actie nodig.
+- Adj-formules in NBA/NFL scan vermenigvuldigen nu signal-adj × weight → bij weight=0 geen effect, bij weight 0.5+ proportionele invloed.
+
+### Changed
+- NBA scan kost ~3 calls extra per league per dag (was: 1 yesterday-call → nu yesterday + -2 + -3)
+- NFL scan kost ~1 call extra per league per dag (injuries fetch)
+
 ## [10.4.0] - 2026-04-14
 
 ### Added (autonome model-evolutie)

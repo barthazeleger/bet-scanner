@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.4.0';
+const APP_VERSION    = '10.4.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2486,6 +2486,29 @@ async function runBasketball(emit) {
         }
       }
 
+      // ── nba_rest_days scaffolding (logged-only, geen scoring impact) ──
+      // Fetch -2 en -3 dagen voor granulaire rest_days berekening.
+      // Doel: data verzamelen voor toekomstige activatie via CLV-bewijs.
+      const lastPlayedDayMap = {}; // teamId → days_ago (1, 2, 3, of 4+)
+      for (const tId of playedYesterday) lastPlayedDayMap[tId] = 1;
+      const todayMs = new Date(today).getTime();
+      for (let dAgo = 2; dAgo <= 3; dAgo++) {
+        await sleep(80);
+        const dStr = new Date(todayMs - dAgo * 86400000).toISOString().slice(0, 10);
+        const olderGames = await afGet('v1.basketball.api-sports.io', '/games', {
+          date: dStr, league: league.id, season: league.season
+        }).catch(() => []);
+        apiCallsUsed++;
+        for (const g of (olderGames || [])) {
+          const st = g.status?.short || '';
+          if (st !== 'FT' && st !== 'AOT') continue;
+          const ids = [g.teams?.home?.id, g.teams?.away?.id].filter(Boolean);
+          for (const tId of ids) {
+            if (lastPlayedDayMap[tId] === undefined) lastPlayedDayMap[tId] = dAgo;
+          }
+        }
+      }
+
       for (const g of games) {
         const gameId = g.id;
         const hm = g.teams?.home?.name;
@@ -2546,6 +2569,13 @@ async function runBasketball(emit) {
         let b2bAdj = 0, b2bNote = '';
         if (hmId && playedYesterday.has(hmId)) { b2bAdj -= 0.04; b2bNote += ` | ⚠️ ${hm.split(' ').pop()} B2B`; }
         if (awId && playedYesterday.has(awId)) { b2bAdj += 0.04; b2bNote += ` | ⚠️ ${aw.split(' ').pop()} B2B`; }
+
+        // ── nba_rest_days_diff scaffolding (logged-only) ──
+        // Positief = home meer rust (voordeel). Negatief = away meer rust.
+        // 4 = "4+ dagen rest" (cap, anders zou data sparse zijn).
+        const restHome = lastPlayedDayMap[hmId] !== undefined ? lastPlayedDayMap[hmId] : 4;
+        const restAway = lastPlayedDayMap[awId] !== undefined ? lastPlayedDayMap[awId] : 4;
+        const nbaRestDaysDiff = restHome - restAway;
 
         // ── Advanced basketball signals ──
         let ppgAdj = 0, rebAdj = 0, homeSplitAdj = 0;
@@ -2613,9 +2643,15 @@ async function runBasketball(emit) {
 
         const totalAdv = ppgAdj + rebAdj + homeSplitAdj;
 
+        // Experimenteel: nba_rest_days_diff. Weight start op 0 (logged-only).
+        // Auto-promotie via autoTuneSignalsByClv zodra n≥50 en CLV > 0%.
+        const _sw = loadSignalWeights();
+        const restWeight = _sw.nba_rest_days_diff !== undefined ? _sw.nba_rest_days_diff : 0;
+        const restAdj = nbaRestDaysDiff * 0.008 * restWeight; // 0.8% per dag verschil, gewogen
+
         const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + restAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - restAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -2632,6 +2668,8 @@ async function runBasketball(emit) {
         if (Math.abs(ppgAdj) >= 0.005) matchSignals.push(`ppg_advantage:${ppgAdj>0?'+':''}${(ppgAdj*100).toFixed(1)}%`);
         if (Math.abs(rebAdj) >= 0.005) matchSignals.push(`rebound_diff:${rebAdj>0?'+':''}${(rebAdj*100).toFixed(1)}%`);
         if (Math.abs(homeSplitAdj) >= 0.005) matchSignals.push(`home_away_split:${homeSplitAdj>0?'+':''}${(homeSplitAdj*100).toFixed(1)}%`);
+        // logged-only (nog niet in adjHome/adjAway gewogen): nba_rest_days_diff
+        if (nbaRestDaysDiff !== 0) matchSignals.push(`nba_rest_days_diff:${nbaRestDaysDiff>0?'+':''}${nbaRestDaysDiff}`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
@@ -2641,6 +2679,8 @@ async function runBasketball(emit) {
         snap.writeFeatureSnapshot(supabase, gameId, {
           sport: 'basketball', fpHome, fpAway, adjHome, adjAway, ha,
           posAdj, formAdj, b2bAdj, ppgAdj, rebAdj, homeSplitAdj,
+          // logged-only signals (nog niet in scoring)
+          rest_days_home: restHome, rest_days_away: restAway, rest_days_diff: nbaRestDaysDiff,
         }, { standings_present: !!(hmSt && awSt) }).catch(() => {});
         if (_currentModelVersionId) {
           snap.recordMl2WayEvaluation({
@@ -3954,6 +3994,25 @@ async function runFootballUS(emit) {
         }
       }
 
+      // ── nfl_injury scaffolding (logged-only, geen scoring impact) ──
+      // Per-team injury count voor toekomstige activatie via CLV-bewijs.
+      // Endpoint: /injuries?league=&season= retourneert player-level injuries.
+      await sleep(120);
+      const injuriesResp = await afGet('v1.american-football.api-sports.io', '/injuries', {
+        league: league.id, season: league.season
+      }).catch(() => []);
+      apiCallsUsed++;
+      const injuryCountMap = {}; // teamId → count of currently injured (status != 'Healthy')
+      for (const inj of (injuriesResp || [])) {
+        const tid = inj.team?.id;
+        if (!tid) continue;
+        const status = (inj.player?.status || inj.status || '').toLowerCase();
+        // Tellen: out, doubtful, questionable. Niet: probable / healthy.
+        if (status.includes('out') || status.includes('doubt') || status.includes('question')) {
+          injuryCountMap[tid] = (injuryCountMap[tid] || 0) + 1;
+        }
+      }
+
       for (const g of games) {
         const gameId = g.id;
         const hm = g.teams?.home?.name;
@@ -4052,14 +4111,25 @@ async function runFootballUS(emit) {
 
         const totalAdv = ptsDiffAdj + homeRecordAdj + divisionAdj;
 
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj + totalAdv);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5);
+        // Experimenteel: nfl_injury_diff. Weight start op 0 (logged-only).
+        // Auto-promotie via autoTuneSignalsByClv zodra n≥50 en CLV > 0%.
+        const _swNfl = loadSignalWeights();
+        const injWeight = _swNfl.nfl_injury_diff !== undefined ? _swNfl.nfl_injury_diff : 0;
+        const injAdj = nflInjuryDiff * 0.005 * injWeight; // 0.5% per blessure-verschil, gewogen
+
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj + totalAdv + injAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5 - injAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
 
         const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
         const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
+
+        // ── nfl_injury_diff (logged-only) ──
+        const injHome = injuryCountMap[hmId] || 0;
+        const injAway = injuryCountMap[awId] || 0;
+        const nflInjuryDiff = injAway - injHome; // positief = away meer geblesseerd → home voordeel
 
         const matchSignals = [];
         if (ha !== 0) matchSignals.push(`nfl_home:+${(ha*100).toFixed(1)}%`);
@@ -4069,6 +4139,8 @@ async function runFootballUS(emit) {
         if (Math.abs(ptsDiffAdj) >= 0.005) matchSignals.push(`pts_diff:${ptsDiffAdj>0?'+':''}${(ptsDiffAdj*100).toFixed(1)}%`);
         if (Math.abs(homeRecordAdj) >= 0.005) matchSignals.push(`home_record:+${(homeRecordAdj*100).toFixed(1)}%`);
         if (divisionAdj !== 0) matchSignals.push(`division_rivalry:${(divisionAdj*100).toFixed(1)}%`);
+        // logged-only (nog niet in adjHome/adjAway gewogen): nfl_injury_diff
+        if (nflInjuryDiff !== 0) matchSignals.push(`nfl_injury_diff:${nflInjuryDiff>0?'+':''}${nflInjuryDiff}`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
@@ -4078,6 +4150,8 @@ async function runFootballUS(emit) {
         snap.writeFeatureSnapshot(supabase, gameId, {
           sport: 'american-football', fpHome, fpAway, adjHome, adjAway, ha,
           posAdj, formAdj, byeAdj, ptsDiffAdj, homeRecordAdj, divisionAdj,
+          // logged-only signals (nog niet in scoring)
+          injury_count_home: injHome, injury_count_away: injAway, injury_diff: nflInjuryDiff,
         }, { standings_present: !!(hmSt && awSt) }).catch(() => {});
         if (_currentModelVersionId) {
           snap.recordMl2WayEvaluation({
