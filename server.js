@@ -1651,10 +1651,10 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
       }
       // 3-way markt (Home/Draw/Away) — vaak label "Home/Away (Regular Time)", "3Way Result",
       // "Full Time Result" of "1X2". Detecteer op 3 values ongeacht bet id.
-      const vals3 = (bet.values || []).filter(v => ['Home','Draw','Away','1','X','2'].includes((v.value||'').trim()));
+      const vals3 = (bet.values || []).filter(v => ['Home','Draw','Away','1','X','2'].includes(String(v.value ?? '').trim()));
       if (vals3.length === 3 && betId !== 1) {
         for (const v of vals3) {
-          const s = (v.value || '').trim();
+          const s = String(v.value ?? '').trim();
           const side = (s === 'Home' || s === '1') ? 'home'
                      : (s === 'Draw' || s === 'X') ? 'draw'
                      : (s === 'Away' || s === '2') ? 'away' : null;
@@ -5053,9 +5053,9 @@ async function fetchCurrentOdds(sport, gameId, markt, bookmaker, opts = {}) {
     const isHome = !isDraw && (m.includes('🏠') || !m.includes('✈️'));
     const target = isDraw ? 'Draw' : isHome ? 'Home' : 'Away';
     for (const bet of (bk.bets || [])) {
-      const v3 = (bet.values || []).filter(x => ['Home','Draw','Away'].includes((x.value||'').trim()));
+      const v3 = (bet.values || []).filter(x => ['Home','Draw','Away'].includes(String(x.value ?? '').trim()));
       if (v3.length === 3 && bet.id !== 1) {
-        val = v3.find(x => x.value === target);
+        val = v3.find(x => String(x.value ?? '').trim() === target);
         if (val) break;
       }
     }
@@ -5538,7 +5538,7 @@ app.get('/api/debug/odds', requireAdmin, async (req, res) => {
             id: b?.id, name: b?.name,
             values: vals.map(v => ({ value: v?.value, odd: v?.odd })),
             valueCount: vals.length,
-            is3Way: vals.filter(v => ['Home','Draw','Away','1','X','2'].includes((v?.value || '').trim())).length === 3,
+            is3Way: vals.filter(v => ['Home','Draw','Away','1','X','2'].includes(String(v?.value ?? '').trim())).length === 3,
           };
         }),
       }));
