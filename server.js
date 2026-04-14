@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.0.3';
+const APP_VERSION    = '9.0.4';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1020,7 +1020,7 @@ function getDrawdownMultiplier() {
   return 1.0;
 }
 
-function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}) {
+function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'football') {
   const picks     = [];  // standalone picks (odd >= MIN_ODDS)
   const combiPool = [];  // alle valide picks incl. lage odds (voor combi-legs)
 
@@ -1062,7 +1062,7 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}) {
     const expectedEur = +(uNum * UNIT_EUR * (edge / 100) * dataConf).toFixed(2);
     const pick = { match, league, label, odd, units: u, reason, prob, ep: +ep.toFixed(3),
                    strength: k*(odd-1)*vP*epW*dataConf, kelly: hk, edge, expectedEur, kickoff, bookie,
-                   signals: signals || [], referee: referee || null, dataConfidence: dataConf };
+                   signals: signals || [], referee: referee || null, dataConfidence: dataConf, sport };
 
     combiPool.push(pick);            // altijd in combi-pool (ook lage odds)
     if (odd >= MIN_ODDS) picks.push(pick);  // alleen in singles als >= MIN_ODDS
@@ -1717,7 +1717,7 @@ async function runBasketball(emit) {
   emit({ log: `🏀 Basketball scan · ${NBA_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'basketball');
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -2117,7 +2117,7 @@ async function runHockey(emit) {
   emit({ log: `🏒 Hockey scan · ${NHL_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'hockey');
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -2479,7 +2479,7 @@ async function runBaseball(emit) {
   emit({ log: `⚾ Baseball scan · ${BASEBALL_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'baseball');
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -2806,7 +2806,7 @@ async function runFootballUS(emit) {
   emit({ log: `🏈 NFL scan · ${NFL_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'american-football');
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -3151,7 +3151,7 @@ async function runHandball(emit) {
   emit({ log: `🤾 Handball scan · ${HANDBALL_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'handball');
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
