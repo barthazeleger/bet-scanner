@@ -8,6 +8,9 @@ const jwt            = require('jsonwebtoken');
 const bcrypt         = require('bcryptjs');
 const webpush        = require('web-push');
 
+// Snapshot layer (v2 foundation): point-in-time logging voor learning + backtesting
+const snap = require('./lib/snapshots');
+
 // Pure math & model helpers — geïmporteerd uit lib zodat test.js dezelfde code test
 const modelMath = require('./lib/model-math');
 const {
@@ -171,7 +174,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.5.0';
+const APP_VERSION    = '9.6.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2157,6 +2160,14 @@ async function runBasketball(emit) {
         const parsed = parseGameOdds(oddsResp, hm, aw);
         if (!parsed.moneyline.length) continue;
 
+        // v2 snapshots (fail-safe)
+        snap.upsertFixture(supabase, {
+          id: gameId, sport: 'basketball', leagueId: league.id, leagueName: league.name,
+          season: league.season, homeTeamId: hmId, homeTeamName: hm,
+          awayTeamId: awId, awayTeamName: aw, startTime: kickoffMs, status: 'scheduled',
+        }).catch(() => {});
+        snap.writeOddsSnapshots(supabase, gameId, snap.flattenParsedOdds(parsed)).catch(() => {});
+
         // Fair probabilities from moneyline consensus
         const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
         const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
@@ -2555,6 +2566,16 @@ async function runHockey(emit) {
         const parsed = parseGameOdds(oddsResp, hm, aw);
         if (!parsed.moneyline.length) continue;
 
+        // ── v2 SNAPSHOT LAYER ─────────────────────────────────────────────
+        // Schrijf fixture + odds-snapshots voor latere learning/backtest.
+        // Volledig fail-safe; geen impact op pick-flow als snapshots falen.
+        snap.upsertFixture(supabase, {
+          id: gameId, sport: 'hockey', leagueId: league.id, leagueName: league.name,
+          season: league.season, homeTeamId: hmId, homeTeamName: hm,
+          awayTeamId: awId, awayTeamName: aw, startTime: kickoffMs, status: 'scheduled',
+        }).catch(() => {});
+        snap.writeOddsSnapshots(supabase, gameId, snap.flattenParsedOdds(parsed)).catch(() => {});
+
         const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
         const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
         if (!homeOdds.length || !awayOdds.length) continue;
@@ -2675,6 +2696,40 @@ async function runHockey(emit) {
         // ── 2-way ML MET MARKET-SANITY-CHECK ──
         const marketFairReg = parsed.threeWay?.length ? consensus3Way(parsed.threeWay) : null;
         const marketFairIncOT = marketFairReg ? deriveIncOTProbFrom3Way(marketFairReg) : null;
+
+        // v2 snapshots: market_consensus voor 3-way én inc-OT (afgeleid)
+        if (marketFairReg) {
+          // Bereken overround uit ruwe 3-way odds
+          const totalIp3 = parsed.threeWay.reduce((s, o) => s + 1 / o.price, 0) / Math.max(1, marketFairReg.bookieCount);
+          snap.writeMarketConsensus(supabase, {
+            fixtureId: gameId, marketType: 'threeway', line: null,
+            consensusProb: { home: marketFairReg.home, draw: marketFairReg.draw, away: marketFairReg.away },
+            bookmakerCount: marketFairReg.bookieCount,
+            overround: totalIp3 - 1,
+            qualityScore: snap.consensusQualityScore(marketFairReg.bookieCount, totalIp3 - 1),
+          }).catch(() => {});
+        }
+        if (marketFairIncOT) {
+          snap.writeMarketConsensus(supabase, {
+            fixtureId: gameId, marketType: 'moneyline_incl_ot_derived', line: null,
+            consensusProb: { home: marketFairIncOT.home, away: marketFairIncOT.away },
+            bookmakerCount: marketFairReg?.bookieCount || 0,
+            qualityScore: snap.consensusQualityScore(marketFairReg?.bookieCount || 0, 0),
+          }).catch(() => {});
+        }
+        // Feature snapshot (sport-specifieke + market features bij elkaar)
+        snap.writeFeatureSnapshot(supabase, gameId, {
+          sport: 'hockey',
+          fpHome, fpAway,
+          adjHome, adjAway,
+          ha, posAdj, formAdj, b2bAdj, goalDiffAdj, homeRecordAdj,
+          shotsDiffAdj: shotsSig.adj, shotsDiffValid: shotsSig.valid,
+          marketHomeProb: marketFairReg?.home, marketDrawProb: marketFairReg?.draw, marketAwayProb: marketFairReg?.away,
+        }, {
+          standings_present: !!(hmSt && awSt),
+          three_way_bookies: marketFairReg?.bookieCount || 0,
+          shots_signal_valid: shotsSig.valid,
+        }).catch(() => {});
         const sanityHome = marketFairIncOT ? modelMarketSanityCheck(adjHome, marketFairIncOT.home) : null;
         const sanityAway = marketFairIncOT ? modelMarketSanityCheck(adjAway, marketFairIncOT.away) : null;
 
@@ -3077,6 +3132,14 @@ async function runBaseball(emit) {
         const parsed = parseGameOdds(oddsResp, hm, aw);
         if (!parsed.moneyline.length) continue;
 
+        // v2 snapshots (fail-safe)
+        snap.upsertFixture(supabase, {
+          id: gameId, sport: 'baseball', leagueId: league.id, leagueName: league.name,
+          season: league.season, homeTeamId: hmId, homeTeamName: hm,
+          awayTeamId: awId, awayTeamName: aw, startTime: kickoffMs, status: 'scheduled',
+        }).catch(() => {});
+        snap.writeOddsSnapshots(supabase, gameId, snap.flattenParsedOdds(parsed)).catch(() => {});
+
         // Fair probabilities from moneyline consensus
         const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
         const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
@@ -3476,6 +3539,14 @@ async function runFootballUS(emit) {
         const parsed = parseGameOdds(oddsResp, hm, aw);
         if (!parsed.moneyline.length) continue;
 
+        // v2 snapshots (fail-safe)
+        snap.upsertFixture(supabase, {
+          id: gameId, sport: 'american-football', leagueId: league.id, leagueName: league.name,
+          season: league.season, homeTeamId: hmId, homeTeamName: hm,
+          awayTeamId: awId, awayTeamName: aw, startTime: kickoffMs, status: 'scheduled',
+        }).catch(() => {});
+        snap.writeOddsSnapshots(supabase, gameId, snap.flattenParsedOdds(parsed)).catch(() => {});
+
         const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
         const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
         if (!homeOdds.length || !awayOdds.length) continue;
@@ -3821,6 +3892,14 @@ async function runHandball(emit) {
 
         const parsed = parseGameOdds(oddsResp, hm, aw);
         if (!parsed.moneyline.length) continue;
+
+        // v2 snapshots (fail-safe)
+        snap.upsertFixture(supabase, {
+          id: gameId, sport: 'handball', leagueId: league.id, leagueName: league.name,
+          season: league.season, homeTeamId: hmId, homeTeamName: hm,
+          awayTeamId: awId, awayTeamName: aw, startTime: kickoffMs, status: 'scheduled',
+        }).catch(() => {});
+        snap.writeOddsSnapshots(supabase, gameId, snap.flattenParsedOdds(parsed)).catch(() => {});
 
         const homeOdds = parsed.moneyline.filter(o => o.side === 'home');
         const awayOdds = parsed.moneyline.filter(o => o.side === 'away');
