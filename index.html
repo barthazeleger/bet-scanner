@@ -4260,18 +4260,61 @@ async function loadV2Dashboard() {
       html += `<div style="font-size:12px;margin-bottom:14px">N: <b>${walk.n}</b> · Brier: <b>${walk.brier_score}</b> · Log loss: <b>${walk.log_loss}</b> · <span style="color:${interpColor};font-weight:600">${interp}</span></div>`;
     }
 
-    // Kill-switch
+    // Kill-switch + operator toggles
     if (kill) {
       const enabled = kill.enabled ? '✅ enabled' : '❌ disabled';
       const kills = kill.activeKills?.length ? kill.activeKills.join(', ') : 'geen';
       html += `<div style="font-weight:600;margin-bottom:6px">🛑 Kill-Switch</div>`;
-      html += `<div style="font-size:12px;color:var(--muted)">Status: ${enabled} · Active kills: ${kills}</div>`;
+      html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Status: ${enabled} · Active kills: ${kills}</div>`;
+      html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">`;
+      html += `<button class="btn btn-ghost btn-sm" onclick="toggleKillSwitch(${!kill.enabled})">${kill.enabled ? '⏸ Disable' : '▶ Enable'} kill-switch</button>`;
+      html += `<button class="btn btn-ghost btn-sm" onclick="refreshKillSwitch()">↻ Refresh kill-switch nu</button>`;
+      html += `<button class="btn btn-ghost btn-sm" onclick="runClvAutotune()">🔧 Run CLV autotune nu</button>`;
+      html += `<button class="btn btn-ghost btn-sm" onclick="loadDriftView()">📉 Drift dashboard</button>`;
+      html += `</div>`;
     }
 
     el.innerHTML = html || '<div style="color:var(--muted)">Geen v2 data beschikbaar.</div>';
   } catch (e) {
     el.innerHTML = '<div style="color:#f87171">Fout bij laden v2 data: ' + e.message + '</div>';
   }
+}
+
+async function toggleKillSwitch(enable) {
+  if (!confirm(`Kill-switch ${enable ? 'enable' : 'disable'}?`)) return;
+  await api('/api/admin/v2/kill-switch', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: enable }),
+  });
+  loadV2Dashboard();
+}
+async function refreshKillSwitch() {
+  await api('/api/admin/v2/kill-switch', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh: true }),
+  });
+  loadV2Dashboard();
+}
+async function runClvAutotune() {
+  if (!confirm('CLV autotune nu draaien? Past signal weights aan op basis van CLV.')) return;
+  const r = await api('/api/admin/v2/autotune-clv', { method: 'POST' }).then(x => x?.json());
+  alert(`Autotune klaar: ${r?.tuned || 0} signals aangepast (${r?.muted || 0} gemute)`);
+  loadV2Dashboard();
+}
+async function loadDriftView() {
+  const r = await api('/api/admin/v2/drift?recent=25').then(x => x?.json());
+  if (!r?.ok) { alert('Drift: ' + (r?.reason || 'geen data')); return; }
+  const lines = [];
+  lines.push(`MARKT DRIFT (laatste ${r.recent_window} vs all-time):`);
+  for (const m of r.marketDrift.slice(0, 10)) {
+    lines.push(`  ${m.alert || '·'} ${m.key}: recent ${m.avg_clv_recent}% vs all ${m.avg_clv_all}% (Δ ${m.drift_pct > 0 ? '+' : ''}${m.drift_pct}%, n=${m.n_recent}/${m.n_all})`);
+  }
+  lines.push('');
+  lines.push(`SIGNAL DRIFT:`);
+  for (const s of r.signalDrift.slice(0, 10)) {
+    lines.push(`  ${s.alert || '·'} ${s.name}: recent ${s.avg_clv_recent}% vs all ${s.avg_clv_all}% (Δ ${s.drift_pct > 0 ? '+' : ''}${s.drift_pct}%, n=${s.n_recent}/${s.n_all})`);
+  }
+  alert(lines.join('\n'));
 }
 
 // ── STATUS PAGE ───────────────────────────────────────────────────────────────

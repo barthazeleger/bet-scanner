@@ -308,7 +308,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.1.5';
+const APP_VERSION    = '10.2.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5926,6 +5926,165 @@ app.get('/api/admin/v2/signal-performance', requireAdmin, async (req, res) => {
       .select('*').order('avg_clv', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
     res.json({ signals: data || [] });
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
+});
+
+// GET /api/admin/v2/drift?days=30 — vergelijk recente vs lange-termijn CLV per markt/signaal
+// Detecteert markten/signalen die recent verslechteren of verbeteren.
+app.get('/api/admin/v2/drift', requireAdmin, async (req, res) => {
+  try {
+    const recentN = Math.max(10, Math.min(200, parseInt(req.query.recent) || 25));
+    const { data: bets, error } = await supabase.from('bets')
+      .select('sport, markt, clv_pct, signals, datum, uitkomst').not('clv_pct', 'is', null)
+      .order('datum', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const all = (bets || []).filter(b => typeof b.clv_pct === 'number' && !isNaN(b.clv_pct));
+    if (all.length < recentN * 2) {
+      return res.json({ ok: false, reason: 'te weinig data', n_total: all.length, recent_window: recentN });
+    }
+
+    // Per markt drift
+    const marketStats = {};
+    for (let i = 0; i < all.length; i++) {
+      const b = all[i];
+      const key = `${normalizeSport(b.sport)}_${detectMarket(b.markt || 'other')}`;
+      if (!marketStats[key]) marketStats[key] = { all: [], recent: [] };
+      marketStats[key].all.push(b.clv_pct);
+      if (i < recentN) marketStats[key].recent.push(b.clv_pct);
+    }
+    const marketDrift = [];
+    for (const [k, s] of Object.entries(marketStats)) {
+      if (s.all.length < 10 || s.recent.length < 5) continue;
+      const avgAll = s.all.reduce((a, b) => a + b, 0) / s.all.length;
+      const avgRecent = s.recent.reduce((a, b) => a + b, 0) / s.recent.length;
+      const drift = avgRecent - avgAll;
+      let alert = null;
+      if (drift < -2) alert = '🔴 SLECHTER';
+      else if (drift > 2) alert = '✅ BETER';
+      marketDrift.push({
+        key, n_all: s.all.length, n_recent: s.recent.length,
+        avg_clv_all: +avgAll.toFixed(2), avg_clv_recent: +avgRecent.toFixed(2),
+        drift_pct: +drift.toFixed(2), alert,
+      });
+    }
+    marketDrift.sort((a, b) => a.drift_pct - b.drift_pct);
+
+    // Per signal drift
+    const signalStats = {};
+    for (let i = 0; i < all.length; i++) {
+      const b = all[i];
+      let sigs;
+      try { sigs = typeof b.signals === 'string' ? JSON.parse(b.signals) : b.signals; } catch { continue; }
+      if (!Array.isArray(sigs)) continue;
+      const isRecent = i < recentN;
+      for (const sig of sigs) {
+        const name = String(sig).split(':')[0];
+        if (!name) continue;
+        if (!signalStats[name]) signalStats[name] = { all: [], recent: [] };
+        signalStats[name].all.push(b.clv_pct);
+        if (isRecent) signalStats[name].recent.push(b.clv_pct);
+      }
+    }
+    const signalDrift = [];
+    for (const [name, s] of Object.entries(signalStats)) {
+      if (s.all.length < 20 || s.recent.length < 5) continue;
+      const avgAll = s.all.reduce((a, b) => a + b, 0) / s.all.length;
+      const avgRecent = s.recent.reduce((a, b) => a + b, 0) / s.recent.length;
+      const drift = avgRecent - avgAll;
+      let alert = null;
+      if (drift < -1.5) alert = '🔴 verslechtert';
+      else if (drift > 1.5) alert = '✅ verbetert';
+      signalDrift.push({
+        name, n_all: s.all.length, n_recent: s.recent.length,
+        avg_clv_all: +avgAll.toFixed(2), avg_clv_recent: +avgRecent.toFixed(2),
+        drift_pct: +drift.toFixed(2), alert,
+      });
+    }
+    signalDrift.sort((a, b) => a.drift_pct - b.drift_pct);
+
+    res.json({ ok: true, recent_window: recentN, marketDrift, signalDrift });
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
+});
+
+// GET /api/admin/v2/why-this-pick?bet_id=X — attribution per pick
+// Toont welke baseline (markt) + welke model-delta + welke signals contribueerden.
+app.get('/api/admin/v2/why-this-pick', requireAdmin, async (req, res) => {
+  try {
+    const betId = parseInt(req.query.bet_id);
+    if (!betId) return res.status(400).json({ error: 'bet_id is verplicht' });
+    const { data: bet } = await supabase.from('bets').select('*').eq('bet_id', betId).maybeSingle();
+    if (!bet) return res.status(404).json({ error: 'bet niet gevonden' });
+    // Fixture ID lookup
+    const fxId = bet.fixture_id;
+    if (!fxId) return res.json({ bet, attribution: null, note: 'geen fixture_id, kan niet linken aan model_run' });
+    // Pak model_run voor deze fixture + market type
+    const marketType = detectMarket(bet.markt || 'other');
+    const { data: runs } = await supabase.from('model_runs')
+      .select('*').eq('fixture_id', fxId).order('captured_at', { ascending: false });
+    const matchingRun = (runs || []).find(r => r.market_type?.includes(marketType.replace('60', ''))) || (runs || [])[0];
+    // Pak feature_snapshot
+    const { data: feat } = await supabase.from('feature_snapshots')
+      .select('*').eq('fixture_id', fxId).order('captured_at', { ascending: false }).limit(1).maybeSingle();
+    // Pak market_consensus
+    const { data: cons } = await supabase.from('market_consensus')
+      .select('*').eq('fixture_id', fxId).order('captured_at', { ascending: false }).limit(1).maybeSingle();
+    // Pak pick_candidate
+    const { data: candidates } = await supabase.from('pick_candidates')
+      .select('*').eq('fixture_id', fxId).order('created_at', { ascending: false });
+    res.json({
+      bet: { id: bet.bet_id, wedstrijd: bet.wedstrijd, markt: bet.markt, odds: bet.odds, uitkomst: bet.uitkomst, clv_pct: bet.clv_pct },
+      market_baseline: matchingRun?.baseline_prob || null,
+      model_delta: matchingRun?.model_delta || null,
+      final_prob: matchingRun?.final_prob || null,
+      market_consensus: cons ? { type: cons.market_type, prob: cons.consensus_prob, bookies: cons.bookmaker_count, quality: cons.quality_score } : null,
+      features: feat?.features || null,
+      data_quality: feat?.quality || null,
+      pick_candidates: (candidates || []).map(c => ({
+        selection: c.selection_key, bookie: c.bookmaker, odds: c.bookmaker_odds,
+        fair_prob: c.fair_prob, edge_pct: c.edge_pct, passed: c.passed_filters, rejected: c.rejected_reason,
+      })),
+      model_version_id: matchingRun?.model_version_id,
+      run_captured_at: matchingRun?.captured_at,
+    });
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
+});
+
+// GET /api/admin/v2/data-quality — summary van datakwaliteit checks
+// Toont per fixture/feature snapshot welke quality flags actief zijn.
+app.get('/api/admin/v2/data-quality', requireAdmin, async (req, res) => {
+  try {
+    const hours = Math.max(1, Math.min(168, parseInt(req.query.hours) || 24));
+    const sinceIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    const { data: feats } = await supabase.from('feature_snapshots')
+      .select('fixture_id, captured_at, quality').gte('captured_at', sinceIso);
+    const totalFeats = (feats || []).length;
+    if (!totalFeats) return res.json({ hours, totalFeatures: 0, qualityIssues: {} });
+
+    const issues = { lineup_missing: 0, low_three_way_bookies: 0, no_standings: 0, shots_signal_invalid: 0, pitcher_signal_invalid: 0 };
+    for (const f of feats) {
+      const q = f.quality || {};
+      if (q.lineup_known === false || q.lineup_confirmed === false) issues.lineup_missing++;
+      if ((q.three_way_bookies || 0) < 3 && q.three_way_bookies !== undefined) issues.low_three_way_bookies++;
+      if (q.standings_present === false) issues.no_standings++;
+      if (q.shots_signal_valid === false) issues.shots_signal_invalid++;
+      if (q.pitcher_signal_valid === false) issues.pitcher_signal_invalid++;
+    }
+    // Missing odds: tellen fixtures met 0 odds_snapshots in zelfde window
+    const { data: oddsSnaps } = await supabase.from('odds_snapshots')
+      .select('fixture_id').gte('captured_at', sinceIso);
+    const fixtureWithOdds = new Set((oddsSnaps || []).map(o => o.fixture_id));
+    const featFixtures = new Set((feats || []).map(f => f.fixture_id));
+    const missingOddsCount = [...featFixtures].filter(f => !fixtureWithOdds.has(f)).length;
+
+    res.json({
+      hours, totalFeatures: totalFeats,
+      qualityIssues: issues,
+      missingOdds: { fixtures_with_features_but_no_odds: missingOddsCount },
+      summary: {
+        healthy_pct: totalFeats > 0 ? +((totalFeats - issues.no_standings - issues.lineup_missing) / totalFeats * 100).toFixed(1) : 100,
+      },
+    });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
