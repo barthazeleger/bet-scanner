@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.7';
+const APP_VERSION    = '10.7.8';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -8236,6 +8236,15 @@ app.put('/api/inbox-notifications/read', async (req, res) => {
   try {
     await supabase.from('notifications').update({ read: true })
       .eq('read', false).or(`user_id.eq.${req.user.id},user_id.is.null`);
+    res.json({ ok: true });
+  } catch { res.status(500).json({ error: 'Interne fout' }); }
+});
+
+// Clear (delete) all notifications for current user + global notifications
+app.delete('/api/inbox-notifications', async (req, res) => {
+  try {
+    await supabase.from('notifications').delete()
+      .or(`user_id.eq.${req.user.id},user_id.is.null`);
     res.json({ ok: true });
   } catch { res.status(500).json({ error: 'Interne fout' }); }
 });

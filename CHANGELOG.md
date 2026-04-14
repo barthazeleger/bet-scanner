@@ -2,6 +2,11 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.8] - 2026-04-14
+
+### Added
+- "Wis alles" knop in notificatie-dropdown. Verwijdert alle eigen + globale notifications via nieuwe `DELETE /api/inbox-notifications` endpoint. Confirm-prompt voor accidental clicks.
+
 ## [10.7.7] - 2026-04-14
 
 ### Debug
