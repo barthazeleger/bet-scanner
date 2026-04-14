@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.16';
+const APP_VERSION    = '10.7.17';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -6061,8 +6061,18 @@ async function readBets(userId = null) {
   return { bets, stats: calcStats(bets), _raw: data };
 }
 
-async function writeBet(bet, userId = null) {
-  const inzet = bet.units * UNIT_EUR;
+// Helper: haal user's unitEur (stake per unit) of fallback naar default.
+async function getUserUnitEur(userId) {
+  if (!userId) return UNIT_EUR;
+  try {
+    const users = await loadUsers();
+    return users.find(u => u.id === userId)?.settings?.unitEur ?? UNIT_EUR;
+  } catch { return UNIT_EUR; }
+}
+
+async function writeBet(bet, userId = null, unitEur = null) {
+  const ue = unitEur ?? await getUserUnitEur(userId);
+  const inzet = +(bet.units * ue).toFixed(2);
   const wl = bet.uitkomst === 'W' ? +((bet.odds-1)*inzet).toFixed(2)
            : bet.uitkomst === 'L' ? -inzet : 0;
   const base = {
@@ -7561,8 +7571,9 @@ app.put('/api/bets/:id', async (req, res) => {
     if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
     if (uitkomst && !['Open', 'W', 'L'].includes(uitkomst)) return res.status(400).json({ error: 'Uitkomst moet Open, W of L zijn' });
     const updates = {};
+    const userUe = await getUserUnitEur(userId);
     if (odds != null) updates.odds = parseFloat(odds);
-    if (units != null) { updates.units = parseFloat(units); updates.inzet = +(parseFloat(units) * UNIT_EUR).toFixed(2); }
+    if (units != null) { updates.units = parseFloat(units); updates.inzet = +(parseFloat(units) * userUe).toFixed(2); }
     if (tip) updates.tip = tip;
     if (sport) updates.sport = sport;
     if (Object.keys(updates).length) {
@@ -7580,7 +7591,7 @@ app.put('/api/bets/:id', async (req, res) => {
       if (userId) readQ = readQ.eq('user_id', userId);
       const { data: row } = await readQ.single();
       if (row && (row.uitkomst === 'W' || row.uitkomst === 'L')) {
-        const newInzet = row.inzet != null ? row.inzet : +((row.units || 0) * UNIT_EUR).toFixed(2);
+        const newInzet = row.inzet != null ? row.inzet : +((row.units || 0) * userUe).toFixed(2);
         const newWl = row.uitkomst === 'W'
           ? +((row.odds - 1) * newInzet).toFixed(2)
           : +(-newInzet).toFixed(2);
@@ -7602,8 +7613,9 @@ app.post('/api/bets/recalculate', requireAdmin, async (req, res) => {
     let settledQuery = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
     if (userId) settledQuery = settledQuery.eq('user_id', userId);
     const { data: settledBets } = await settledQuery;
+    const recalcUe = await getUserUnitEur(userId);
     for (const bet of (settledBets || [])) {
-      const inzet = bet.inzet || +(bet.units * UNIT_EUR).toFixed(2);
+      const inzet = bet.inzet || +(bet.units * recalcUe).toFixed(2);
       const wl = bet.uitkomst === 'W' ? +((bet.odds-1)*inzet).toFixed(2) : +(-inzet).toFixed(2);
       if (Math.abs((bet.wl || 0) - wl) >= 0.01) {
         await supabase.from('bets').update({ wl }).eq('bet_id', bet.bet_id);
