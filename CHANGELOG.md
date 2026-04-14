@@ -2,6 +2,53 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.1.3] - 2026-04-14
+
+### Added
+- `autoTuneSignalsByClv()` draait nu dagelijks automatisch na results-check (was alleen via endpoint)
+- Alle disciplinemechanismen volledig dynamisch: kill-switch refresh 30 min, adaptive MIN_EDGE 30 min, signal stats dagelijks, CLV autotune dagelijks
+
+## [10.1.2] - 2026-04-14
+
+### Fixed (3e externe code-review)
+- HIGH: `/api/picks` lekte ruwe modeldata; nu safePick filter (zelfde als scan-history/analyze)
+- MEDIUM: CLV milestone alert nu per markt breakdown (≥10 samples per markt)
+- LOW: UX-tak voor 0/1-2 picks ('kwaliteit boven volume' bevestigend signaal)
+
+## [10.1.1] - 2026-04-14
+
+### Added
+- Inbox notifications voor kill-switch events (nieuwe blokkades, herstellingen, scan-blocks)
+
+## [10.1.0] - 2026-04-14
+
+### Added (profit-focus)
+- **Adaptive MIN_EDGE in scan-pad**: mkP() filtert nu picks onder UNPROVEN/EARLY threshold
+- `GET /api/admin/v2/per-bookie-stats`: ROI/CLV per bookmaker
+- CLV health alerts via Telegram (elke 25 nieuwe settled CLV bets)
+- Soft drawdown alert (geen pause, alleen warn) bij <-15% over 7d
+
+## [10.0.3] - 2026-04-14
+
+### Added
+- Signal-level kill-switch: avg CLV ≤ -3% over ≥50 samples → weight = 0
+- Adaptive MIN_EDGE helper (3 tiers: PROVEN/EARLY/UNPROVEN)
+
+## [10.0.2] - 2026-04-14
+
+### Fixed
+- HIGH: model IP-leak via `/api/scan-history` en `/api/analyze` (safePick whitelist)
+- MEDIUM: POTD diversification bypass (selected:true/false flag)
+- LOW: ontbrekende Content-Security-Policy header
+
+## [10.0.1] - 2026-04-14
+
+### Fixed (2e externe code-review)
+- Kill-switch enforcement (was alleen detection)
+- Diversification: max 1 pick/match, max 2 per sport
+- afGet timeout via AbortController (8s)
+- Scan history bewaart nu allPicks (audit)
+
 ## [10.0.0] - 2026-04-14
 
 ### Major release: complete v2 architecture

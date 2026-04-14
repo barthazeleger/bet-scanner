@@ -1221,16 +1221,32 @@ nav::-webkit-scrollbar { display: none; }
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
-          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v10.0.1</span><br>
+          <span style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700">v10.1.3</span><br>
           <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
         </div>
         <div>
-          <div style="font-weight:600;margin-bottom:5px">Code-review v2 fixes: kill-switch enforcement + diversification + timeouts</div>
-          <div style="color:var(--muted);line-height:1.7">🛑 Kill-switch wordt nu écht geënforced in pick-selectie (was alleen detectie)<br>
-          🎯 Max 1 pick per wedstrijd (anti-correlatie) + max 2 per sport (anti-concentratie)<br>
-          ⏱️ 8s hard timeout op centrale api-sports client (geen scan-stalls meer)<br>
-          📜 Scan history bewaart nu alle picks (incl. niet-geselecteerde) voor audit<br>
-          ✅ 175 tests (4 nieuwe voor diversification + kill-switch)</div>
+          <div style="font-weight:600;margin-bottom:5px">Profit-focus + 3e code-review fixes + alles dynamisch</div>
+          <div style="color:var(--muted);line-height:1.7">⚡ Adaptive MIN_EDGE in scan-pad: 8% voor onbewezen markten, 6.5% voor early, 5.5% voor proven<br>
+          🛑 Kill-switch met inbox notifications bij nieuwe blokkades / herstellingen<br>
+          📊 Per-bookie ROI/CLV tracking (welke bookies geven echt edge)<br>
+          🔔 CLV health alerts (Telegram, elke 25 settled bets, met per-markt verdict)<br>
+          ⚠️ Soft drawdown alert bij -15%/7d (geen auto-pause)<br>
+          🔐 Laatste IP-leak via /api/picks dichtgezet<br>
+          🤖 CLV autotune draait nu dagelijks automatisch (was handmatig)<br>
+          ✅ 185 tests, alle 8 review-findings doorgevoerd</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:56px;text-align:right">
+          <span style="background:var(--surface2);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid var(--border)">v10.0.1</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">apr 2026</span>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:5px">Code-review v2 fixes: kill-switch + diversification + timeouts</div>
+          <div style="color:var(--muted);line-height:1.7">🛑 Kill-switch enforcement<br>
+          🎯 Max 1 pick/match, max 2 per sport<br>
+          ⏱️ 8s timeout op api-sports calls</div>
         </div>
       </div>
 

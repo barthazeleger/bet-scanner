@@ -298,7 +298,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.1.2';
+const APP_VERSION    = '10.1.3';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -9033,6 +9033,9 @@ function scheduleDailyResultsCheck() {
 
     // Auto-tune signalen na resultatencheck
     await autoTuneSignals().catch(e => console.error('Auto-tune fout:', e.message));
+    // CLV-based autotune (sneller signal dan W/L) — draait dagelijks na results
+    const clvTune = await autoTuneSignalsByClv().catch(e => ({ tuned: 0, error: e.message }));
+    if (clvTune.tuned > 0) console.log(`📊 CLV autotune: ${clvTune.tuned} signal weights aangepast (${clvTune.muted || 0} gemute)`);
 
     scheduleDailyResultsCheck(); // plan volgende dag
   }, delay);
