@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.13';
+const APP_VERSION    = '10.7.14';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2543,38 +2543,50 @@ function bestSpreadPick(spreads, fairProb, minEdge, minOdds = 1.60, maxOdds = 3.
 }
 
 // Bouw per-point devigged cover-probability map uit paired spread-pool.
-// homeSpr en awaySpr moeten al gededupeerd zijn (via parseGameOdds).
-// Voor elke point-line: no-vig devig van Home -X vs Away +X pair.
-// Returnt { fn(point) → homeProb, fn(point) → awayProb } voor bestSpreadPick.
+// BELANGRIJK: api-sports gebruikt verschillende pairing-conventies per sport:
+//   - MLB/NHL: Home -1.5 pairt met Away -1.5 (zelfde point, opposite side)
+//   - NBA/NFL: Home -7.5 pairt met Away +7.5 (opposite point, opposite side)
+// Oplossing: probeer BEIDE pairings, kies die met plausibele vig (1.00-1.15).
 function buildSpreadFairProbFns(homeSpr, awaySpr, fallbackHome, fallbackAway) {
-  const homeByPt = {}, awayByPt = {};
-  for (const s of homeSpr || []) {
-    const k = s.point;
-    (homeByPt[k] = homeByPt[k] || []).push(s);
-  }
-  for (const s of awaySpr || []) {
-    // Pair van Home -X is Away +X (dezelfde bet, tegengestelde side)
-    const k = -s.point;
-    (awayByPt[k] = awayByPt[k] || []).push(s);
-  }
-  const probMap = {}; // key = home point (bv -1.5), value = {home, away}
+  const groupBy = (arr, fn) => {
+    const out = {};
+    for (const s of arr || []) {
+      const k = fn(s);
+      (out[k] = out[k] || []).push(s);
+    }
+    return out;
+  };
+  const homeByPt = groupBy(homeSpr, s => s.point);
+  const awayByPt = groupBy(awaySpr, s => s.point);
+  const avgIP = arr => arr.reduce((s,o)=>s+1/o.price, 0) / arr.length;
+
+  const tryDevig = (hArr, aArr) => {
+    if (!hArr?.length || !aArr?.length) return null;
+    const avgH = avgIP(hArr);
+    const avgA = avgIP(aArr);
+    const tot = avgH + avgA;
+    if (tot > 1.00 && tot < 1.15) return { home: avgH / tot, away: avgA / tot, vig: tot - 1 };
+    return null;
+  };
+
+  const probMap = {}; // key = home-point, value = {home, away, convention}
   for (const ptStr of Object.keys(homeByPt)) {
     const pt = parseFloat(ptStr);
-    const h = homeByPt[pt];
-    const a = awayByPt[pt];
-    if (!h?.length || !a?.length) continue;
-    const avgH = h.reduce((s,o)=>s+1/o.price, 0) / h.length;
-    const avgA = a.reduce((s,o)=>s+1/o.price, 0) / a.length;
-    const tot = avgH + avgA;
-    if (tot > 1.00 && tot < 1.15) {
-      probMap[pt] = { home: avgH / tot, away: avgA / tot };
-    }
+    // MLB/NHL convention: same-point pairing
+    const samePoint = tryDevig(homeByPt[pt], awayByPt[pt]);
+    // NBA/NFL convention: opposite-point pairing
+    const oppPoint  = tryDevig(homeByPt[pt], awayByPt[-pt]);
+    // Pick whichever heeft lagere vig (= betere data)
+    let chosen;
+    if (samePoint && oppPoint) chosen = samePoint.vig <= oppPoint.vig ? samePoint : oppPoint;
+    else chosen = samePoint || oppPoint;
+    if (chosen) probMap[pt] = chosen;
   }
-  // Returns helper fns: voor home spread gebruik home-point direct,
-  // voor away spread (point is tegengesteld) negate om te matchen.
+
   return {
     homeFn: (pt) => probMap[pt]?.home ?? fallbackHome,
-    awayFn: (pt) => probMap[-pt]?.away ?? fallbackAway,
+    // Away lookup probeert zelfde point (MLB) én opposite point (NBA)
+    awayFn: (pt) => probMap[pt]?.away ?? probMap[-pt]?.away ?? fallbackAway,
   };
 }
 
