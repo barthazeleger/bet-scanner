@@ -944,6 +944,15 @@ nav::-webkit-scrollbar { display: none; }
     </div>
   </div>
 
+  <!-- Per Sport -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px">🏆 Per Sport</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Win rate en P/L per sport, gebaseerd op settled bets.</div>
+    <div id="inbox-per-sport" style="font-size:13px">
+      <div style="color:var(--muted)">Nog geen data per sport</div>
+    </div>
+  </div>
+
   <!-- Market Multipliers -->
   <div class="card">
     <div class="card-title" style="margin-bottom:14px">📊 Markt Multipliers</div>
@@ -3885,8 +3894,25 @@ async function loadInbox() {
     document.getElementById('inbox-settled').textContent = `${d.totalSettled} settled bets`;
     renderInboxFeed(d.log);
     renderInboxWeights(d.signalWeights);
+    renderInboxPerSport(d.perSport);
     renderInboxMarkets(d.markets);
   } catch {}
+}
+
+function renderInboxPerSport(list) {
+  const el = document.getElementById('inbox-per-sport');
+  if (!el) return;
+  if (!list || !list.length) { el.innerHTML = '<div style="color:var(--muted)">Nog geen settled bets.</div>'; return; }
+  const sNames = { football:'⚽ Voetbal', basketball:'🏀 Basketball', hockey:'🏒 IJshockey', baseball:'⚾ Honkbal', 'american-football':'🏈 NFL', handball:'🤾 Handball' };
+  el.innerHTML = list.map(s => {
+    const profCol = s.profit >= 0 ? '#34d399' : '#f87171';
+    const wrCol = s.winrate >= 55 ? '#34d399' : s.winrate <= 40 ? '#f87171' : 'var(--muted)';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="width:140px;font-size:12px;font-weight:600">${sNames[s.sport] || s.sport}</div>
+      <div style="flex:1;font-size:12px;color:${wrCol}">${s.n} bets · ${s.winrate}% win</div>
+      <div style="font-size:12px;font-weight:700;color:${profCol}">${s.profit >= 0 ? '+' : ''}€${s.profit.toFixed(2)}</div>
+    </div>`;
+  }).join('');
 }
 
 function filterInbox(filter, btn) {

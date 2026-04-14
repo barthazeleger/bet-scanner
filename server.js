@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.0.4';
+const APP_VERSION    = '9.0.5';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -4800,6 +4800,52 @@ async function findGameId(sport, matchName) {
   return sport === 'football' ? best.fixture?.id : best.id;
 }
 
+// Verbose variant voor diagnostiek: geeft fxId + fixturesFetched + topCandidates terug
+async function findGameIdVerbose(sport, matchName) {
+  const cfg = getSportApiConfig(sport);
+  const parts = (matchName || '').split(' vs ').map(s => s.trim());
+  const out = { fxId: null, host: cfg.host, fixturesFetched: {}, topCandidates: [], threshold: 50, error: null };
+  if (parts.length < 2) { out.error = 'matchName kon niet gesplitst worden op " vs "'; return out; }
+  const [qHome, qAway] = parts;
+
+  const now = Date.now();
+  const dates = [-1, 0, 1].map(offset => {
+    const d = new Date(now + offset * 86400000);
+    return d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  });
+
+  const seen = new Set();
+  const list = [];
+  for (const date of dates) {
+    const games = await afGet(cfg.host, cfg.fixturesPath, { date }).catch(() => []);
+    out.fixturesFetched[date] = (games || []).length;
+    for (const g of (games || [])) {
+      const gid = sport === 'football' ? g.fixture?.id : g.id;
+      if (gid == null || seen.has(gid)) continue;
+      seen.add(gid);
+      list.push(g);
+    }
+  }
+
+  let best = null, bestScore = 0;
+  const scored = [];
+  for (const g of list) {
+    const home = g.teams?.home?.name || '';
+    const away = g.teams?.away?.name || '';
+    const sHome = teamMatchScore(home, qHome);
+    const sAway = teamMatchScore(away, qAway);
+    const score = sHome + sAway;
+    scored.push({ home, away, sHome, sAway, score });
+    if (sHome > 0 && sAway > 0 && score > bestScore) { best = g; bestScore = score; }
+  }
+  out.topCandidates = scored.sort((a, b) => b.score - a.score).slice(0, 5);
+  out.bestScore = bestScore;
+  if (best && bestScore >= 50) {
+    out.fxId = sport === 'football' ? best.fixture?.id : best.id;
+  }
+  return out;
+}
+
 // Haal odds op voor elke sport en match elke markt
 async function fetchCurrentOdds(sport, gameId, markt, bookmaker) {
   if (!gameId) return null;
@@ -5206,24 +5252,31 @@ app.post('/api/clv/backfill', requireAdmin, async (req, res) => {
       const markt = r.markt || '';
       const loggedOdds = parseFloat(r.odds);
       try {
-        const fxId = r.fixture_id || await findGameId(sport, wedstrijd);
+        let fxId = r.fixture_id;
+        let verbose = null;
+        if (!fxId) {
+          verbose = await findGameIdVerbose(sport, wedstrijd);
+          fxId = verbose.fxId;
+        }
         if (!fxId) {
           failed++;
-          details.push({ id, wedstrijd, reason: 'fixture niet gevonden' });
+          details.push({ id, wedstrijd, sport, reason: 'fixture niet gevonden',
+                         fixturesFetched: verbose?.fixturesFetched, topCandidates: verbose?.topCandidates,
+                         bestScore: verbose?.bestScore, host: verbose?.host });
           await new Promise(rs => setTimeout(rs, 200));
           continue;
         }
         const closingOdds = await fetchCurrentOdds(sport, fxId, markt, r.tip);
         if (!closingOdds || !loggedOdds) {
           failed++;
-          details.push({ id, wedstrijd, reason: 'closing odds niet beschikbaar' });
+          details.push({ id, wedstrijd, sport, fxId, reason: 'closing odds niet beschikbaar' });
           await new Promise(rs => setTimeout(rs, 200));
           continue;
         }
         const clvPct = +((loggedOdds - closingOdds) / closingOdds * 100).toFixed(2);
         await supabase.from('bets').update({ clv_odds: closingOdds, clv_pct: clvPct }).eq('bet_id', id);
         filled++;
-        details.push({ id, wedstrijd, clvPct });
+        details.push({ id, wedstrijd, sport, clvPct });
 
         // Notificatie per succesvolle backfill
         const icon = clvPct > 0 ? '✅' : '❌';
@@ -5242,7 +5295,37 @@ app.post('/api/clv/backfill', requireAdmin, async (req, res) => {
       await new Promise(rs => setTimeout(rs, 200));
     }
 
-    res.json({ scanned: candidates.length, filled, failed, details });
+    res.json({ scanned: candidates.length, filled, failed, details,
+               rateLimit: { remaining: afRateLimit.remaining, limit: afRateLimit.limit,
+                            callsToday: afRateLimit.callsToday, perSport: sportRateLimits } });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  }
+});
+
+// GET /api/clv/backfill/probe?bet_id=X  — dry-run diagnose voor één bet
+app.get('/api/clv/backfill/probe', requireAdmin, async (req, res) => {
+  try {
+    const betId = parseInt(req.query.bet_id);
+    if (!betId) return res.status(400).json({ error: 'bet_id is verplicht' });
+    const { data, error } = await supabase.from('bets').select('*').eq('bet_id', betId).single();
+    if (error || !data) return res.status(404).json({ error: 'bet niet gevonden' });
+    const sport = data.sport || 'football';
+    const wedstrijd = data.wedstrijd || '';
+    const markt = data.markt || '';
+    const loggedOdds = parseFloat(data.odds);
+    const verbose = data.fixture_id
+      ? { fxId: data.fixture_id, fixturesFetched: {}, topCandidates: [], bestScore: null, note: 'gebruikt opgeslagen fixture_id' }
+      : await findGameIdVerbose(sport, wedstrijd);
+    let closingOdds = null, clvPct = null;
+    if (verbose.fxId) {
+      closingOdds = await fetchCurrentOdds(sport, verbose.fxId, markt, data.tip);
+      if (closingOdds && loggedOdds) clvPct = +((loggedOdds - closingOdds) / closingOdds * 100).toFixed(2);
+    }
+    res.json({ bet: { id: betId, wedstrijd, sport, markt, loggedOdds, tip: data.tip, fixture_id: data.fixture_id },
+               diagnose: verbose, closingOdds, clvPct,
+               rateLimit: { remaining: afRateLimit.remaining, limit: afRateLimit.limit,
+                            callsToday: afRateLimit.callsToday, perSport: sportRateLimits } });
   } catch (e) {
     res.status(500).json({ error: (e && e.message) || 'Interne fout' });
   }
@@ -5697,13 +5780,29 @@ app.get('/api/version', (req, res) => {
 app.get('/api/model-feed', requireAdmin, (req, res) => {
   const c = loadCalib();
   const sw = loadSignalWeights();
+  // Aggregeer per sport door de sport_markt buckets te splitten op eerste underscore
+  const markets = c.markets || {};
+  const perSportMap = {};
+  for (const [key, m] of Object.entries(markets)) {
+    if (!m || !m.n) continue;
+    const idx = key.indexOf('_');
+    const sport = idx > 0 ? key.slice(0, idx) : 'football';
+    if (!perSportMap[sport]) perSportMap[sport] = { sport, n: 0, w: 0, profit: 0 };
+    perSportMap[sport].n += m.n;
+    perSportMap[sport].w += m.w;
+    perSportMap[sport].profit += m.profit;
+  }
+  const perSport = Object.values(perSportMap)
+    .map(s => ({ ...s, winrate: s.n ? Math.round(s.w / s.n * 100) : 0, profit: +s.profit.toFixed(2) }))
+    .sort((a, b) => b.n - a.n);
   res.json({
     log: (c.modelLog || []).slice(0, 30),
     lastUpdated: c.modelLastUpdated || null,
     totalSettled: c.totalSettled || 0,
     signalWeights: sw,
-    markets: c.markets || {},
+    markets,
     epBuckets: c.epBuckets || {},
+    perSport,
   });
 });
 
