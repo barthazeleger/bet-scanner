@@ -12,16 +12,42 @@ const webpush        = require('web-push');
 const snap = require('./lib/snapshots');
 let _currentModelVersionId = null; // gevuld bij boot (registerModelVersion)
 
-// ── OPERATOR FAILSAFES (v10.2.1) ────────────────────────────────────────────
+// ── OPERATOR FAILSAFES (v10.2.1, persistent v10.2.3) ────────────────────────
 // Minimale set toggles voor noodgevallen. Default: alles automatisch.
-// Reviewer-lijn: observability > bedienbaarheid. Niet meer dan dit toevoegen.
+// Persistent: opgeslagen in admin user settings.operator zodat deploys/restarts
+// de actieve mode niet wegvegen.
 const OPERATOR = {
-  master_scan_enabled: true,        // hard-stop voor alle scans (noodknop)
-  market_auto_kill_enabled: true,   // alias voor KILL_SWITCH.enabled
-  signal_auto_kill_enabled: true,   // CLV autotune mute mode
-  panic_mode: false,                 // alleen PROVEN markten + max 2 picks/dag
-  max_picks_per_day: 5,             // override default
+  master_scan_enabled: true,
+  market_auto_kill_enabled: true,
+  signal_auto_kill_enabled: true,
+  panic_mode: false,
+  max_picks_per_day: 5,
 };
+
+async function loadOperatorState() {
+  try {
+    const users = await loadUsers().catch(() => []);
+    const admin = users.find(u => u.role === 'admin');
+    const persisted = admin?.settings?.operator;
+    if (persisted && typeof persisted === 'object') {
+      for (const k of Object.keys(OPERATOR)) {
+        if (persisted[k] !== undefined) OPERATOR[k] = persisted[k];
+      }
+      KILL_SWITCH.enabled = OPERATOR.market_auto_kill_enabled;
+      console.log(`⚙️ Operator state geladen uit admin settings`);
+    }
+  } catch (e) { /* swallow */ }
+}
+
+async function saveOperatorState() {
+  try {
+    const users = await loadUsers(true).catch(() => []);
+    const admin = users.find(u => u.role === 'admin');
+    if (!admin) return;
+    admin.settings = { ...(admin.settings || {}), operator: { ...OPERATOR } };
+    await supabase.from('users').update({ settings: admin.settings }).eq('id', admin.id);
+  } catch (e) { /* swallow */ }
+}
 
 // ── KILL-SWITCH CACHE ──────────────────────────────────────────────────────
 // Set van market-keys (sport_market) die geblokkeerd zijn op basis van negatieve CLV.
@@ -319,7 +345,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.2.2';
+const APP_VERSION    = '10.2.3';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -623,6 +649,9 @@ const SIGNAL_KILL_MIN_N = 50;        // minimum samples voor kill-besluit
 const SIGNAL_KILL_CLV_PCT = -3.0;    // gemiddelde CLV onder -3% → mute
 
 async function autoTuneSignalsByClv() {
+  // Operator failsafe: signal-kill mode kan worden uitgeschakeld via dashboard.
+  // Dan tunet de functie nog wel weights, maar de mute (weight=0) wordt overgeslagen.
+  const muteAllowed = OPERATOR.signal_auto_kill_enabled !== false;
   try {
     const { data: bets } = await supabase.from('bets')
       .select('signals, clv_pct, sport, markt').not('clv_pct', 'is', null);
@@ -654,7 +683,8 @@ async function autoTuneSignalsByClv() {
       let newW = old;
       let reason = null;
       // KILL-SWITCH: structureel negatieve CLV met genoeg samples → mute
-      if (s.n >= SIGNAL_KILL_MIN_N && avgClv <= SIGNAL_KILL_CLV_PCT) {
+      // (alleen als operator signal_auto_kill_enabled = true)
+      if (muteAllowed && s.n >= SIGNAL_KILL_MIN_N && avgClv <= SIGNAL_KILL_CLV_PCT) {
         newW = 0;
         reason = `auto_disabled (avg_clv ${avgClv.toFixed(2)}% over ${s.n} bets)`;
         muted++;
@@ -5926,15 +5956,15 @@ app.get('/api/admin/v2/walkforward', requireAdmin, async (req, res) => {
 app.get('/api/admin/v2/operator', requireAdmin, (req, res) => {
   res.json({ ...OPERATOR, kill_switch_active_count: KILL_SWITCH.set.size });
 });
-app.post('/api/admin/v2/operator', requireAdmin, (req, res) => {
+app.post('/api/admin/v2/operator', requireAdmin, async (req, res) => {
   const allowed = ['master_scan_enabled', 'market_auto_kill_enabled', 'signal_auto_kill_enabled', 'panic_mode', 'max_picks_per_day'];
   for (const k of allowed) {
     if (req.body && req.body[k] !== undefined) {
       OPERATOR[k] = (k === 'max_picks_per_day') ? Math.max(1, Math.min(10, parseInt(req.body[k]) || 5)) : !!req.body[k];
     }
   }
-  // Sync gerelateerde state
   KILL_SWITCH.enabled = OPERATOR.market_auto_kill_enabled;
+  await saveOperatorState();
   res.json({ ...OPERATOR, kill_switch_active_count: KILL_SWITCH.set.size });
 });
 
@@ -6034,17 +6064,25 @@ app.get('/api/admin/v2/why-this-pick', requireAdmin, async (req, res) => {
     // Fixture ID lookup
     const fxId = bet.fixture_id;
     if (!fxId) return res.json({ bet, attribution: null, note: 'geen fixture_id, kan niet linken aan model_run' });
-    // Pak model_run voor deze fixture + market type
+    // Point-in-time anchor: gebruik created_at van de bet (logmoment) als cutoff.
+    // Snapshots NA dat moment zijn niet de context waarin de pick ontstond.
+    const anchorIso = bet.created_at || (bet.datum && bet.tijd
+      ? (() => {
+          const dm = bet.datum.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+          return dm ? `${dm[3]}-${dm[2]}-${dm[1]}T${bet.tijd}:00Z` : new Date().toISOString();
+        })()
+      : new Date().toISOString());
+    // Pak laatste model_run die VOOR de bet werd gemaakt
     const marketType = detectMarket(bet.markt || 'other');
     const { data: runs } = await supabase.from('model_runs')
-      .select('*').eq('fixture_id', fxId).order('captured_at', { ascending: false });
+      .select('*').eq('fixture_id', fxId).lte('captured_at', anchorIso).order('captured_at', { ascending: false });
     const matchingRun = (runs || []).find(r => r.market_type?.includes(marketType.replace('60', ''))) || (runs || [])[0];
-    // Pak feature_snapshot
+    // Pak feature_snapshot van vóór bet
     const { data: feat } = await supabase.from('feature_snapshots')
-      .select('*').eq('fixture_id', fxId).order('captured_at', { ascending: false }).limit(1).maybeSingle();
-    // Pak market_consensus
+      .select('*').eq('fixture_id', fxId).lte('captured_at', anchorIso).order('captured_at', { ascending: false }).limit(1).maybeSingle();
+    // Pak market_consensus van vóór bet
     const { data: cons } = await supabase.from('market_consensus')
-      .select('*').eq('fixture_id', fxId).order('captured_at', { ascending: false }).limit(1).maybeSingle();
+      .select('*').eq('fixture_id', fxId).lte('captured_at', anchorIso).order('captured_at', { ascending: false }).limit(1).maybeSingle();
     // Pak pick_candidate
     const { data: candidates } = await supabase.from('pick_candidates')
       .select('*').eq('fixture_id', fxId).order('created_at', { ascending: false });
@@ -6084,6 +6122,7 @@ app.get('/api/admin/v2/why-this-pick', requireAdmin, async (req, res) => {
       })),
       model_version_id: matchingRun?.model_version_id,
       run_captured_at: matchingRun?.captured_at,
+      point_in_time_anchor: anchorIso,
     });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
@@ -9170,7 +9209,9 @@ app.listen(PORT, () => {
   scheduleHealthAlerts();
 
   // Kill-switch initial load + 30-min refresh
-  refreshKillSwitch().then(() => console.log(`🛑 Kill-switch geladen (${KILL_SWITCH.set.size} actief)`));
+  // Operator state laden VÓÓR kill-switch refresh zodat market_auto_kill_enabled correct staat
+  loadOperatorState().then(() => refreshKillSwitch())
+    .then(() => console.log(`🛑 Kill-switch geladen (${KILL_SWITCH.set.size} actief, OPERATOR: scan=${OPERATOR.master_scan_enabled}, market-kill=${OPERATOR.market_auto_kill_enabled}, signal-kill=${OPERATOR.signal_auto_kill_enabled}, panic=${OPERATOR.panic_mode})`));
   setInterval(refreshKillSwitch, 30 * 60 * 1000);
 
   // Market sample counts cache voor adaptive MIN_EDGE
