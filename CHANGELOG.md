@@ -2,6 +2,15 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.5.3] - 2026-04-14
+
+### Added (Phase 4 i18n)
+- ~30 LANG keys (NL + EN) voor toasts, modals, errors: `err_prefix`, `err_network`, `err_connection`, `err_load_failed`, `err_fetch_failed`, `err_unknown`, `err_model_log`, `err_v2_load`, `err_password_empty`, `err_add_bet_empty`, `err_odds_empty`, `loading`, `loading_dots`, `loading_fetch`, `busy`, `confirm_remove_bet`, `confirm_clv_backfill`, `drift_title`, `drift_no_data`, `action_enable`, `action_disable`, `btn_close_live`, `prompt_new_odds`, `prompt_new_units`, `prompt_sport`, `prompt_bookie`, `fill_times_btn`, `bets_updated`, `bets_not_found`.
+- Hardcoded NL strings in bet-edit prompts, CLV backfill confirm, operator toggle confirms, password change, loadSupabaseUsage, loadV2Dashboard, toggleOp, loadDriftView, checkResults, backfillTimes, recalcWL, toggleForm, toggleLive vervangen door `t()` calls met placeholder-substitutie waar nodig (`{id}`, `{val}`, `{list}`, `{window}`).
+
+### Note
+- Initial-state "Laden..." HTML op 7 plekken (notif-body, dash-quote, rb-list, signal-analysis, experimental-signals, model-log-body, page-settings) blijft static NL. Content wordt overschreven door `loadX()` na login, dus geen zichtbare impact op EN-gebruiker.
+
 ## [10.5.2] - 2026-04-14
 
 ### Removed (clutter)

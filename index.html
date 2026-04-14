@@ -1493,6 +1493,37 @@ Object.assign(LANG.nl, {
   btn_potd: '📝 Genereer POTD post',
   btn_previous_scans: 'PREVIOUS SCANS',
   btn_previous_scans_toggle: 'toon',
+  // ─── Phase 4: toasts, modals, errors ───
+  err_prefix: 'Fout: ',
+  err_network: 'Netwerkfout',
+  err_connection: '❌ Verbindingsfout: ',
+  err_conn_short: 'Verbindingsfout',
+  err_load_failed: 'Fout bij laden',
+  err_fetch_failed: 'Fout bij ophalen',
+  err_unknown: 'onbekend',
+  err_model_log: 'Fout bij ophalen model log.',
+  err_v2_load: 'Fout bij laden v2 data: ',
+  err_password_empty: 'Vul huidig en nieuw wachtwoord in',
+  err_add_bet_empty: '⚠️ Vul wedstrijd, odds en units in.',
+  err_odds_empty: '⚠️ Vul odds in.',
+  loading: 'Laden…',
+  loading_dots: 'Laden...',
+  loading_fetch: 'Ophalen...',
+  busy: '⏳ Bezig...',
+  confirm_remove_bet: 'Bet #{id} verwijderen?',
+  confirm_clv_backfill: 'CLV aanvullen voor alle bets met lege closing line? Kan 10-30 sec duren.',
+  drift_title: 'MARKT DRIFT (laatste {window} vs all-time):',
+  drift_no_data: 'geen data',
+  action_enable: 'aanzetten',
+  action_disable: 'uitzetten',
+  btn_close_live: '⚡ Sluiten',
+  prompt_new_odds: 'Nieuwe odds',
+  prompt_new_units: 'Nieuwe units',
+  prompt_sport: 'Sport (was {val}):\n{list}',
+  prompt_bookie: 'Bookmaker (was {val}):\n{list}',
+  fill_times_btn: '⏰ Tijden invullen',
+  bets_updated: 'bijgewerkt',
+  bets_not_found: 'niet gevonden',
 });
 Object.assign(LANG.en, {
   picks_none: 'No confident picks today',
@@ -1662,6 +1693,37 @@ Object.assign(LANG.en, {
   btn_potd: '📝 Generate POTD post',
   btn_previous_scans: 'PREVIOUS SCANS',
   btn_previous_scans_toggle: 'show',
+  // ─── Phase 4: toasts, modals, errors ───
+  err_prefix: 'Error: ',
+  err_network: 'Network error',
+  err_connection: '❌ Connection error: ',
+  err_conn_short: 'Connection error',
+  err_load_failed: 'Failed to load',
+  err_fetch_failed: 'Failed to fetch',
+  err_unknown: 'unknown',
+  err_model_log: 'Failed to load model log.',
+  err_v2_load: 'Failed to load v2 data: ',
+  err_password_empty: 'Enter current and new password',
+  err_add_bet_empty: '⚠️ Fill in match, odds and units.',
+  err_odds_empty: '⚠️ Fill in odds.',
+  loading: 'Loading…',
+  loading_dots: 'Loading...',
+  loading_fetch: 'Fetching...',
+  busy: '⏳ Working...',
+  confirm_remove_bet: 'Delete bet #{id}?',
+  confirm_clv_backfill: 'Backfill CLV for all bets with empty closing line? May take 10-30 sec.',
+  drift_title: 'MARKET DRIFT (last {window} vs all-time):',
+  drift_no_data: 'no data',
+  action_enable: 'enable',
+  action_disable: 'disable',
+  btn_close_live: '⚡ Close',
+  prompt_new_odds: 'New odds',
+  prompt_new_units: 'New units',
+  prompt_sport: 'Sport (was {val}):\n{list}',
+  prompt_bookie: 'Bookmaker (was {val}):\n{list}',
+  fill_times_btn: '⏰ Fill kickoff times',
+  bets_updated: 'updated',
+  bets_not_found: 'not found',
 });
 
 function t(key) {
@@ -1772,7 +1834,7 @@ function doScan(type) {
       }
       pump();
     })
-    .catch(e => { addLog(logEl, '❌ Verbindingsfout: ' + e.message, 'err'); finish(); });
+    .catch(e => { addLog(logEl, t('err_connection') + e.message, 'err'); finish(); });
 
   function finish() { btn.disabled = false; ico.textContent = '▶'; loadApiLimit(); }
 }
@@ -2194,7 +2256,7 @@ function setOutcome(id, v) {
 }
 
 function editBetField(id, field, currentVal) {
-  const label = field === 'odds' ? 'Nieuwe odds' : 'Nieuwe units';
+  const label = field === 'odds' ? t('prompt_new_odds') : t('prompt_new_units');
   const val = prompt(`${label} (was ${currentVal}):`, currentVal);
   if (val === null || val === '') return;
   const num = parseFloat(val);
@@ -2209,7 +2271,7 @@ function editBetField(id, field, currentVal) {
 
 function editSport(id, currentVal) {
   const sports = ['Voetbal', 'Basketball', 'IJshockey', 'Honkbal', 'American Football', 'Handball'];
-  const val = prompt(`Sport (was ${currentVal}):\n${sports.join(', ')}`, currentVal);
+  const val = prompt(t('prompt_sport').replace('{val}', currentVal).replace('{list}', sports.join(', ')), currentVal);
   if (val === null || val === '') return;
   api('/api/bets/' + id, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
@@ -2221,7 +2283,7 @@ function editSport(id, currentVal) {
 
 function editBookie(id, currentVal) {
   const bookies = ['Bet365', 'Unibet', 'Toto', 'Pinnacle', 'Anders'];
-  const val = prompt(`Bookmaker (was ${currentVal}):\n${bookies.join(', ')}`, currentVal);
+  const val = prompt(t('prompt_bookie').replace('{val}', currentVal).replace('{list}', bookies.join(', ')), currentVal);
   if (val === null || val === '') return;
   api('/api/bets/' + id, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
@@ -2232,7 +2294,7 @@ function editBookie(id, currentVal) {
 }
 
 function removeBet(id) {
-  if (!confirm('Bet #' + id + ' verwijderen?')) return;
+  if (!confirm(t('confirm_remove_bet').replace('{id}', id))) return;
   api('/api/bets/' + id, { method: 'DELETE' })
     .then(r => r?.json())
     .then(d => { if(d){ betData = d; renderStats(d.stats); applyPeriodFilter(); } });
@@ -2242,7 +2304,7 @@ function addBet() {
   const odds  = parseFloat(document.getElementById('f-odds').value);
   const units = parseFloat(document.getElementById('f-units').value);
   if (!document.getElementById('f-match').value || !odds || !units) {
-    showMsg('form-msg', '⚠️ Vul wedstrijd, odds en units in.', 'red'); return;
+    showMsg('form-msg', t('err_add_bet_empty'), 'red'); return;
   }
   const today = new Date();
   const d = document.getElementById('f-datum').value ||
@@ -2303,25 +2365,25 @@ async function loadCorrelations() {
 
 async function backfillTimes() {
   const btn = document.getElementById('backfill-btn');
-  btn.disabled = true; btn.textContent = '⏳ Bezig...';
+  btn.disabled = true; btn.textContent = t('busy');
   const msg = document.getElementById('backfill-msg');
   try {
     const r = await api('/api/backfill-times', { method: 'POST' });
     if (!r) return;
     const d = await r.json();
-    if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
+    if (d.error) { msg.textContent = t('err_prefix') + d.error; return; }
     const updated = d.results.filter(r => r.status === 'bijgewerkt');
     const notFound = d.results.filter(r => r.status === 'niet gevonden');
-    msg.textContent = `✓ ${updated.length} bijgewerkt${notFound.length ? `, ${notFound.length} niet gevonden` : ''}`;
+    msg.textContent = `✓ ${updated.length} ${t('bets_updated')}${notFound.length ? `, ${notFound.length} ${t('bets_not_found')}` : ''}`;
     if (updated.length) { const bets = await api('/api/bets').then(r => r?.json()); if(bets){ betData = bets; renderStats(bets.stats); refreshBets(bets.bets); } }
-  } catch(e) { msg.textContent = 'Netwerkfout'; }
-  finally { btn.disabled = false; btn.textContent = '⏰ Tijden invullen'; }
+  } catch(e) { msg.textContent = t('err_network'); }
+  finally { btn.disabled = false; btn.textContent = t('fill_times_btn'); }
 }
 
 function toggleForm() {
   formOpen = !formOpen;
   document.getElementById('form-body').style.maxHeight = formOpen ? '700px' : '0';
-  document.getElementById('form-tog').textContent = formOpen ? '▲ Inklappen' : '▼ Uitklappen';
+  document.getElementById('form-tog').textContent = formOpen ? t('toggle_collapse') : t('toggle_expand');
 }
 
 // ── DATA / CHARTS ─────────────────────────────────────────────────────────────
@@ -2697,7 +2759,7 @@ function checkBetNotifications(events) {
 let liveAutoTimer = null;
 
 async function fetchLive() {
-  document.getElementById('live-info').textContent = 'Laden...';
+  document.getElementById('live-info').textContent = t('loading_dots');
   try {
     // api-football: alle 59 competities, rijke data
     const d = await api('/api/live-scores').then(r => r?.json());
@@ -2709,7 +2771,7 @@ async function fetchLive() {
     filterLive();
     if (document.getElementById('liveAutoRefresh')?.checked) startLiveAutoRefresh();
   } catch {
-    document.getElementById('live-info').textContent = 'Fout bij ophalen';
+    document.getElementById('live-info').textContent = t('err_fetch_failed');
   }
 }
 
@@ -2919,7 +2981,7 @@ function filterLive() {
         </div>
       </div>` : ''}
       ${e.live ? `<button class="live-events-btn" onclick="toggleEvents('${e.id}')">⚡ Gebeurtenissen</button>
-      <div class="live-events-panel" id="ep-${e.id}"><div style="color:var(--muted);font-size:12px;padding:4px 0">Laden...</div></div>` : ''}`;
+      <div class="live-events-panel" id="ep-${e.id}"><div style="color:var(--muted);font-size:12px;padding:4px 0">${t('loading_dots')}</div></div>` : ''}`;
     grid.appendChild(div);
   });
 }
@@ -2953,10 +3015,10 @@ async function toggleEvents(id) {
   }
   panel.classList.add('open');
   btn.classList.add('active');
-  btn.textContent = '⚡ Sluiten';
+  btn.textContent = t('btn_close_live');
 
   if (mcCache[id]) { renderInlineMatchcast(panel, mcCache[id]); return; }
-  panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:4px 0">Laden…</div>';
+  panel.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:4px 0">${t('loading')}</div>`;
   try {
     const d = await api(`/api/live-events/${id}`).then(r => r?.json());
     mcCache[id] = d;
@@ -3039,7 +3101,7 @@ async function generatePOTD() {
         <pre id="potd-x" style="font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;background:var(--surface2);padding:12px;border-radius:8px;color:var(--text);font-family:inherit">${escHtml(d.x)}</pre>
         <div style="font-size:11px;color:var(--muted);margin-top:8px">${d.x.length}/280 tekens</div>
       </div>`;
-  } catch { out.style.display = 'block'; out.innerHTML = '<div style="color:var(--red);font-size:13px">Netwerkfout</div>'; }
+  } catch { out.style.display = 'block'; out.innerHTML = `<div style="color:var(--red);font-size:13px">${t('err_network')}</div>`; }
   finally { btn.disabled = false; btn.textContent = '📝 Genereer POTD post'; }
 }
 
@@ -3390,7 +3452,7 @@ async function logModalBet() {
   const odds  = parseFloat(document.getElementById('m-odds').value);
   const units = parseFloat(document.getElementById('m-units').value) || 1;
   const match = document.getElementById('m-match').value;
-  if (!match || !odds) { showMsg('modal-msg', '⚠️ Vul odds in.', 'red'); return; }
+  if (!match || !odds) { showMsg('modal-msg', t('err_odds_empty'), 'red'); return; }
 
   const d = await api('/api/bets', {
     method: 'POST', headers: {'Content-Type':'application/json'},
@@ -3576,7 +3638,7 @@ async function loadModelLog() {
       </div>`;
     }).join('');
   } catch {
-    body.innerHTML = '<span>Fout bij ophalen model log.</span>';
+    body.innerHTML = `<span>${t('err_model_log')}</span>`;
   }
 }
 
@@ -3584,31 +3646,31 @@ async function loadModelLog() {
 async function clvBackfill() {
   const btn = document.getElementById('btn-clv-backfill');
   const msg = document.getElementById('check-msg');
-  if (!confirm('CLV aanvullen voor alle bets met lege closing line? Kan 10-30 sec duren.')) return;
-  btn.disabled = true; btn.textContent = '⏳ Bezig...';
+  if (!confirm(t('confirm_clv_backfill'))) return;
+  btn.disabled = true; btn.textContent = t('busy');
   try {
     const d = await api('/api/clv/backfill', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true })
     }).then(r => r?.json());
-    if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
+    if (d.error) { msg.textContent = t('err_prefix') + d.error; return; }
     msg.textContent = `✓ CLV backfill: ${d.filled} ingevuld, ${d.failed} overgeslagen (van ${d.scanned})`;
     // Refresh bets
     const bd = await api('/api/bets').then(r => r?.json());
     if (bd) { betData = bd; renderStats(bd.stats); renderBetsTable(bd.bets); }
-  } catch { msg.textContent = 'Netwerkfout'; }
+  } catch { msg.textContent = t('err_network'); }
   finally { btn.disabled = false; btn.textContent = '📊 Vul CLV aan'; }
 }
 
 async function recalcWL() {
   const btn = document.getElementById('btn-recalc');
   const msg = document.getElementById('check-msg');
-  btn.disabled = true; btn.textContent = '⏳ Bezig...';
+  btn.disabled = true; btn.textContent = t('busy');
   try {
     const d = await api('/api/bets/recalculate', { method: 'POST' }).then(r => r?.json());
-    if (d.error) { msg.textContent = 'Fout: ' + d.error; return; }
+    if (d.error) { msg.textContent = t('err_prefix') + d.error; return; }
     msg.textContent = `✓ ${d.fixed} W/L waarden herberekend`;
     betData = d; renderStats(d.stats); refreshBets(d.bets);
-  } catch { msg.textContent = 'Netwerkfout'; }
+  } catch { msg.textContent = t('err_network'); }
   finally { btn.disabled = false; btn.textContent = '🔧 Herbereken W/L'; }
 }
 
@@ -3617,7 +3679,7 @@ async function checkResults() {
   const msg  = document.getElementById('check-msg');
   const area = document.getElementById('check-results-area');
   btn.disabled = true;
-  msg.textContent = 'Ophalen...';
+  msg.textContent = t('loading_fetch');
   area.style.display = 'none';
 
   try {
@@ -3662,7 +3724,7 @@ async function checkResults() {
       </div>
     </div>`;
   } catch (e) {
-    msg.textContent = '❌ Fout: ' + e.message;
+    msg.textContent = '❌ ' + t('err_prefix') + e.message;
   } finally {
     btn.disabled = false;
   }
@@ -3809,27 +3871,27 @@ async function saveSettings() {
     const r = await api('/api/user/settings', { method: 'PUT', body: settings });
     const d = await r?.json();
     if (!d) return;
-    if (d.error) { profileMsg('Fout: ' + d.error); return; }
+    if (d.error) { profileMsg(t('err_prefix') + d.error); return; }
     userSettings = d.settings;
     applyLanguage();
     profileMsg(t('prof_saved'), true);
     setTimeout(goBack, 1200);
-  } catch { profileMsg('Verbindingsfout'); }
+  } catch { profileMsg(t('err_conn_short')); }
 }
 
 async function changePassword() {
   const cur = document.getElementById('s-cur-pw').value;
   const nw  = document.getElementById('s-new-pw').value;
-  if (!cur || !nw) { profileMsg('Vul huidig en nieuw wachtwoord in'); return; }
+  if (!cur || !nw) { profileMsg(t('err_password_empty')); return; }
   try {
     const r = await api('/api/auth/password', { method: 'PUT', body: { currentPassword: cur, newPassword: nw } });
     const d = await r?.json();
     if (!d) return;
-    if (d.error) { profileMsg('Fout: ' + d.error); return; }
+    if (d.error) { profileMsg(t('err_prefix') + d.error); return; }
     profileMsg('✅ Wachtwoord gewijzigd', true);
     document.getElementById('s-cur-pw').value = '';
     document.getElementById('s-new-pw').value = '';
-  } catch { profileMsg('Verbindingsfout'); }
+  } catch { profileMsg(t('err_conn_short')); }
 }
 
 async function loadAdminUsers() {
@@ -3851,7 +3913,7 @@ async function loadAdminUsers() {
           ${u.status !== 'blocked' && u.email !== currentUser?.email ? `<button onclick="adminAction('${u.id}','blocked')" style="padding:4px 10px;background:rgba(248,113,113,.15);color:var(--red);border:1px solid var(--red);border-radius:6px;font-size:11px;cursor:pointer">Blokkeer</button>` : ''}
         </div>
       </div>`).join('') || '<div style="color:var(--muted)">Geen gebruikers</div>';
-  } catch { list.innerHTML = '<div style="color:var(--muted)">Fout bij laden</div>'; }
+  } catch { list.innerHTML = `<div style="color:var(--muted)">${t('err_load_failed')}</div>`; }
 }
 
 async function adminAction(userId, status) {
@@ -3955,17 +4017,17 @@ async function loadSignalAnalysis() {
 async function loadSupabaseUsage() {
   const el = document.getElementById('supabase-usage');
   if (!el) return;
-  el.innerHTML = '<div style="color:var(--muted)">Laden...</div>';
+  el.innerHTML = `<div style="color:var(--muted)">${t('loading_dots')}</div>`;
   try {
     const d = await api('/api/admin/supabase-usage').then(r => r?.json());
-    if (!d || d.error) { el.innerHTML = `<div style="color:var(--red)">Fout: ${d?.error || 'onbekend'}</div>`; return; }
+    if (!d || d.error) { el.innerHTML = `<div style="color:var(--red)">${t('err_prefix')}${d?.error || t('err_unknown')}</div>`; return; }
     const barCol = d.usedPct == null ? 'var(--muted)' : d.usedPct > 80 ? '#f87171' : d.usedPct > 50 ? '#fbbf24' : '#34d399';
     const sizeStr = d.dbMB != null ? `<strong>${d.dbMB} MB</strong> / ${d.freeMB} MB free tier` : '<em>DB-grootte onbekend</em>';
     const pctBar = d.usedPct != null ? `<div style="background:var(--surface2);border-radius:8px;height:18px;position:relative;overflow:hidden;margin-bottom:12px"><div style="width:${Math.max(d.usedPct,1)}%;background:${barCol}55;height:100%;border-radius:8px"></div><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">${d.usedPct}%</div></div>` : '';
     const rows = Object.entries(d.rowCounts || {}).filter(([_,c]) => c != null && c > 0).sort((a,b) => b[1]-a[1]).map(([t,c]) => `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border)"><span style="color:var(--muted)">${t}</span><span style="font-weight:600;font-variant-numeric:tabular-nums">${c.toLocaleString()}</span></div>`).join('');
     el.innerHTML = `<div style="font-size:13px;margin-bottom:8px">${sizeStr}</div>${pctBar}${d.note ? `<div style="font-size:11px;color:var(--muted);margin-bottom:10px;font-style:italic">${d.note}</div>` : ''}<div style="font-size:11px;font-weight:600;color:var(--muted);margin:12px 0 6px">Row counts per tabel:</div>${rows}${d.dashboardUrl ? `<div style="margin-top:10px;font-size:11px;color:var(--muted)">Voor exacte usage + egress: <a href="${d.dashboardUrl}" target="_blank" style="color:var(--accent)">Supabase dashboard</a></div>` : ''}`;
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--red)">Fout: ${e.message}</div>`;
+    el.innerHTML = `<div style="color:var(--red)">${t('err_prefix')}${e.message}</div>`;
   }
 }
 
@@ -4096,7 +4158,7 @@ function renderInboxMarkets(markets) {
 async function loadV2Dashboard() {
   const el = document.getElementById('v2-dash');
   if (!el) return;
-  el.innerHTML = '<div style="color:var(--muted)">⏳ Laden…</div>';
+  el.innerHTML = `<div style="color:var(--muted)">⏳ ${t('loading')}</div>`;
   try {
     const get = (url) => api(url).then(r => r?.json()).catch(() => null);
     const [counts, picks, clv, walk, kill] = await Promise.all([
@@ -4178,13 +4240,13 @@ async function loadV2Dashboard() {
 
     el.innerHTML = html || '<div style="color:var(--muted)">Geen v2 data beschikbaar.</div>';
   } catch (e) {
-    el.innerHTML = '<div style="color:#f87171">Fout bij laden v2 data: ' + e.message + '</div>';
+    el.innerHTML = `<div style="color:#f87171">${t('err_v2_load')}${e.message}</div>`;
   }
 }
 
 async function toggleOp(key, value) {
   const labels = { master_scan_enabled: 'Master scan', market_auto_kill_enabled: 'Markt auto-kill', signal_auto_kill_enabled: 'Signal auto-kill', panic_mode: 'Panic mode' };
-  const action = value ? 'aanzetten' : 'uitzetten';
+  const action = value ? t('action_enable') : t('action_disable');
   if (!confirm(`${labels[key] || key} ${action}?`)) return;
   await api('/api/admin/v2/operator', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4194,9 +4256,9 @@ async function toggleOp(key, value) {
 }
 async function loadDriftView() {
   const r = await api('/api/admin/v2/drift?recent=25').then(x => x?.json());
-  if (!r?.ok) { alert('Drift: ' + (r?.reason || 'geen data')); return; }
+  if (!r?.ok) { alert('Drift: ' + (r?.reason || t('drift_no_data'))); return; }
   const lines = [];
-  lines.push(`MARKT DRIFT (laatste ${r.recent_window} vs all-time):`);
+  lines.push(t('drift_title').replace('{window}', r.recent_window));
   for (const m of r.marketDrift.slice(0, 10)) {
     lines.push(`  ${m.alert || '·'} ${m.key}: recent ${m.avg_clv_recent}% vs all ${m.avg_clv_all}% (Δ ${m.drift_pct > 0 ? '+' : ''}${m.drift_pct}%, n=${m.n_recent}/${m.n_all})`);
   }
@@ -4349,7 +4411,7 @@ async function loadStatus() {
     }
     document.getElementById('status-league-count').textContent = `${totalLeagues} competities`;
     document.getElementById('status-leagues').innerHTML = leaguesHtml;
-  } catch { document.getElementById('status-services').innerHTML = '<div style="color:var(--muted)">Fout bij laden</div>'; }
+  } catch { document.getElementById('status-services').innerHTML = `<div style="color:var(--muted)">${t('err_load_failed')}</div>`; }
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
