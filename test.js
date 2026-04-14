@@ -1452,6 +1452,91 @@ test('scheduler: scanEnabled=false clearst timers', () => {
   assert.strictEqual(timers[1].length, 0, 'scanEnabled=false → geen actieve timers');
 });
 
+// ── Snapshot helpers (v9.6.0 v2 foundation) ────────────────────────────────
+
+console.log('\n  Snapshot layer (v2 foundation):');
+
+const snap = require('./lib/snapshots');
+
+test('flattenParsedOdds: alle markttypes geconverteerd naar canonical rows', () => {
+  const parsed = {
+    moneyline: [{ side: 'home', price: 1.95, bookie: 'Bet365' }],
+    threeWay: [{ side: 'draw', price: 4.0, bookie: 'Unibet' }],
+    totals: [{ side: 'over', point: 2.5, price: 1.85, bookie: 'Bet365' }],
+    spreads: [{ side: 'home', point: -1.5, price: 2.10, bookie: 'Bet365' }],
+    teamTotals: [{ team: 'home', side: 'over', point: 1.5, price: 1.50, bookie: 'Bet365' }],
+    doubleChance: [{ side: 'HX', price: 1.20, bookie: 'Unibet' }],
+    dnb: [{ side: 'home', price: 1.40, bookie: 'Unibet' }],
+    halfML: [{ side: 'away', price: 2.20, bookie: 'Bet365', market: 'f5' }],
+    halfTotals: [{ side: 'over', point: 4.5, price: 1.90, bookie: 'Bet365', market: 'f5' }],
+    halfSpreads: [{ side: 'home', point: 0.5, price: 1.70, bookie: 'Bet365', market: 'f5' }],
+    nrfi: [{ side: 'nrfi', price: 1.65, bookie: 'Bet365' }],
+    oddEven: [{ side: 'odd', price: 1.95, bookie: 'Bet365' }],
+  };
+  const rows = snap.flattenParsedOdds(parsed);
+  // 12 markets × 1 entry each = 12 rows
+  assert.strictEqual(rows.length, 12);
+  // Validate sample types
+  assert.ok(rows.find(r => r.market_type === 'moneyline' && r.selection_key === 'home' && r.odds === 1.95));
+  assert.ok(rows.find(r => r.market_type === 'threeway' && r.selection_key === 'draw'));
+  assert.ok(rows.find(r => r.market_type === 'team_total_home'));
+  assert.ok(rows.find(r => r.market_type === 'f5_ml'));
+  assert.ok(rows.find(r => r.market_type === 'nrfi'));
+});
+
+test('flattenParsedOdds: lege parsed input → lege array', () => {
+  const rows = snap.flattenParsedOdds({});
+  assert.strictEqual(rows.length, 0);
+});
+
+test('consensusQualityScore: bookie count tiers werken', () => {
+  assert.strictEqual(snap.consensusQualityScore(10, 0.04), 1.0);
+  assert.strictEqual(snap.consensusQualityScore(6, 0.04), 0.8);
+  assert.strictEqual(snap.consensusQualityScore(3, 0.04), 0.6);
+  assert.strictEqual(snap.consensusQualityScore(2, 0.04), 0.4);
+  assert.strictEqual(snap.consensusQualityScore(1, 0.04), 0.2);
+  assert.strictEqual(snap.consensusQualityScore(0, 0.04), 0);
+});
+
+test('consensusQualityScore: hoge overround penalt', () => {
+  const high = snap.consensusQualityScore(8, 0.12); // > 10% → penalty
+  assert.ok(high < 1.0);
+  assert.ok(high <= 0.7);
+  const med = snap.consensusQualityScore(8, 0.07); // 6-10% → mild penalty
+  assert.ok(med < 1.0);
+  assert.ok(med >= 0.85);
+});
+
+test('snapshot writers: zijn no-op bij ontbrekende data (geen exceptions)', async () => {
+  // Mock supabase die exception zou gooien als gebeld → mag niet
+  const fakeSupabase = { from: () => { throw new Error('should not be called'); } };
+  await snap.upsertFixture(fakeSupabase, null);
+  await snap.upsertFixture(fakeSupabase, { id: 1 }); // missing required fields
+  await snap.writeOddsSnapshots(fakeSupabase, null, []);
+  await snap.writeOddsSnapshots(fakeSupabase, 1, []);
+  await snap.writeMarketConsensus(fakeSupabase, null);
+  await snap.writeMarketConsensus(fakeSupabase, { fixtureId: 1 }); // missing
+  await snap.writeFeatureSnapshot(fakeSupabase, null);
+  await snap.writeFeatureSnapshot(fakeSupabase, 1, null);
+  // Geen assertion nodig: als er een exception was, falt de test
+});
+
+test('snapshot writers: Supabase-exceptie wordt gevangen, geen rethrow', async () => {
+  const errorSupabase = {
+    from: () => ({
+      upsert: () => Promise.reject(new Error('supabase down')),
+      insert: () => Promise.reject(new Error('supabase down')),
+    }),
+  };
+  // Mag NIET gooien — alle helpers zijn fail-safe
+  await snap.upsertFixture(errorSupabase, {
+    id: 1, sport: 'hockey', homeTeamName: 'A', awayTeamName: 'B', startTime: Date.now(),
+  });
+  await snap.writeOddsSnapshots(errorSupabase, 1, [{ bookmaker: 'X', market_type: 'ml', selection_key: 'home', odds: 1.9 }]);
+  await snap.writeMarketConsensus(errorSupabase, { fixtureId: 1, marketType: 'threeway', consensusProb: { home: 0.5, draw: 0.2, away: 0.3 } });
+  await snap.writeFeatureSnapshot(errorSupabase, 1, { test: true });
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
