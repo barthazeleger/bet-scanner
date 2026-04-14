@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.17';
+const APP_VERSION    = '10.7.18';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -9852,7 +9852,9 @@ app.listen(PORT, () => {
   loadSignalWeightsAsync().then(() => console.log('🔧 Signal weights geladen')).catch(() => {});
   loadScanHistoryFromSheets().then(h => console.log(`📜 Scan history geladen: ${h.length} entries`)).catch(() => {});
   loadPushSubs().then(s => console.log(`🔔 Push subs geladen: ${s.length}`)).catch(() => {});
-  checkUnitSizeChange().catch(e => console.error('Unit size check fout:', e.message));
+  // checkUnitSizeChange obsolete: unit is nu per-user via settings.unitEur,
+  // niet meer een global constante. Notificatie was misleidend (toonde UNIT_EUR=25
+  // ipv user's actuele size).
   scheduleDailyResultsCheck();
   scheduleDailyScan();
   scheduleOddsMonitor();

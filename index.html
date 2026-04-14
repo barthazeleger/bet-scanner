@@ -1577,16 +1577,20 @@ function setPeriodToday() {
 }
 
 function setPeriod(days, btn) {
+  const fmtD = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const now = new Date();
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  if (days === 1) { // Vandaag
+  const todayStr = fmtD(now);
+  const tmStr = fmtD(new Date(Date.now() + 86400000)); // morgen (voor night-kickoffs)
+  if (days === 1) { // Vandaag → inclusief nacht naar morgen
     document.getElementById('f-from').value = todayStr;
-    document.getElementById('f-to').value   = todayStr;
-  } else {
-    const from = days > 0 ? new Date(Date.now() - days * 86400000) : null;
-    const fmtD = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    document.getElementById('f-to').value   = todayStr;
-    document.getElementById('f-from').value = from ? fmtD(from) : '';
+    document.getElementById('f-to').value   = tmStr;
+  } else if (days === 0) { // Alles → geen grenzen
+    document.getElementById('f-from').value = '';
+    document.getElementById('f-to').value   = '';
+  } else { // 7d/14d/30d → N dagen terug tot morgen-einde (voor night-kickoffs)
+    const from = new Date(Date.now() - days * 86400000);
+    document.getElementById('f-to').value   = tmStr;
+    document.getElementById('f-from').value = fmtD(from);
   }
   // highlight active button
   document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
