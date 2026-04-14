@@ -1379,6 +1379,13 @@ nav::-webkit-scrollbar { display: none; }
       </div>
     </div>
 
+    <!-- Bookies -->
+    <div class="settings-section">
+      <div class="settings-section-title">Bookies</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Alleen picks tonen van bookies die jij gebruikt. Laat leeg om alle bookies toe te staan.</div>
+      <div id="bookie-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px"></div>
+    </div>
+
     <!-- 2FA -->
     <div class="settings-section">
       <div class="settings-section-title" data-i18n="prof_security">Beveiliging</div>
@@ -3409,7 +3416,7 @@ function closeModal() { document.getElementById('modal').classList.remove('open'
 function updatePayout() {
   const odds   = parseFloat(document.getElementById('m-odds').value) || 0;
   const units  = parseFloat(document.getElementById('m-units').value) || 0;
-  const stake  = +(units * 10).toFixed(2);
+  const stake  = +(units * (userSettings?.unitEur ?? 25)).toFixed(2);
   const total  = +(stake * odds).toFixed(2);
   const profit = +(total - stake).toFixed(2);
   document.getElementById('payout-stake').textContent  = stake  ? `€${stake.toFixed(2)}`  : '€—';
@@ -3474,7 +3481,7 @@ document.getElementById('m-units').addEventListener('input', () => {
   // Alleen payout updaten, niet edge recalcen (user override)
   const odds   = parseFloat(document.getElementById('m-odds').value) || 0;
   const units  = parseFloat(document.getElementById('m-units').value) || 0;
-  const stake  = +(units * 10).toFixed(2);
+  const stake  = +(units * (userSettings?.unitEur ?? 25)).toFixed(2);
   const total  = +(stake * odds).toFixed(2);
   const profit = +(total - stake).toFixed(2);
   document.getElementById('payout-stake').textContent  = stake  ? `€${stake.toFixed(2)}`  : '€—';
@@ -3791,6 +3798,7 @@ function openProfileModal() {
   document.getElementById('s-2fa-enabled').checked   = s.twoFactorEnabled === true;
   // Scan-tijden picker
   buildScanTimePicker(s.scanTimes || [10]);
+  buildBookiePicker(s.preferredBookies || []);
   // Admin panel
   if (currentUser?.role === 'admin') loadAdminUsers();
   document.getElementById('profile-msg').style.display = 'none';
@@ -3852,6 +3860,33 @@ function getSelectedScanTimes() {
     .map(b => b.dataset.time);
 }
 
+function buildBookiePicker(selected) {
+  const wrap = document.getElementById('bookie-picker');
+  if (!wrap) return;
+  const all = ['Bet365', 'Unibet', 'Toto', 'BetCity', 'Pinnacle', 'DraftKings', 'FanDuel', 'Ladbrokes', 'bwin', '888sport', 'BetMGM', '1xBet'];
+  const selLower = (selected || []).map(x => (x || '').toLowerCase());
+  wrap.innerHTML = all.map(b => {
+    const on = selLower.includes(b.toLowerCase());
+    return `<button type="button" onclick="toggleBookie(this)" data-bookie="${b}" data-on="${on}"
+      style="padding:6px 14px;border-radius:20px;border:1px solid ${on ? 'var(--accent)' : 'var(--border)'};
+             background:${on ? 'var(--accent)' : 'var(--surface2)'};color:${on ? '#0b1220' : 'var(--muted)'};
+             font-size:12px;font-weight:600;cursor:pointer">${b}</button>`;
+  }).join('');
+}
+
+function toggleBookie(btn) {
+  const on = btn.dataset.on === 'true';
+  btn.dataset.on = !on;
+  btn.style.background = !on ? 'var(--accent)' : 'var(--surface2)';
+  btn.style.borderColor = !on ? 'var(--accent)' : 'var(--border)';
+  btn.style.color = !on ? '#0b1220' : 'var(--muted)';
+}
+
+function getSelectedBookies() {
+  return [...document.querySelectorAll('#bookie-picker button[data-on="true"]')]
+    .map(b => b.dataset.bookie);
+}
+
 function profileMsg(txt, ok = false) {
   const el = document.getElementById('profile-msg');
   el.textContent = txt;
@@ -3867,6 +3902,7 @@ async function saveSettings() {
     language:         document.getElementById('s-language').value,
     timezone:         document.getElementById('s-timezone').value,
     scanTimes:        getSelectedScanTimes(),
+    preferredBookies: getSelectedBookies(),
     scanEnabled:      document.getElementById('s-scan-enabled').checked,
     twoFactorEnabled: document.getElementById('s-2fa-enabled').checked,
   };

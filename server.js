@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.1.6';
+const APP_VERSION    = '9.1.7';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -184,6 +184,7 @@ function defaultSettings() {
     twoFactorEnabled: false,
     telegramChatId: null,
     telegramEnabled: false,
+    preferredBookies: ['Bet365', 'Unibet'],
   };
 }
 
@@ -4608,7 +4609,7 @@ app.put('/api/user/settings', async (req, res) => {
     const users = await loadUsers(true);
     const user  = users.find(u => u.id === req.user.id);
     if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
-    const allowed = ['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled','twoFactorEnabled'];
+    const allowed = ['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled','twoFactorEnabled','preferredBookies'];
     allowed.forEach(k => { if (req.body[k] !== undefined) user.settings[k] = req.body[k]; });
     await saveUser(user);
     // Herplan scans als admin
@@ -4731,7 +4732,24 @@ app.post('/api/prematch', (req, res) => {
         runHandball(emit).catch(err => { emit({ log: `⚠️ Handball scan mislukt: ${err.message}` }); return []; }),
       ]);
 
-      const allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks, ...mlbPicks, ...nflPicks, ...handballPicks];
+      let allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks, ...mlbPicks, ...nflPicks, ...handballPicks];
+
+      // Filter op user's preferred bookies (als ingesteld). Default: Bet365+Unibet.
+      try {
+        const users = await loadUsers().catch(() => []);
+        const me = users.find(u => u.id === req.user?.id) || users.find(u => u.role === 'admin');
+        const prefs = me?.settings?.preferredBookies;
+        if (Array.isArray(prefs) && prefs.length) {
+          const lower = prefs.map(x => (x || '').toLowerCase());
+          const before = allPicks.length;
+          allPicks = allPicks.filter(p => {
+            const b = (p.bookie || '').toLowerCase();
+            return lower.some(pref => b.includes(pref));
+          });
+          if (before !== allPicks.length) emit({ log: `🏦 Bookie-filter: ${before} → ${allPicks.length} picks (${prefs.join(', ')})` });
+        }
+      } catch {}
+
       allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
 
       // Top 5 picks over alle sporten (gesorteerd op verwachte waarde)
@@ -5476,6 +5494,41 @@ app.post('/api/clv/backfill', requireAdmin, async (req, res) => {
     res.json({ scanned: candidates.length, filled, failed, details,
                rateLimit: { remaining: afRateLimit.remaining, limit: afRateLimit.limit,
                             callsToday: afRateLimit.callsToday, perSport: sportRateLimits } });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  }
+});
+
+// GET /api/debug/odds?sport=hockey&date=YYYY-MM-DD&team=Vegas
+// Dumpt raw api-sports odds response voor één matchen om 3-way detectie te verifiëren
+app.get('/api/debug/odds', requireAdmin, async (req, res) => {
+  try {
+    const sport = normalizeSport(req.query.sport || 'hockey');
+    const date = req.query.date || new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+    const team = (req.query.team || '').toLowerCase();
+    const cfg = getSportApiConfig(sport);
+    const games = await afGet(cfg.host, cfg.fixturesPath, { date }).catch(() => []);
+    const matches = (games || []).filter(g => {
+      const h = (g.teams?.home?.name || '').toLowerCase();
+      const a = (g.teams?.away?.name || '').toLowerCase();
+      return !team || h.includes(team) || a.includes(team);
+    }).slice(0, 5);
+    const out = [];
+    for (const g of matches) {
+      const id = sport === 'football' ? g.fixture?.id : g.id;
+      const odds = await afGet(cfg.host, cfg.oddsPath, { [cfg.fixtureParam]: id }).catch(() => []);
+      const bookmakers = (odds?.[0]?.bookmakers || []).map(bk => ({
+        bookie: bk.name,
+        bets: (bk.bets || []).map(b => ({
+          id: b.id, name: b.name,
+          values: (b.values || []).map(v => ({ value: v.value, odd: v.odd })),
+          valueCount: (b.values || []).length,
+          is3Way: (b.values || []).filter(v => ['Home','Draw','Away','1','X','2'].includes((v.value||'').trim())).length === 3,
+        })),
+      }));
+      out.push({ id, home: g.teams?.home?.name, away: g.teams?.away?.name, bookmakers });
+    }
+    res.json({ sport, date, matchesFound: matches.length, matches: out });
   } catch (e) {
     res.status(500).json({ error: (e && e.message) || 'Interne fout' });
   }
