@@ -2,6 +2,12 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.6.4] - 2026-04-14
+
+### Fixed (kritiek)
+- **`bestOdds` negeerde preferredBookies**: tweede best-odds-helper (gebruikt in football Moneyline path `server.js:4967-4969`) filterde niet op preferredBookies, alleen `bestFromArr` wel. Gevolg: football ML-picks toonden bookie/prijs van ELKE bookie in de markt, niet alleen jouw voorkeur. Nu geharmoniseerd: beide functies respecteren `_preferredBookiesLower`.
+- **Odds monitor dedup verloor state bij Render-sleep**: `lastAlerts` Map was in-memory → free-tier sleep = Map gewist = re-alert zelfde drift. Nu persistent via `calib.oddsAlerts` (Supabase + disk), met 24u cleanup van stale entries.
+
 ## [10.6.3] - 2026-04-14
 
 ### Added (one-shot reminder)

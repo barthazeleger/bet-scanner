@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.6.3';
+const APP_VERSION    = '10.6.4';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1431,7 +1431,13 @@ function fairProbs(bookmakers, homeTeam, awayTeam) {
 // Beste odds voor een uitkomst over alle bookmakers
 function bestOdds(bookmakers, marketKey, outcomeName) {
   let best = { price: 0, bookie: '' };
+  const preferred = _preferredBookiesLower;
   for (const bk of bookmakers) {
+    // Respect preferredBookies filter (consensus blijft uit ALLE bookies, pick-odds alleen uit preferred)
+    if (preferred) {
+      const bkName = (bk.title || bk.name || '').toLowerCase();
+      if (!preferred.some(p => bkName.includes(p))) continue;
+    }
     const mkt = bk.markets?.find(m => m.key === marketKey);
     const o   = mkt?.outcomes?.find(o => o.name === outcomeName);
     if (o && o.price > best.price) best = { price: +o.price.toFixed(3), bookie: bk.title };
@@ -9180,8 +9186,8 @@ function scheduleOddsMonitor() {
   const INTERVAL_MS = 60 * 60 * 1000; // 60 min
   const RE_ALERT_DELTA = 0.03;        // alleen opnieuw alerten bij +3pp verschil of richtingswissel
   const RE_ALERT_MIN_HOURS = 4;       // of als persistent sharp move na 4u
-  const lastAlerts = new Map();       // betId → { drift, direction, ts }
-  console.log('📈 Odds monitor actief (elke 60 min, dedup bij gelijke drift)');
+  // Persistent via calib.oddsAlerts zodat Render-sleep de dedup niet verliest
+  console.log('📈 Odds monitor actief (elke 60 min, persistent dedup via calib)');
 
   async function runOddsMonitor() {
     try {
@@ -9287,7 +9293,9 @@ function scheduleOddsMonitor() {
 
         if (Math.abs(drift) >= 0.05) {
           const direction = drift < 0 ? 'sharp' : 'fade';
-          const prev = lastAlerts.get(bet.id);
+          const calib = loadCalib();
+          calib.oddsAlerts = calib.oddsAlerts || {};
+          const prev = calib.oddsAlerts[bet.id];
           const driftChangedEnough = !prev || Math.abs(drift - prev.drift) >= RE_ALERT_DELTA;
           const directionFlipped   = prev && prev.direction !== direction;
           const longSincePrev      = prev && (now - prev.ts) >= RE_ALERT_MIN_HOURS * 60 * 60 * 1000;
@@ -9299,7 +9307,12 @@ function scheduleOddsMonitor() {
             } else {
               await tg(`📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`).catch(() => {});
             }
-            lastAlerts.set(bet.id, { drift, direction, ts: now });
+            calib.oddsAlerts[bet.id] = { drift, direction, ts: now };
+            // Cleanup: gooi entries ouder dan 24u weg (bets zijn dan settled/verlopen)
+            for (const k of Object.keys(calib.oddsAlerts)) {
+              if (now - calib.oddsAlerts[k].ts > 24 * 60 * 60 * 1000) delete calib.oddsAlerts[k];
+            }
+            await saveCalib(calib);
           }
         }
 
