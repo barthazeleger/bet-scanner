@@ -1,4 +1,4 @@
-# EdgePickr v9.9
+# EdgePickr v9.10
 
 Multi-sport betting analytics platform met een zelflerend Poisson-model per sport, market-derived sanity checks, CLV-tracking, PWA met push notificaties en een admin-panel.
 

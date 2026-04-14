@@ -219,7 +219,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.9.0';
+const APP_VERSION    = '9.10.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -510,6 +510,60 @@ async function saveSignalWeights(w) {
   try {
     await supabase.from('signal_weights').upsert({ id: 1, weights: w, updated_at: new Date().toISOString() });
   } catch (e) { console.error('saveSignalWeights error:', e.message); }
+}
+
+// Per-signal CLV contribution autotune. CLV is sneller signal dan W/L:
+// als een signal al consistent NEGATIEVE CLV oplevert, daalt zijn weight
+// veel sneller dan via W/L (waar variance maanden duurt om uit te middelen).
+// Returns {tuned: number, adjustments: [...]}.
+async function autoTuneSignalsByClv() {
+  try {
+    const { data: bets } = await supabase.from('bets')
+      .select('signals, clv_pct, sport, markt').not('clv_pct', 'is', null);
+    const all = (bets || []).filter(b => typeof b.clv_pct === 'number' && !isNaN(b.clv_pct) && b.signals);
+    if (all.length < 30) return { tuned: 0, adjustments: [], note: 'te weinig CLV data (<30)' };
+
+    const signalStats = {}; // signalName → { n, sumClv, posClv }
+    for (const b of all) {
+      let sigs;
+      try { sigs = typeof b.signals === 'string' ? JSON.parse(b.signals) : b.signals; } catch { continue; }
+      if (!Array.isArray(sigs)) continue;
+      for (const sig of sigs) {
+        const name = String(sig).split(':')[0];
+        if (!name) continue;
+        if (!signalStats[name]) signalStats[name] = { n: 0, sumClv: 0, posClv: 0 };
+        signalStats[name].n++;
+        signalStats[name].sumClv += b.clv_pct;
+        if (b.clv_pct > 0) signalStats[name].posClv++;
+      }
+    }
+
+    const weights = loadSignalWeights();
+    const adjustments = [];
+    let tuned = 0;
+    for (const [name, s] of Object.entries(signalStats)) {
+      if (s.n < 20) continue;
+      const avgClv = s.sumClv / s.n;
+      const old = weights[name] || 1.0;
+      let newW = old;
+      // CLV-driven: avg < -2% → daal sneller, > +2% → stijg
+      if (avgClv < -2) newW = Math.max(0.3, old * 0.92);
+      else if (avgClv > 2) newW = Math.min(1.5, old * 1.05);
+      else if (avgClv < -0.5) newW = Math.max(0.3, old * 0.97);
+      else if (avgClv > 0.5) newW = Math.min(1.5, old * 1.02);
+      else newW = old * 0.99 + 0.01; // langzaam naar 1.0 als neutraal
+
+      if (Math.abs(newW - old) >= 0.02) {
+        weights[name] = +newW.toFixed(3);
+        adjustments.push({ name, old: +old.toFixed(3), new: +newW.toFixed(3), avgClv: +avgClv.toFixed(2), n: s.n });
+        tuned++;
+      }
+    }
+    if (tuned) await saveSignalWeights(weights);
+    return { tuned, adjustments };
+  } catch (e) {
+    return { tuned: 0, adjustments: [], error: e.message };
+  }
 }
 
 async function autoTuneSignals() {
@@ -5737,6 +5791,14 @@ app.get('/api/admin/v2/walkforward', requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/admin/v2/autotune-clv — run CLV-based signal weight tuning
+app.post('/api/admin/v2/autotune-clv', requireAdmin, async (req, res) => {
+  try {
+    const result = await autoTuneSignalsByClv();
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
+});
+
 // GET /api/admin/v2/snapshot-counts — quick health check op v2 tabellen
 app.get('/api/admin/v2/snapshot-counts', requireAdmin, async (req, res) => {
   try {
@@ -7937,6 +7999,132 @@ app.post('/api/backfill-times', requireAdmin, async (req, res) => {
 
 // ── ODDS MOVEMENT ALERTS ─────────────────────────────────────────────────────
 // Elke 60 minuten: check odds drift voor open bets met kickoff < 12 uur weg.
+// ── KICKOFF-RELATIVE ODDS POLLING (v9.10.0) ─────────────────────────────────
+// Reviewer-aanbeveling: snapshots op open / t-6h / t-1h / t-15m / close.
+// Open = bij eerste scan. Close = ~2 min voor kickoff (al via scheduleCLVCheck).
+// Tussen-snapshots t-6h/t-1h/t-15m: deze polling job draait elke 5 min en
+// snapshot fixtures die zich in een venster ±5 min rondom die kickoff-relatieve
+// momenten bevinden. Per fixture max 3 extra snapshots.
+function scheduleKickoffWindowPolling() {
+  const INTERVAL_MS = 5 * 60 * 1000; // 5 min
+  const WINDOWS = [6 * 60, 60, 15]; // minuten voor kickoff
+  const TOLERANCE_MIN = 5;
+  const _seen = new Map(); // fixture_id → Set('6h','1h','15m')
+
+  async function runWindow() {
+    try {
+      const nowMs = Date.now();
+      const horizonMs = nowMs + 7 * 3600 * 1000;
+      const { data: fixtures } = await supabase.from('fixtures')
+        .select('id, sport, start_time')
+        .eq('status', 'scheduled')
+        .gte('start_time', new Date(nowMs).toISOString())
+        .lte('start_time', new Date(horizonMs).toISOString())
+        .order('start_time', { ascending: true })
+        .limit(80);
+      if (!fixtures?.length) return;
+
+      let snapshotted = 0;
+      for (const fix of fixtures) {
+        const koMs = new Date(fix.start_time).getTime();
+        const minsToKo = (koMs - nowMs) / 60000;
+        for (const targetMin of WINDOWS) {
+          if (Math.abs(minsToKo - targetMin) > TOLERANCE_MIN) continue;
+          // Dedupe: deze fixture+window al gedaan?
+          const tag = `${targetMin}m`;
+          if (!_seen.has(fix.id)) _seen.set(fix.id, new Set());
+          if (_seen.get(fix.id).has(tag)) continue;
+          _seen.get(fix.id).add(tag);
+          // Snapshot
+          try {
+            const sport = normalizeSport(fix.sport);
+            if (sport === 'football') continue; // football snapshots via dagelijkse scan voor nu
+            const cfg = getSportApiConfig(sport);
+            const oddsResp = await afGet(cfg.host, cfg.oddsPath, { [cfg.fixtureParam]: fix.id }).catch(() => []);
+            if (!oddsResp?.length) continue;
+            const parsed = parseGameOdds([oddsResp[0]], '', '');
+            const rows = snap.flattenParsedOdds(parsed);
+            if (rows.length) {
+              await snap.writeOddsSnapshots(supabase, fix.id, rows);
+              snapshotted++;
+            }
+          } catch { /* swallow */ }
+        }
+      }
+      // Cleanup: verwijder finished fixtures uit _seen om memory te sparen
+      for (const [fid] of _seen) {
+        const f = fixtures.find(x => x.id === fid);
+        if (!f || new Date(f.start_time).getTime() < nowMs) _seen.delete(fid);
+      }
+      if (snapshotted) console.log(`📸 Kickoff-window snapshots: ${snapshotted} (t-6h/1h/15m windows)`);
+    } catch { /* swallow */ }
+  }
+
+  setTimeout(() => {
+    runWindow();
+    setInterval(runWindow, INTERVAL_MS);
+  }, 3 * 60 * 1000);
+  console.log('📸 Kickoff-window polling actief (t-6h/1h/15m, elke 5 min)');
+}
+
+// ── AUTO-RETRAINING SCHEDULER (v9.10.0) ─────────────────────────────────────
+// Wekelijks: check voor elke (sport, market_type) of er ≥500 settled
+// pick_candidates zijn. Als ja: log dat deze markt klaar is voor residual
+// model training. Echte training-pipeline (logistic regression fit) is
+// placeholder; activeert pas wanneer we volume hebben om te valideren.
+function scheduleAutoRetraining() {
+  const INTERVAL_MS = 7 * 24 * 3600 * 1000; // weekly
+  const MIN_PICKS = 500; // van lib/model-math.RESIDUAL_MIN_TRAINING_PICKS
+
+  async function runRetrainCheck() {
+    try {
+      const { data: candidates } = await supabase.from('pick_candidates')
+        .select('fixture_id, model_run_id');
+      if (!candidates?.length) {
+        console.log('📐 Auto-retrain: 0 pick_candidates, skip');
+        return;
+      }
+      // Group by (sport, market_type) via model_runs
+      const { data: runs } = await supabase.from('model_runs')
+        .select('id, market_type, debug');
+      const runMap = {};
+      for (const r of (runs || [])) {
+        runMap[r.id] = { market_type: r.market_type, sport: r.debug?.sport || 'multi' };
+      }
+      const buckets = {};
+      for (const c of candidates) {
+        const meta = runMap[c.model_run_id];
+        if (!meta) continue;
+        const key = `${meta.sport}_${meta.market_type}`;
+        buckets[key] = (buckets[key] || 0) + 1;
+      }
+      const eligible = Object.entries(buckets).filter(([, n]) => n >= MIN_PICKS);
+      if (eligible.length) {
+        console.log(`📐 Auto-retrain: ${eligible.length} markten met ≥${MIN_PICKS} candidates klaar voor training:`);
+        for (const [k, n] of eligible) console.log(`   - ${k}: ${n} candidates`);
+        // TODO: feitelijke residual logistic regression training. Voor nu: log only.
+        // De volgende stap zou zijn:
+        // 1. Pull alle pick_candidates + bijbehorende settled bets (W/L)
+        // 2. Pull feature_snapshots op pick-tijdstip (point-in-time correct)
+        // 3. Train logistic regression: Y = bet won, X = features - market_baseline
+        // 4. Schrijf coefficients naar model_versions.metrics.residual_coefficients
+        // 5. Server.js residualModelDelta() leest deze coefficients
+      } else {
+        console.log(`📐 Auto-retrain: nog geen markt met ≥${MIN_PICKS} candidates (max ${Math.max(0, ...Object.values(buckets))})`);
+      }
+    } catch (e) {
+      console.error('Auto-retrain check fout:', e.message);
+    }
+  }
+
+  // Eerste run 1 uur na boot, dan wekelijks
+  setTimeout(() => {
+    runRetrainCheck();
+    setInterval(runRetrainCheck, INTERVAL_MS);
+  }, 60 * 60 * 1000);
+  console.log('📐 Auto-retraining scheduler actief (wekelijks check vanaf +1u)');
+}
+
 // ── FIXTURE SNAPSHOT POLLING (v9.6.0) ────────────────────────────────────────
 // Schrijft odds_snapshots throughout-the-day voor upcoming fixtures uit de
 // fixtures tabel. Hierdoor krijgen we line-movement data voor latere
@@ -8252,6 +8440,8 @@ app.listen(PORT, () => {
   scheduleDailyScan();
   scheduleOddsMonitor();
   scheduleFixtureSnapshotPolling();
+  scheduleKickoffWindowPolling();
+  scheduleAutoRetraining();
 
   // Kill-switch initial load + 30-min refresh
   refreshKillSwitch().then(() => console.log(`🛑 Kill-switch geladen (${KILL_SWITCH.set.size} actief)`));

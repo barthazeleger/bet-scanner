@@ -962,6 +962,15 @@ nav::-webkit-scrollbar { display: none; }
       <div style="color:var(--muted)">Nog geen calibratiedata</div>
     </div>
   </div>
+
+  <!-- v2 Health Dashboard -->
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div class="card-title">🧪 v2 Pipeline Health</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadV2Dashboard()">↻ Refresh</button>
+    </div>
+    <div id="v2-dash" style="font-size:13px"><div style="color:var(--muted)">Klik refresh om v2 stats op te halen.</div></div>
+  </div>
 </section>
 
 <!-- ══ STATUS ══════════════════════════════════════════════════════════════ -->
@@ -4125,6 +4134,82 @@ function renderInboxMarkets(markets) {
       <div style="font-size:12px;font-weight:700;color:${col};width:45px;text-align:right">${m.multiplier.toFixed(2)}x</div>
     </div>`;
   }).join('');
+}
+
+// ── v2 PIPELINE HEALTH DASHBOARD ─────────────────────────────────────────────
+async function loadV2Dashboard() {
+  const el = document.getElementById('v2-dash');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--muted)">⏳ Laden…</div>';
+  try {
+    const get = (url) => api(url).then(r => r?.json()).catch(() => null);
+    const [counts, picks, clv, walk, kill] = await Promise.all([
+      get('/api/admin/v2/snapshot-counts?hours=24'),
+      get('/api/admin/v2/pick-candidates-summary?hours=24'),
+      get('/api/admin/v2/clv-stats?days=30'),
+      get('/api/admin/v2/walkforward?days=30'),
+      get('/api/admin/v2/kill-switch'),
+    ]);
+
+    let html = '';
+
+    // Snapshot counts
+    if (counts?.counts) {
+      html += '<div style="font-weight:600;margin-bottom:6px">📦 Snapshot Counts (24u)</div>';
+      html += '<table style="width:100%;font-size:12px;margin-bottom:14px"><tr><th style="text-align:left;color:var(--muted)">Tabel</th><th style="text-align:right;color:var(--muted)">Totaal</th><th style="text-align:right;color:var(--muted)">Recent</th></tr>';
+      for (const [t, v] of Object.entries(counts.counts)) {
+        html += `<tr><td>${t}</td><td style="text-align:right">${v.total}</td><td style="text-align:right;color:${v.recent > 0 ? '#34d399' : 'var(--muted)'}">${v.recent}</td></tr>`;
+      }
+      html += '</table>';
+    }
+
+    // Pick candidates
+    if (picks && picks.total !== undefined) {
+      const acceptRate = picks.acceptanceRate != null ? picks.acceptanceRate + '%' : '—';
+      html += `<div style="font-weight:600;margin-bottom:6px">🎯 Pick Candidates (24u)</div>`;
+      html += `<div style="font-size:12px;margin-bottom:8px">Totaal: <b>${picks.total}</b> · Accepted: <b style="color:#34d399">${picks.accepted}</b> (${acceptRate}) · Rejected: <b style="color:#f87171">${picks.rejected}</b></div>`;
+      if (picks.byReason && Object.keys(picks.byReason).length) {
+        html += '<div style="font-size:11px;color:var(--muted);margin-bottom:14px">Top reject reasons: ';
+        html += Object.entries(picks.byReason).slice(0, 5).map(([r, n]) => `${r} (${n})`).join(' · ');
+        html += '</div>';
+      }
+    }
+
+    // CLV stats
+    if (clv && clv.bySport) {
+      html += `<div style="font-weight:600;margin-bottom:6px">📈 CLV per sport (30d, ${clv.totalBets} bets)</div>`;
+      html += '<table style="width:100%;font-size:12px;margin-bottom:14px"><tr><th style="text-align:left;color:var(--muted)">Sport</th><th style="text-align:right;color:var(--muted)">N</th><th style="text-align:right;color:var(--muted)">Avg CLV</th><th style="text-align:right;color:var(--muted)">+CLV %</th><th style="text-align:right;color:var(--muted)">PnL</th></tr>';
+      for (const [s, d] of Object.entries(clv.bySport)) {
+        const clvCol = d.avg_clv_pct > 0 ? '#34d399' : d.avg_clv_pct < -2 ? '#f87171' : 'var(--muted)';
+        const pnlCol = d.total_pnl_eur >= 0 ? '#34d399' : '#f87171';
+        html += `<tr><td>${s}</td><td style="text-align:right">${d.n}</td><td style="text-align:right;color:${clvCol}">${d.avg_clv_pct > 0 ? '+' : ''}${d.avg_clv_pct}%</td><td style="text-align:right">${d.positive_clv_pct}%</td><td style="text-align:right;color:${pnlCol}">€${d.total_pnl_eur}</td></tr>`;
+      }
+      html += '</table>';
+      if (clv.killEligible && clv.killEligible.length) {
+        html += '<div style="font-size:12px;color:#f87171;margin-bottom:14px">⚠️ Kill-switch eligible: ' + clv.killEligible.map(k => `${k.key} (${k.recommendation}, CLV ${k.avg_clv_pct}%, n=${k.n})`).join(' · ') + '</div>';
+      }
+    }
+
+    // Walk-forward
+    if (walk && walk.brier_score !== undefined) {
+      const interp = walk.interpretation || '?';
+      const interpColor = { EXCELLENT: '#34d399', GOOD: '#34d399', NEUTRAL: 'var(--muted)', POOR: '#f87171' }[interp] || 'var(--muted)';
+      html += `<div style="font-weight:600;margin-bottom:6px">🎯 Walk-Forward Backtest (30d)</div>`;
+      html += `<div style="font-size:12px;margin-bottom:14px">N: <b>${walk.n}</b> · Brier: <b>${walk.brier_score}</b> · Log loss: <b>${walk.log_loss}</b> · <span style="color:${interpColor};font-weight:600">${interp}</span></div>`;
+    }
+
+    // Kill-switch
+    if (kill) {
+      const enabled = kill.enabled ? '✅ enabled' : '❌ disabled';
+      const kills = kill.activeKills?.length ? kill.activeKills.join(', ') : 'geen';
+      html += `<div style="font-weight:600;margin-bottom:6px">🛑 Kill-Switch</div>`;
+      html += `<div style="font-size:12px;color:var(--muted)">Status: ${enabled} · Active kills: ${kills}</div>`;
+    }
+
+    el.innerHTML = html || '<div style="color:var(--muted)">Geen v2 data beschikbaar.</div>';
+  } catch (e) {
+    el.innerHTML = '<div style="color:#f87171">Fout bij laden v2 data: ' + e.message + '</div>';
+  }
 }
 
 // ── STATUS PAGE ───────────────────────────────────────────────────────────────
