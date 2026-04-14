@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.0.6';
+const APP_VERSION    = '9.0.7';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -4817,17 +4817,18 @@ async function findGameId(sport, matchName) {
 }
 
 // Verbose variant voor diagnostiek: geeft fxId + fixturesFetched + topCandidates terug
-async function findGameIdVerbose(sport, matchName) {
+// Optie: anchorDate (YYYY-MM-DD) + window (dagen terug/vooruit). Default: gisteren/vandaag/morgen.
+async function findGameIdVerbose(sport, matchName, anchorDate = null, windowDays = [-1, 0, 1]) {
   sport = normalizeSport(sport);
   const cfg = getSportApiConfig(sport);
   const parts = (matchName || '').split(' vs ').map(s => s.trim());
-  const out = { fxId: null, host: cfg.host, fixturesFetched: {}, topCandidates: [], threshold: 50, error: null };
+  const out = { fxId: null, host: cfg.host, fixturesFetched: {}, topCandidates: [], threshold: 50, error: null, anyTextMatch: [] };
   if (parts.length < 2) { out.error = 'matchName kon niet gesplitst worden op " vs "'; return out; }
   const [qHome, qAway] = parts;
 
-  const now = Date.now();
-  const dates = [-1, 0, 1].map(offset => {
-    const d = new Date(now + offset * 86400000);
+  const anchor = anchorDate ? new Date(anchorDate + 'T12:00:00Z').getTime() : Date.now();
+  const dates = windowDays.map(offset => {
+    const d = new Date(anchor + offset * 86400000);
     return d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   });
 
@@ -4857,6 +4858,16 @@ async function findGameIdVerbose(sport, matchName) {
   }
   out.topCandidates = scored.sort((a, b) => b.score - a.score).slice(0, 5);
   out.bestScore = bestScore;
+  // Zuivere text-search als fallback: zoek de query-termen in alle ruwe teamnamen
+  const qHomeLow = (qHome || '').toLowerCase();
+  const qAwayLow = (qAway || '').toLowerCase();
+  out.anyTextMatch = list.filter(g => {
+    const h = (g.teams?.home?.name || '').toLowerCase();
+    const a = (g.teams?.away?.name || '').toLowerCase();
+    return (qHomeLow && (h.includes(qHomeLow) || a.includes(qHomeLow))) ||
+           (qAwayLow && (h.includes(qAwayLow) || a.includes(qAwayLow)));
+  }).slice(0, 5).map(g => ({ home: g.teams?.home?.name, away: g.teams?.away?.name, date: g.fixture?.date || g.date,
+                              id: sport === 'football' ? g.fixture?.id : g.id }));
   if (best && bestScore >= 50) {
     out.fxId = sport === 'football' ? best.fixture?.id : best.id;
   }
@@ -5331,15 +5342,23 @@ app.get('/api/clv/backfill/probe', requireAdmin, async (req, res) => {
     const wedstrijd = data.wedstrijd || '';
     const markt = data.markt || '';
     const loggedOdds = parseFloat(data.odds);
+    // Anchor op bet.datum (formaat dd-mm-yyyy) zodat historische bets de juiste week doorzoeken
+    let anchorDate = null;
+    const dm = (data.datum || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dm) anchorDate = `${dm[3]}-${dm[2]}-${dm[1]}`;
+    const windowDays = req.query.wide === '1' ? [-7, -6, -5, -4, -3, -2, -1, 0, 1] : [-1, 0, 1];
     const verbose = data.fixture_id
       ? { fxId: data.fixture_id, fixturesFetched: {}, topCandidates: [], bestScore: null, note: 'gebruikt opgeslagen fixture_id' }
-      : await findGameIdVerbose(sport, wedstrijd);
+      : await findGameIdVerbose(sport, wedstrijd, anchorDate, windowDays);
+    verbose.anchorDate = anchorDate;
+    verbose.windowDays = windowDays;
     let closingOdds = null, clvPct = null;
     if (verbose.fxId) {
       closingOdds = await fetchCurrentOdds(sport, verbose.fxId, markt, data.tip);
       if (closingOdds && loggedOdds) clvPct = +((loggedOdds - closingOdds) / closingOdds * 100).toFixed(2);
     }
-    res.json({ bet: { id: betId, wedstrijd, sport, markt, loggedOdds, tip: data.tip, fixture_id: data.fixture_id },
+    res.json({ bet: { id: betId, wedstrijd, sport, markt, loggedOdds, tip: data.tip, fixture_id: data.fixture_id,
+                      datum: data.datum, tijd: data.tijd },
                diagnose: verbose, closingOdds, clvPct,
                rateLimit: { remaining: afRateLimit.remaining, limit: afRateLimit.limit,
                             callsToday: afRateLimit.callsToday, perSport: sportRateLimits } });
