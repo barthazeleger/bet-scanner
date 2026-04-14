@@ -924,7 +924,7 @@ nav::-webkit-scrollbar { display: none; }
 <section class="page admin-only" id="page-inbox" style="display:none">
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div class="card-title">📬 Inbox</div>
+      <div class="card-title" data-i18n="card_inbox">📬 Inbox</div>
       <div style="font-size:12px;color:var(--muted)" id="inbox-settled">—</div>
     </div>
     <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
@@ -946,8 +946,8 @@ nav::-webkit-scrollbar { display: none; }
 <section class="page admin-only" id="page-model" style="display:none">
   <!-- Signal Weights -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-title" style="margin-bottom:14px">🔧 Huidige Signal Gewichten</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Gewichten worden automatisch aangepast op basis van prestaties. 1.0 = neutraal, &gt;1.0 = versterkt, &lt;1.0 = afgezwakt, 0 = inactief (logged-only).</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_signal_weights">🔧 Huidige Signal Gewichten</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px" data-i18n="card_signal_weights_sub">Gewichten worden automatisch aangepast op basis van prestaties. 1.0 = neutraal, &gt;1.0 = versterkt, &lt;1.0 = afgezwakt, 0 = inactief (logged-only).</div>
     <div id="inbox-weights" style="font-size:13px">
       <div style="color:var(--muted)">Nog geen signal data</div>
     </div>
@@ -955,8 +955,8 @@ nav::-webkit-scrollbar { display: none; }
 
   <!-- Markt Multipliers -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-title" style="margin-bottom:14px">📊 Markt Multipliers</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Calibratie per markttype na 8+ bets. Hoog = model vertrouwt deze markt meer.</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_market_multipliers">📊 Markt Multipliers</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px" data-i18n="card_market_multipliers_sub">Calibratie per markttype na 8+ bets. Hoog = model vertrouwt deze markt meer.</div>
     <div id="inbox-markets" style="font-size:13px">
       <div style="color:var(--muted)">Nog geen calibratiedata</div>
     </div>
@@ -964,8 +964,8 @@ nav::-webkit-scrollbar { display: none; }
 
   <!-- Per Sport -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-title" style="margin-bottom:14px">🏆 Per Sport</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Win rate en P/L per sport, gebaseerd op settled bets.</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_per_sport">🏆 Per Sport</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px" data-i18n="card_per_sport_sub">Win rate en P/L per sport, gebaseerd op settled bets.</div>
     <div id="inbox-per-sport" style="font-size:13px">
       <div style="color:var(--muted)">Nog geen data per sport</div>
     </div>
@@ -973,22 +973,22 @@ nav::-webkit-scrollbar { display: none; }
 
   <!-- Signal Attribution (verhuisd uit Data) -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-title" style="margin-bottom:14px">🧠 Signal Attribution</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Hit rate per signal — welke signalen leveren echt edge.</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_signal_attribution">🧠 Signal Attribution</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px" data-i18n="card_signal_attribution_sub">Hit rate per signal — welke signalen leveren echt edge.</div>
     <div id="signal-analysis" style="padding:8px 0"><div style="color:var(--muted);font-size:13px">Laden...</div></div>
   </div>
 
   <!-- Experimentele signalen (logged-only, auto-activate) -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-title" style="margin-bottom:14px">🧪 Experimentele signalen</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Worden verzameld bij elke scan maar staan op weight=0 (geen scoring impact). Auto-activeren naar 0.5 zodra n≥50 picks + avg CLV > 0%. Telegram + inbox melding bij activatie.</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_experimental">🧪 Experimentele signalen</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px" data-i18n="card_experimental_sub">Worden verzameld bij elke scan maar staan op weight=0 (geen scoring impact). Auto-activeren naar 0.5 zodra n≥50 picks + avg CLV > 0%. Telegram + inbox melding bij activatie.</div>
     <div id="experimental-signals" style="font-size:13px"><div style="color:var(--muted)">Laden...</div></div>
   </div>
 
   <!-- Model Updates (verhuisd uit Info) -->
   <div class="card" id="model-log-card">
     <div class="card-hd" style="margin-bottom:12px">
-      <div class="card-title">🧠 Model updates</div>
+      <div class="card-title" data-i18n="card_model_updates">🧠 Model updates</div>
       <span id="model-log-badge" style="display:none;background:var(--accent);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700">nieuw</span>
     </div>
     <div id="model-log-body" style="font-size:13px;color:var(--muted)">Laden...</div>
@@ -999,30 +999,30 @@ nav::-webkit-scrollbar { display: none; }
 <section class="page" id="page-status">
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-      <div class="card-title">🟢 Service Status</div>
+      <div class="card-title" data-i18n="card_service_status">🟢 Service Status</div>
       <div style="font-size:12px;color:var(--muted)" id="status-version">—</div>
     </div>
     <div id="status-services"></div>
   </div>
   <div class="card admin-only" style="margin-bottom:16px;display:none">
-    <div class="card-title" style="margin-bottom:14px">📊 API Budget</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_api_budget">📊 API Budget</div>
     <div id="status-api-budget"></div>
   </div>
   <div class="card admin-only" style="margin-bottom:16px;display:none">
-    <div class="card-title" style="margin-bottom:14px">🧠 Model Status</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_model_status">🧠 Model Status</div>
     <div id="status-model"></div>
   </div>
   <!-- v2 Pipeline Health (verhuisd uit Inbox) -->
   <div class="card admin-only" style="margin-bottom:16px;display:none">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <div class="card-title">🧪 v2 Pipeline Health</div>
+      <div class="card-title" data-i18n="card_v2_health">🧪 v2 Pipeline Health</div>
       <button class="btn btn-ghost btn-sm" onclick="loadV2Dashboard()">↻ Refresh</button>
     </div>
     <div id="v2-dash" style="font-size:13px"><div style="color:var(--muted)">Klik refresh om v2 stats op te halen.</div></div>
   </div>
   <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <div class="card-title">⚽ Competities</div>
+      <div class="card-title" data-i18n="card_leagues">⚽ Competities</div>
       <div style="font-size:12px;color:var(--muted)" id="status-league-count">—</div>
     </div>
     <div id="status-leagues" style="font-size:13px;columns:2;column-gap:20px"></div>
@@ -1035,7 +1035,7 @@ nav::-webkit-scrollbar { display: none; }
     <div class="card" style="grid-column:span 2">
       <div class="card-hd">
         <div>
-          <div class="card-title" style="font-size:17px">🎯 EdgePickr — hoe het werkt</div>
+          <div class="card-title" style="font-size:17px" data-i18n="card_how_it_works">🎯 EdgePickr — hoe het werkt</div>
           <div class="card-sub">Data-gedreven sportsbetting · <span id="app-version-str">versie 3.2.0</span> · april 2026</div>
         </div>
         <div style="font-size:24px">🤖</div>
@@ -1052,7 +1052,7 @@ nav::-webkit-scrollbar { display: none; }
   <div class="grid2" style="margin-bottom:16px">
     <!-- Model uitleg (admin only) -->
     <div class="card admin-only" style="display:none">
-      <div class="card-title" style="margin-bottom:14px">🧠 Het model uitgelegd</div>
+      <div class="card-title" style="margin-bottom:14px" data-i18n="card_model_explained">🧠 Het model uitgelegd</div>
       <div style="font-size:13px;color:var(--muted);line-height:1.9">
         <div style="margin-bottom:10px"><strong style="color:var(--text)">1. Markt-consensus als baseline</strong><br>
         Per fixture worden alle bookmaker odds gedevigd (marge verwijderd) → fair market probability. Dit is de "truth anchor".</div>
@@ -1092,7 +1092,7 @@ nav::-webkit-scrollbar { display: none; }
 
     <!-- API bronnen -->
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">📡 Databronnen</div>
+      <div class="card-title" style="margin-bottom:14px" data-i18n="card_datasources">📡 Databronnen</div>
       <div style="font-size:13px;line-height:1.9">
         <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
           <span style="font-size:20px">🏆</span>
@@ -1156,7 +1156,7 @@ nav::-webkit-scrollbar { display: none; }
 
   <!-- Inzet strategie (admin only) -->
   <div class="card admin-only" style="margin-bottom:16px;display:none">
-    <div class="card-title" style="margin-bottom:12px">💰 Inzetstrategie</div>
+    <div class="card-title" style="margin-bottom:12px" data-i18n="card_bet_strategy">💰 Inzetstrategie</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px">
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center">
         <div style="font-size:20px;font-weight:700;color:var(--muted)">0.3U</div>
@@ -1190,7 +1190,7 @@ nav::-webkit-scrollbar { display: none; }
 
   <!-- Abonnementen (admin only) -->
   <div class="card admin-only" style="margin-bottom:16px;display:none">
-    <div class="card-title" style="margin-bottom:14px">💳 Abonnementen</div>
+    <div class="card-title" style="margin-bottom:14px" data-i18n="card_subscriptions">💳 Abonnementen</div>
     <div style="font-size:13px">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
         <div>
@@ -1259,7 +1259,7 @@ nav::-webkit-scrollbar { display: none; }
 
   <!-- Changelog -->
   <div class="card">
-    <div class="card-title" style="margin-bottom:16px">📝 Versiegeschiedenis</div>
+    <div class="card-title" style="margin-bottom:16px" data-i18n="card_changelog">📝 Versiegeschiedenis</div>
     <div style="font-size:13px">
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
@@ -3712,8 +3712,8 @@ function openModal(idx, labelHint) {
   document.getElementById('m-tijd').value  = modalPick.kickoff || '';
   // Sport uit pick data
   const sportSel = document.getElementById('m-sport');
-  const sportNameMap = { football: 'Voetbal', basketball: 'Basketball', hockey: 'IJshockey', baseball: 'Honkbal', 'american-football': 'American Football', handball: 'Handball', tennis: 'Tennis' };
-  const sportLabel = sportNameMap[modalPick.sport] || 'Voetbal';
+  const sportNameMap = { football: t('sport_football'), basketball: t('sport_basketball'), hockey: t('sport_hockey'), baseball: t('sport_baseball'), 'american-football': t('sport_nfl'), handball: t('sport_handball'), tennis: 'Tennis' };
+  const sportLabel = sportNameMap[modalPick.sport] || t('sport_football');
   for (const opt of sportSel.options) { if (opt.value === sportLabel) { opt.selected = true; break; } }
   // Bookmaker uit pick data
   const bkSel = document.getElementById('m-bookie');
@@ -4345,9 +4345,9 @@ async function loadSignalAnalysis() {
   try {
     const sigData = await api('/api/signal-analysis').then(r => r?.json());
     if (sigData?.signals?.length) {
-      const sigNames = { home_adv:'Thuisvoordeel', form:'Vorm', injuries:'Blessures', h2h:'Head-to-head',
-        position:'Positie', home_away_split:'Thuis/uit split', api_pred:'API predictie', lineup:'Opstelling',
-        team_stats:'Team stats', btts_scoring:'BTTS scoring', btts_cleansheet:'BTTS clean sheet' };
+      const sigNames = { home_adv:t('sig_home_adv'), form:t('sig_form'), injuries:t('sig_injuries'), h2h:t('sig_h2h'),
+        position:t('sig_position'), home_away_split:t('sig_home_away_split'), api_pred:t('sig_api_pred'), lineup:t('sig_lineup'),
+        team_stats:t('sig_team_stats'), btts_scoring:t('sig_btts_scoring'), btts_cleansheet:t('sig_btts_cleansheet') };
       sigEl.innerHTML = sigData.signals.sort((a,b) => b.hitRate - a.hitRate).map(sig => {
         const hit = Math.round(sig.hitRate * 100);
         const col = hit >= 60 ? '#34d399' : hit >= 50 ? '#fbbf24' : '#f87171';
@@ -4382,7 +4382,7 @@ function renderInboxPerSport(list) {
   const el = document.getElementById('inbox-per-sport');
   if (!el) return;
   if (!list || !list.length) { el.innerHTML = '<div style="color:var(--muted)">Nog geen settled bets.</div>'; return; }
-  const sNames = { football:'⚽ Voetbal', basketball:'🏀 Basketball', hockey:'🏒 IJshockey', baseball:'⚾ Honkbal', 'american-football':'🏈 NFL', handball:'🤾 Handball' };
+  const sNames = { football:t('sport_football_full'), basketball:t('sport_basketball_full'), hockey:t('sport_hockey_full'), baseball:t('sport_baseball_full'), 'american-football':t('sport_nfl_full'), handball:t('sport_handball_full') };
   el.innerHTML = list.map(s => {
     const profCol = s.profit >= 0 ? '#34d399' : '#f87171';
     const wrCol = s.winrate >= 55 ? '#34d399' : s.winrate <= 40 ? '#f87171' : 'var(--muted)';
