@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.1';
+const APP_VERSION    = '10.7.2';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1644,6 +1644,32 @@ function convertAfOdds(afBookmakers, hm, aw) {
   }).filter(bk => bk.markets.length > 0);
 }
 
+// Generieke stakes-berekening op basis van rank binnen competitie.
+// Per sport verschillen de playoff/degradatie drempels:
+// - Basketball (NBA): playoff = top 50% per conference
+// - Hockey (NHL): playoff = top 50% per conference
+// - Baseball (MLB): playoff = top 5 van 30 ≈ 17%
+// - NFL: playoff = 7 van 16 per conference ≈ 44%
+// - Handball: Euro-plekken variëren, hanteer top 20%
+// Retourneert { label, adj } waar adj een fractionele boost is (-0.06 tot +0.10).
+const STAKES_CFG = {
+  basketball:        { topPct: 0.20, playoffPct: 0.50, bottomPct: 0.80, bottomAdj: 0.06, topAdj: 0.06, playoffAdj: 0.03, noStakesAdj: -0.05 },
+  hockey:            { topPct: 0.20, playoffPct: 0.50, bottomPct: 0.80, bottomAdj: 0.06, topAdj: 0.06, playoffAdj: 0.03, noStakesAdj: -0.05 },
+  baseball:          { topPct: 0.17, playoffPct: 0.33, bottomPct: 0.83, bottomAdj: 0.04, topAdj: 0.05, playoffAdj: 0.03, noStakesAdj: -0.04 },
+  'american-football': { topPct: 0.25, playoffPct: 0.44, bottomPct: 0.75, bottomAdj: 0.05, topAdj: 0.06, playoffAdj: 0.04, noStakesAdj: -0.05 },
+  handball:          { topPct: 0.20, playoffPct: 0.40, bottomPct: 0.80, bottomAdj: 0.08, topAdj: 0.06, playoffAdj: 0.03, noStakesAdj: -0.06 },
+};
+function calcStakesByRank(rank, totalTeams, sport) {
+  if (!rank || !totalTeams || totalTeams < 4) return { label: '', adj: 0 };
+  const cfg = STAKES_CFG[sport] || STAKES_CFG.basketball;
+  const pct = rank / totalTeams;
+  if (pct >= cfg.bottomPct) return { label: '🔴 Onderaan/Degradatie', adj: cfg.bottomAdj };
+  if (pct <= cfg.topPct)    return { label: '🏆 Titelrace',           adj: cfg.topAdj };
+  if (pct <= cfg.playoffPct) return { label: '⭐ Playoff-strijd',       adj: cfg.playoffAdj };
+  if (pct >= 0.40 && pct <= 0.70) return { label: '😴 Niets te spelen', adj: cfg.noStakesAdj };
+  return { label: '', adj: 0 };
+}
+
 // Conservatief: twijfel = blessure. Universele status-matcher voor alle sports.
 // Telt: out, doubtful, questionable, day-to-day, IR, injured, suspended (speelt niet).
 // Telt niet: probable (speelt waarschijnlijk wel), healthy, active, resting (coach-decision).
@@ -2755,9 +2781,17 @@ async function runBasketball(emit) {
         const injWeight = _sw.nba_injury_diff !== undefined ? _sw.nba_injury_diff : 0;
         const nbaInjAdj = nbaInjuryDiff * 0.006 * injWeight; // 0.6% per blessure-verschil (NBA impactvoller dan NFL door kleiner roster)
 
+        // Stakes signal (playoff-race / niets te spelen) — logged-only scaffolding
+        const nbaTotalTeams = Object.keys(standingsMap).length;
+        const hmStakes = calcStakesByRank(hmSt?.rank, nbaTotalTeams, 'basketball');
+        const awStakes = calcStakesByRank(awSt?.rank, nbaTotalTeams, 'basketball');
+        const stakesWeight = _sw.stakes !== undefined ? _sw.stakes : 0;
+        const stakesAdj = (hmStakes.adj - awStakes.adj) * stakesWeight;
+        const stakesNote = (hmStakes.label || awStakes.label) ? ` | Stakes: ${hmStakes.label||'—'} vs ${awStakes.label||'—'}` : '';
+
         const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + restAdj + nbaInjAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - restAdj * 0.5 - nbaInjAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + restAdj + nbaInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - restAdj * 0.5 - nbaInjAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -2777,6 +2811,7 @@ async function runBasketball(emit) {
         // Logged-only experimentele signalen
         if (nbaRestDaysDiff !== 0) matchSignals.push(`nba_rest_days_diff:${nbaRestDaysDiff>0?'+':''}${nbaRestDaysDiff}`);
         if (nbaInjuryDiff !== 0) matchSignals.push(`nba_injury_diff:${nbaInjuryDiff>0?'+':''}${nbaInjuryDiff}`);
+        if (hmStakes.adj !== 0 || awStakes.adj !== 0) matchSignals.push(`stakes:${((hmStakes.adj - awStakes.adj)*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
@@ -3172,11 +3207,19 @@ async function runHockey(emit) {
         const nhlInjDiff = nhlInjAway - nhlInjHome;
         const _swNhl = loadSignalWeights();
         const nhlInjW = _swNhl.nhl_injury_diff !== undefined ? _swNhl.nhl_injury_diff : 0;
-        const nhlInjAdj = nhlInjDiff * 0.005 * nhlInjW; // 0.5% per blessure, gewogen
+        const nhlInjAdj = nhlInjDiff * 0.005 * nhlInjW;
+
+        // Stakes (logged-only scaffolding)
+        const nhlTotalTeams = Object.keys(standingsMap).length;
+        const hmStakes = calcStakesByRank(hmSt?.rank, nhlTotalTeams, 'hockey');
+        const awStakes = calcStakesByRank(awSt?.rank, nhlTotalTeams, 'hockey');
+        const nhlStakesW = _swNhl.stakes !== undefined ? _swNhl.stakes : 0;
+        const stakesAdj = (hmStakes.adj - awStakes.adj) * nhlStakesW;
+        const stakesNote = (hmStakes.label || awStakes.label) ? ` | Stakes: ${hmStakes.label||'—'} vs ${awStakes.label||'—'}` : '';
 
         const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + nhlInjAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - nhlInjAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + nhlInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - nhlInjAdj * 0.5 - stakesAdj * 0.5);
 
         // Alleen 2-way ML bij bookies die inclusief OT settlen (anders overschat model de edge)
         const isOTBookieHockey = b => !HOCKEY_60MIN_BOOKIES.some(x => (b||'').toLowerCase().includes(x));
@@ -3197,6 +3240,7 @@ async function runHockey(emit) {
         if (Math.abs(homeRecordAdj) >= 0.005) matchSignals.push(`home_away_record:${homeRecordAdj>0?'+':''}${(homeRecordAdj*100).toFixed(1)}%`);
         if (shotsSig.valid && Math.abs(shotsSig.adj) >= 0.003) matchSignals.push(`nhl_shots_diff:${shotsSig.adj>0?'+':''}${(shotsSig.adj*100).toFixed(1)}%`);
         if (nhlInjDiff !== 0) matchSignals.push(`nhl_injury_diff:${nhlInjDiff>0?'+':''}${nhlInjDiff}`);
+        if (hmStakes.adj !== 0 || awStakes.adj !== 0) matchSignals.push(`stakes:${((hmStakes.adj - awStakes.adj)*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
@@ -3821,12 +3865,20 @@ async function runBaseball(emit) {
         const mlbInjDiff = mlbInjAway - mlbInjHome;
         const _swMlb = loadSignalWeights();
         const mlbInjW = _swMlb.mlb_injury_diff !== undefined ? _swMlb.mlb_injury_diff : 0;
-        const mlbInjAdj = mlbInjDiff * 0.003 * mlbInjW; // 0.3% per blessure (baseball: pitcher dominant, overige spelers minder impactvol)
+        const mlbInjAdj = mlbInjDiff * 0.003 * mlbInjW;
+
+        // Stakes (logged-only scaffolding)
+        const mlbTotalTeams = Object.keys(standingsMap).length;
+        const hmStakesM = calcStakesByRank(hmSt?.rank, mlbTotalTeams, 'baseball');
+        const awStakesM = calcStakesByRank(awSt?.rank, mlbTotalTeams, 'baseball');
+        const mlbStakesW = _swMlb.stakes !== undefined ? _swMlb.stakes : 0;
+        const stakesAdj = (hmStakesM.adj - awStakesM.adj) * mlbStakesW;
+        const stakesNote = (hmStakesM.label || awStakesM.label) ? ` | Stakes: ${hmStakesM.label||'—'} vs ${awStakesM.label||'—'}` : '';
 
         // Home advantage (~54% in MLB)
         const ha = 0.04;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + mlbInjAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - mlbInjAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + mlbInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - mlbInjAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -3846,6 +3898,7 @@ async function runBaseball(emit) {
           matchSignals.push(`pitcher_era_diff:${pitcherSig.adj>0?'+':''}${(pitcherSig.adj*100).toFixed(1)}%`);
         }
         if (mlbInjDiff !== 0) matchSignals.push(`mlb_injury_diff:${mlbInjDiff>0?'+':''}${mlbInjDiff}`);
+        if (hmStakesM.adj !== 0 || awStakesM.adj !== 0) matchSignals.push(`stakes:${((hmStakesM.adj - awStakesM.adj)*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-10)||'?'} vs ${awSt?.form?.slice(-10)||'?'}` : '';
@@ -4266,10 +4319,18 @@ async function runFootballUS(emit) {
         // Auto-promotie via autoTuneSignalsByClv zodra n≥50 en CLV > 0%.
         const _swNfl = loadSignalWeights();
         const injWeight = _swNfl.nfl_injury_diff !== undefined ? _swNfl.nfl_injury_diff : 0;
-        const injAdj = nflInjuryDiff * 0.005 * injWeight; // 0.5% per blessure-verschil, gewogen
+        const injAdj = nflInjuryDiff * 0.005 * injWeight;
 
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj + totalAdv + injAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5 - injAdj * 0.5);
+        // Stakes (logged-only scaffolding)
+        const nflTotalTeams = Object.keys(standingsMap).length;
+        const hmStakesN = calcStakesByRank(hmSt?.rank, nflTotalTeams, 'american-football');
+        const awStakesN = calcStakesByRank(awSt?.rank, nflTotalTeams, 'american-football');
+        const nflStakesW = _swNfl.stakes !== undefined ? _swNfl.stakes : 0;
+        const stakesAdj = (hmStakesN.adj - awStakesN.adj) * nflStakesW;
+        const stakesNote = (hmStakesN.label || awStakesN.label) ? ` | Stakes: ${hmStakesN.label||'—'} vs ${awStakesN.label||'—'}` : '';
+
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj + totalAdv + injAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5 - injAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -4292,6 +4353,7 @@ async function runFootballUS(emit) {
         if (divisionAdj !== 0) matchSignals.push(`division_rivalry:${(divisionAdj*100).toFixed(1)}%`);
         // logged-only (nog niet in adjHome/adjAway gewogen): nfl_injury_diff
         if (nflInjuryDiff !== 0) matchSignals.push(`nfl_injury_diff:${nflInjuryDiff>0?'+':''}${nflInjuryDiff}`);
+        if (hmStakesN.adj !== 0 || awStakesN.adj !== 0) matchSignals.push(`stakes:${((hmStakesN.adj - awStakesN.adj)*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
@@ -4663,12 +4725,20 @@ async function runHandball(emit) {
         const hbInjDiff = hbInjAway - hbInjHome;
         const _swHb = loadSignalWeights();
         const hbInjW = _swHb.handball_injury_diff !== undefined ? _swHb.handball_injury_diff : 0;
-        const hbInjAdj = hbInjDiff * 0.007 * hbInjW; // 0.7% per blessure (handball: 7-speler roster, impact hoger)
+        const hbInjAdj = hbInjDiff * 0.007 * hbInjW;
+
+        // Stakes (logged-only scaffolding)
+        const hbTotalTeams = Object.keys(standingsMap).length;
+        const hmStakesH = calcStakesByRank(hmSt?.rank, hbTotalTeams, 'handball');
+        const awStakesH = calcStakesByRank(awSt?.rank, hbTotalTeams, 'handball');
+        const hbStakesW = _swHb.stakes !== undefined ? _swHb.stakes : 0;
+        const stakesAdj = (hmStakesH.adj - awStakesH.adj) * hbStakesW;
+        const stakesNote = (hmStakesH.label || awStakesH.label) ? ` | Stakes: ${hmStakesH.label||'—'} vs ${awStakesH.label||'—'}` : '';
 
         // Home advantage is STRONG in handball (~60%)
         const ha = league.ha || 0.06;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + hbInjAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - hbInjAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + hbInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - hbInjAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -4684,6 +4754,7 @@ async function runHandball(emit) {
         if (Math.abs(homeWRAdj) >= 0.005) matchSignals.push(`home_dominance:+${(homeWRAdj*100).toFixed(1)}%`);
         if (Math.abs(formMomentumAdj) >= 0.005) matchSignals.push(`momentum:${formMomentumAdj>0?'+':''}${(formMomentumAdj*100).toFixed(1)}%`);
         if (hbInjDiff !== 0) matchSignals.push(`handball_injury_diff:${hbInjDiff>0?'+':''}${hbInjDiff}`);
+        if (hmStakesH.adj !== 0 || awStakesH.adj !== 0) matchSignals.push(`stakes:${((hmStakesH.adj - awStakesH.adj)*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
