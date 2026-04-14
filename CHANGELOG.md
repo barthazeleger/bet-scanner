@@ -2,6 +2,11 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.6.3] - 2026-04-14
+
+### Added (one-shot reminder)
+- Bet365-limit reminder in `/api/notifications`: toont tussen 19-26 apr 2026 een inbox-alert als Bet365 nog niet terug in `preferredBookies` staat. Code getagd met `// TODO: remove after 2026-04-26`, self-expiring via date-window.
+
 ## [10.6.2] - 2026-04-14
 
 ### Fixed

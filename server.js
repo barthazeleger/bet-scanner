@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.6.2';
+const APP_VERSION    = '10.6.3';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -8048,6 +8048,27 @@ app.get('/api/notifications', async (req, res) => {
         modelUpdate: true,
       });
     }
+
+    // TODO: remove after 2026-04-26 — one-shot Bet365-limit reminder
+    // Vuurt tussen 19-26 apr 2026 als Bet365 nog uit staat in preferredBookies.
+    try {
+      const now = new Date();
+      const start = new Date('2026-04-19T00:00:00+02:00');
+      const expire = new Date('2026-04-26T00:00:00+02:00');
+      if (now >= start && now < expire) {
+        const users = await loadUsers();
+        const user = users.find(u => u.id === req.user?.id);
+        const prefs = user?.settings?.preferredBookies;
+        const hasBet365 = Array.isArray(prefs) && prefs.some(b => (b || '').toLowerCase().includes('bet365'));
+        if (!hasBet365) {
+          alerts.push({
+            type: 'info',
+            icon: '🔓',
+            msg: 'Bet365-limiet is afgelopen (19 apr). Zet Bet365 weer aan in Settings → preferred bookies.',
+          });
+        }
+      }
+    } catch {}
 
     // Supabase database grootte check (free tier = 500MB)
     try {
