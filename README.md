@@ -1,4 +1,4 @@
-# EdgePickr v9.3
+# EdgePickr v9.9
 
 Multi-sport betting analytics platform met een zelflerend Poisson-model per sport, market-derived sanity checks, CLV-tracking, PWA met push notificaties en een admin-panel.
 
@@ -21,6 +21,12 @@ Multi-sport betting analytics platform met een zelflerend Poisson-model per spor
 | **Data tab** | Bankroll-grafiek, hit rate per score/markt, signal attribution, timing-analyse, per-sport winrate |
 | **PWA** | iOS/Android installatie, offline-cache, Web Push notificaties |
 | **Admin panel** | Gebruikers goedkeuren, scan history beheren, bets recalculate, model feed, debug endpoints |
+| **v2 Snapshot layer** | fixtures, odds_snapshots, feature_snapshots, market_consensus tabellen + 90-min polling |
+| **v2 Pick pipeline** | model_versions + model_runs + pick_candidates met rejected_reason logging |
+| **Kill-switch** | Auto-disable markt bij avg CLV < -5% over ≥30 settled bets, admin override |
+| **Walk-forward backtest** | Brier + log loss + calibration buckets per sport/window |
+| **Hierarchical calibration** | Bayesian smoothing global → sport → market → league |
+| **Residual model framework** | Skeleton activeert bij ≥500 picks/markt voor logistic regression delta |
 
 ## Stack
 
@@ -85,7 +91,7 @@ Rate-limited op 200ms per bet. Return `{ scanned, filled, failed, details }`.
 ## Testsuite
 
 ```bash
-npm test     # 108 tests · endpoints, calibratie, signals, edge cases, market derivation
+npm test     # 169 tests · endpoints, calibratie, signals, edge cases, market derivation, v2 integration
 ```
 
 ### Test-categorieën
@@ -107,7 +113,8 @@ EdgePickr is ontworpen met deze principes:
 
 ## Documentatie
 
-Zie [BUSINESS_PLAN.md](./BUSINESS_PLAN.md) voor business-case, kosten, go-to-market.
+Zie [docs/BUSINESS_PLAN.md](./docs/BUSINESS_PLAN.md) voor business-case, kosten, go-to-market.
+Zie [docs/RESEARCH_MARKETS_SIGNALS.md](./docs/RESEARCH_MARKETS_SIGNALS.md) voor markt/signal expansion onderzoek.
 Zie [CHANGELOG.md](./CHANGELOG.md) voor versiegeschiedenis.
 
 ## Licentie
