@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.0.5';
+const APP_VERSION    = '9.0.6';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -317,7 +317,7 @@ function updateCalibration(bet, userId = null) {
     if (user && user.role !== 'admin') return; // skip non-admin bets
   }
   const c    = loadCalib();
-  const mKey = `${bet.sport || 'football'}_${detectMarket(bet.markt || '')}`;
+  const mKey = `${normalizeSport(bet.sport)}_${detectMarket(bet.markt || '')}`;
   const lg   = bet.wedstrijd?.split(' vs ')?.[0] ? (bet.league || 'Unknown') : 'Unknown';
   const won  = bet.uitkomst === 'W';
   const pnl  = parseFloat(bet.wl) || 0;
@@ -4707,7 +4707,22 @@ app.get('/api/bets/correlations', async (req, res) => {
 // Haalt huidige odds op voor het specifieke event en vergelijkt met gelogde odds.
 // Stuurt Telegram ping als: odds gedrift >8%, of als aftrap veranderd is.
 // ── SPORT-AWARE API HELPERS ──────────────────────────────────────────────────
+// Normaliseer sport-string (Dutch UI labels of varianten) naar canonical English slug
+function normalizeSport(s) {
+  const k = (s || '').toString().trim().toLowerCase();
+  const map = {
+    voetbal: 'football', football: 'football', soccer: 'football',
+    basketball: 'basketball', basketbal: 'basketball', nba: 'basketball',
+    ijshockey: 'hockey', hockey: 'hockey', nhl: 'hockey', 'ice hockey': 'hockey',
+    honkbal: 'baseball', baseball: 'baseball', mlb: 'baseball',
+    'american football': 'american-football', 'american-football': 'american-football', nfl: 'american-football',
+    handbal: 'handball', handball: 'handball',
+  };
+  return map[k] || 'football';
+}
+
 function getSportApiConfig(sport) {
+  sport = normalizeSport(sport);
   const configs = {
     football:          { host: 'v3.football.api-sports.io', fixturesPath: '/fixtures', oddsPath: '/odds', fixtureParam: 'fixture', gameParam: 'fixture' },
     basketball:        { host: 'v1.basketball.api-sports.io', fixturesPath: '/games', oddsPath: '/odds', fixtureParam: 'game', gameParam: 'game' },
@@ -4750,6 +4765,7 @@ function teamMatchScore(apiName, queryName) {
 // Zoekt over gisteren + vandaag + morgen (Amsterdam-tz) zodat nachtwedstrijden
 // (NHL/NBA 01:00-04:00) die onder een Amerikaanse datum vallen ook gevonden worden.
 async function findGameId(sport, matchName) {
+  sport = normalizeSport(sport);
   const cfg = getSportApiConfig(sport);
   const parts = (matchName || '').split(' vs ').map(s => s.trim());
   if (parts.length < 2) return null;
@@ -4802,6 +4818,7 @@ async function findGameId(sport, matchName) {
 
 // Verbose variant voor diagnostiek: geeft fxId + fixturesFetched + topCandidates terug
 async function findGameIdVerbose(sport, matchName) {
+  sport = normalizeSport(sport);
   const cfg = getSportApiConfig(sport);
   const parts = (matchName || '').split(' vs ').map(s => s.trim());
   const out = { fxId: null, host: cfg.host, fixturesFetched: {}, topCandidates: [], threshold: 50, error: null };
