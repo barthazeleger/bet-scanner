@@ -1631,12 +1631,15 @@ function fairProbs2Way(oddsArr) {
 // Nieuw: threeWay (Home/Draw/Away 60-min regulation) voor hockey 3-weg ML
 function parseGameOdds(oddsResp, homeTeam, awayTeam) {
   const bookmakers = oddsResp?.[0]?.bookmakers || oddsResp?.bookmakers || [];
-  if (!bookmakers.length) return { moneyline: [], totals: [], spreads: [], halfML: [], halfTotals: [], halfSpreads: [], nrfi: [], oddEven: [], threeWay: [] };
+  if (!bookmakers.length) return { moneyline: [], totals: [], spreads: [], halfML: [], halfTotals: [], halfSpreads: [], nrfi: [], oddEven: [], threeWay: [], teamTotals: [], doubleChance: [], dnb: [] };
 
   const ml = [], tots = [], spr = [];
   const halfML = [], halfTotals = [], halfSpreads = [];
   const nrfi = [], oddEven = [];
   const threeWay = [];
+  const teamTotals = []; // { team: 'home'|'away', side: 'over'|'under', point, price, bookie }
+  const doubleChance = []; // { side: 'HX'|'X2'|'12', price, bookie }
+  const dnb = []; // { side: 'home'|'away', price, bookie }
   for (const bk of bookmakers) {
     const bkName = bk.name || bk.bookmaker?.name || 'Unknown';
     for (const bet of (bk.bets || [])) {
@@ -1716,6 +1719,50 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
         }
       }
 
+      // ── Team Totals (Home/Away Team Total Goals/Points, incl. OT full-game lijn) ──
+      // Voorbeeld bet names: "Home Team Total Goals (Including OT)" of "Home Team Total Points"
+      const isTeamTotalBet = (betName.includes('home team total') || betName.includes('away team total')) &&
+        !betName.includes('1st') && !betName.includes('2nd') && !betName.includes('3rd') &&
+        !betName.includes('period') && !betName.includes('half') && !betName.includes('quarter');
+      if (isTeamTotalBet) {
+        const team = betName.includes('home') ? 'home' : 'away';
+        for (const v of (bet.values || [])) {
+          const m = String(v.value || '').match(/(Over|Under)\s+([\d.]+)/i);
+          if (m) {
+            const point = parseFloat(m[2]);
+            const price = parseFloat(v.odd) || 0;
+            if (price > 1.0 && isFinite(point)) {
+              teamTotals.push({ team, side: m[1].toLowerCase(), point, price, bookie: bkName });
+            }
+          }
+        }
+      }
+
+      // ── Double Chance (3 values: Home/Draw, Home/Away, Draw/Away) ──
+      if (betName.includes('double chance') && !betName.includes('half') && !betName.includes('period') && !betName.includes('quarter')) {
+        for (const v of (bet.values || [])) {
+          const val = String(v.value || '').trim();
+          const price = parseFloat(v.odd) || 0;
+          if (price <= 1.0) continue;
+          let side = null;
+          if (val === 'Home/Draw' || val === '1X') side = 'HX';
+          else if (val === 'Home/Away' || val === '12') side = '12';
+          else if (val === 'Draw/Away' || val === 'X2') side = 'X2';
+          if (side) doubleChance.push({ side, price, bookie: bkName });
+        }
+      }
+
+      // ── Draw No Bet (2 values: Home/Away, push op draw) ──
+      if ((betName.includes('draw no bet') || betName === 'dnb') && !betName.includes('half') && !betName.includes('period')) {
+        for (const v of (bet.values || [])) {
+          const val = String(v.value || '').trim();
+          const price = parseFloat(v.odd) || 0;
+          if (price <= 1.0) continue;
+          const side = val === 'Home' ? 'home' : val === 'Away' ? 'away' : null;
+          if (side) dnb.push({ side, price, bookie: bkName });
+        }
+      }
+
       // ── Odd/Even total ──
       if (betName.includes('odd/even') || betName.includes('odd or even') || betName.includes('total odd') || betName.includes('total even')) {
         for (const v of (bet.values || [])) {
@@ -1727,7 +1774,7 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
       }
     }
   }
-  return { moneyline: ml, totals: tots, spreads: spr, halfML, halfTotals, halfSpreads, nrfi, oddEven, threeWay };
+  return { moneyline: ml, totals: tots, spreads: spr, halfML, halfTotals, halfSpreads, nrfi, oddEven, threeWay, teamTotals, doubleChance, dnb };
 }
 
 // Poisson PMF: P(X = k) voor X ~ Poisson(lambda)
@@ -1736,6 +1783,19 @@ function poisson(k, lambda) {
   let result = Math.exp(-lambda);
   for (let i = 1; i <= k; i++) result *= lambda / i;
   return result;
+}
+
+// P(X > line) waar X ~ Poisson(lambda). Voor lines 1.5, 2.5 etc.
+// Gebruikt voor over/under team-totals, totals, player props met count-data.
+function poissonOver(lambda, line) {
+  if (typeof lambda !== 'number' || !isFinite(lambda) || lambda < 0) return 0;
+  if (typeof line !== 'number' || !isFinite(line)) return 0;
+  const threshold = Math.floor(line); // 1.5 → 1; P(X > 1) = P(X >= 2)
+  let cumulative = 0;
+  const maxK = Math.max(threshold, Math.ceil(lambda * 3 + 10));
+  for (let k = 0; k <= threshold; k++) cumulative += poisson(k, lambda);
+  // clamp voor numerieke stabiliteit
+  return Math.max(0, Math.min(1, 1 - cumulative));
 }
 
 // Bivariate Poisson (independence assumed): P(home>away), P(tie), P(away>home) na regulation.
@@ -2483,26 +2543,31 @@ async function runHockey(emit) {
         const picksBefore = picks.length;
         const diag = [];
 
+        // Expected goals per team (Poisson input, gebruikt voor 3-way én team totals)
+        const hmGFpg = hmSt?.totalGames ? (hmSt.goalsFor / hmSt.totalGames) : 3.1;
+        const hmGApg = hmSt?.totalGames ? (hmSt.goalsAgainst / hmSt.totalGames) : 3.1;
+        const awGFpg = awSt?.totalGames ? (awSt.goalsFor / awSt.totalGames) : 3.1;
+        const awGApg = awSt?.totalGames ? (awSt.goalsAgainst / awSt.totalGames) : 3.1;
+        const formBoost = formAdj * 0.5;
+        const b2bBoost = b2bAdj * 0.5;
+        const expHome = Math.max(0.5, (hmGFpg + awGApg) / 2 + 0.15 + formBoost);
+        const expAway = Math.max(0.5, (awGFpg + hmGApg) / 2 - 0.05 - b2bBoost);
+
         // ── 2-way ML MET MARKET-SANITY-CHECK ──
         const marketFairReg = parsed.threeWay?.length ? consensus3Way(parsed.threeWay) : null;
         const marketFairIncOT = marketFairReg ? deriveIncOTProbFrom3Way(marketFairReg) : null;
+        const sanityHome = marketFairIncOT ? modelMarketSanityCheck(adjHome, marketFairIncOT.home) : null;
+        const sanityAway = marketFairIncOT ? modelMarketSanityCheck(adjAway, marketFairIncOT.away) : null;
+
         if (!marketFairIncOT) diag.push('geen 3-way markt → geen 2-way sanity mogelijk');
         if (!homeOddsOT.length) diag.push('geen OT-bookie odds home');
         if (!awayOddsOT.length) diag.push('geen OT-bookie odds away');
         if (homeEdge < MIN_EDGE) diag.push(`home 2-way edge ${(homeEdge*100).toFixed(1)}% < ${(MIN_EDGE*100).toFixed(1)}%`);
         if (awayEdge < MIN_EDGE) diag.push(`away 2-way edge ${(awayEdge*100).toFixed(1)}% < ${(MIN_EDGE*100).toFixed(1)}%`);
-        if (marketFairIncOT) {
-          const sH = modelMarketSanityCheck(adjHome, marketFairIncOT.home);
-          const sA = modelMarketSanityCheck(adjAway, marketFairIncOT.away);
-          if (!sH.agree) diag.push(`2-way home sanity FAIL: model ${(sH.modelProb*100).toFixed(1)}% vs markt ${(sH.marketProb*100).toFixed(1)}% (div ${(sH.divergence*100).toFixed(1)}%)`);
-          if (!sA.agree) diag.push(`2-way away sanity FAIL: model ${(sA.modelProb*100).toFixed(1)}% vs markt ${(sA.marketProb*100).toFixed(1)}% (div ${(sA.divergence*100).toFixed(1)}%)`);
-        }
+        if (sanityHome && !sanityHome.agree) diag.push(`2-way home sanity FAIL: model ${(sanityHome.modelProb*100).toFixed(1)}% vs markt ${(sanityHome.marketProb*100).toFixed(1)}% (div ${(sanityHome.divergence*100).toFixed(1)}%)`);
+        if (sanityAway && !sanityAway.agree) diag.push(`2-way away sanity FAIL: model ${(sanityAway.modelProb*100).toFixed(1)}% vs markt ${(sanityAway.marketProb*100).toFixed(1)}% (div ${(sanityAway.divergence*100).toFixed(1)}%)`);
 
         if (marketFairIncOT) {
-          const sanityHome = modelMarketSanityCheck(adjHome, marketFairIncOT.home);
-          const sanityAway = modelMarketSanityCheck(adjAway, marketFairIncOT.away);
-
-          // Alleen accepteren als én bookie OT-inclusief is én model-markt overeenstemt
           if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS
               && isOTBookieHockey(bH.bookie) && sanityHome.agree) {
             mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
@@ -2516,21 +2581,11 @@ async function runHockey(emit) {
               Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, [...matchSignals, 'sanity_ok']);
           }
         }
-        // Als geen 3-way markt beschikbaar: géén 2-way pick (te riskant zonder sanity)
 
         // ── 3-weg ML (Home/Draw/Away 60-min regulation) via Poisson ──
         // Veilig voor elke bookie: 3-weg wordt altijd op 60-min gesettled, geen OT-verschil.
         if (parsed.threeWay && parsed.threeWay.length) {
-          // Bereken verwachte doelpunten per team uit standings; fallback naar NHL avg ~3.1
-          const hmGFpg = hmSt?.totalGames ? (hmSt.goalsFor / hmSt.totalGames) : 3.1;
-          const hmGApg = hmSt?.totalGames ? (hmSt.goalsAgainst / hmSt.totalGames) : 3.1;
-          const awGFpg = awSt?.totalGames ? (awSt.goalsFor / awSt.totalGames) : 3.1;
-          const awGApg = awSt?.totalGames ? (awSt.goalsAgainst / awSt.totalGames) : 3.1;
-          // Verwachte goals in regulation; home ice +0.15, form en b2b aanpassingen meenemen
-          const formBoost = formAdj * 0.5;
-          const b2bBoost = b2bAdj * 0.5;
-          const expHome = Math.max(0.5, (hmGFpg + awGApg) / 2 + 0.15 + formBoost);
-          const expAway = Math.max(0.5, (awGFpg + hmGApg) / 2 - 0.05 - b2bBoost);
+          // expHome/expAway zijn al boven berekend (voor team totals + 3-way gedeeld)
           const p3 = poisson3Way(expHome, expAway);
 
           const h3 = parsed.threeWay.filter(o => o.side === 'home');
@@ -2564,6 +2619,68 @@ async function runHockey(emit) {
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${aw} wint (60-min)`, bA3.price,
               `3-way: ${(p3.pAway*100).toFixed(1)}% | Markt: ${marketFairReg ? (marketFairReg.away*100).toFixed(1)+'%' : 'n/a'} | ${bA3.bookie}: ${bA3.price}${threeNote} | ${ko}`,
               Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+        }
+
+        // ── Team Totals (full game incl OT) via Poisson ──
+        // Per team een Poisson(lambda) distributie; P(Home scoort > N) = 1 - CDF(N).
+        // Gebruikt lambda + OT-adjustment (OT voegt gemiddeld 0.1 extra goal per team toe
+        // voor de ~23% games die OT bereiken → +0.023 scoring per team all-games avg).
+        if (parsed.teamTotals && parsed.teamTotals.length) {
+          const lambdaHome = expHome + 0.023; // kleine bump voor incl-OT scoring
+          const lambdaAway = expAway + 0.023;
+          const homeTT = parsed.teamTotals.filter(o => o.team === 'home');
+          const awayTT = parsed.teamTotals.filter(o => o.team === 'away');
+          const linesHome = [...new Set(homeTT.map(o => o.point))];
+          const linesAway = [...new Set(awayTT.map(o => o.point))];
+
+          for (const line of linesHome) {
+            const ov = homeTT.filter(o => o.side === 'over' && o.point === line);
+            const un = homeTT.filter(o => o.side === 'under' && o.point === line);
+            const pOver = poissonOver(lambdaHome, line);
+            if (ov.length) {
+              const best = bestFromArr(ov);
+              const edge = best.price > 0 ? pOver * best.price - 1 : -1;
+              if (edge >= MIN_EDGE && best.price >= 1.60 && best.price <= 3.5) {
+                mkP(`${hm} vs ${aw}`, league.name, `📈 ${hm} TT Over ${line}`, best.price,
+                  `Team Total Home: ${(pOver*100).toFixed(1)}% over ${line} (λ=${lambdaHome.toFixed(2)}) | ${best.bookie}: ${best.price} | ${ko}`,
+                  Math.round(pOver*100), edge * 0.22, kickoffTime, best.bookie, [...matchSignals, 'team_total_home']);
+              }
+            }
+            if (un.length) {
+              const best = bestFromArr(un);
+              const pUnder = 1 - pOver;
+              const edge = best.price > 0 ? pUnder * best.price - 1 : -1;
+              if (edge >= MIN_EDGE && best.price >= 1.60 && best.price <= 3.5) {
+                mkP(`${hm} vs ${aw}`, league.name, `📉 ${hm} TT Under ${line}`, best.price,
+                  `Team Total Home: ${(pUnder*100).toFixed(1)}% under ${line} (λ=${lambdaHome.toFixed(2)}) | ${best.bookie}: ${best.price} | ${ko}`,
+                  Math.round(pUnder*100), edge * 0.22, kickoffTime, best.bookie, [...matchSignals, 'team_total_home']);
+              }
+            }
+          }
+          for (const line of linesAway) {
+            const ov = awayTT.filter(o => o.side === 'over' && o.point === line);
+            const un = awayTT.filter(o => o.side === 'under' && o.point === line);
+            const pOver = poissonOver(lambdaAway, line);
+            if (ov.length) {
+              const best = bestFromArr(ov);
+              const edge = best.price > 0 ? pOver * best.price - 1 : -1;
+              if (edge >= MIN_EDGE && best.price >= 1.60 && best.price <= 3.5) {
+                mkP(`${hm} vs ${aw}`, league.name, `📈 ${aw} TT Over ${line}`, best.price,
+                  `Team Total Away: ${(pOver*100).toFixed(1)}% over ${line} (λ=${lambdaAway.toFixed(2)}) | ${best.bookie}: ${best.price} | ${ko}`,
+                  Math.round(pOver*100), edge * 0.22, kickoffTime, best.bookie, [...matchSignals, 'team_total_away']);
+              }
+            }
+            if (un.length) {
+              const best = bestFromArr(un);
+              const pUnder = 1 - pOver;
+              const edge = best.price > 0 ? pUnder * best.price - 1 : -1;
+              if (edge >= MIN_EDGE && best.price >= 1.60 && best.price <= 3.5) {
+                mkP(`${hm} vs ${aw}`, league.name, `📉 ${aw} TT Under ${line}`, best.price,
+                  `Team Total Away: ${(pUnder*100).toFixed(1)}% under ${line} (λ=${lambdaAway.toFixed(2)}) | ${best.bookie}: ${best.price} | ${ko}`,
+                  Math.round(pUnder*100), edge * 0.22, kickoffTime, best.bookie, [...matchSignals, 'team_total_away']);
+              }
+            }
+          }
         }
 
         // Over/Under total goals
