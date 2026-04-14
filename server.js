@@ -16,7 +16,7 @@ const {
   devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck,
   normalizeTeamName, teamMatchScore, normalizeSport,
   detectMarket, calcKelly, kellyToUnits, epBucketKey,
-  pitcherAdjustment, recomputeWl,
+  pitcherAdjustment, shotsDifferentialAdjustment, recomputeWl,
 } = modelMath;
 
 // ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
@@ -171,7 +171,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.4.1';
+const APP_VERSION    = '9.5.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1907,6 +1907,118 @@ async function fetchMlbProbablePitchers(date) {
 
 // pitcherAdjustment() komt uit lib/model-math.js
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// NHL PUBLIC API (api-web.nhle.com)
+// Publieke officiële NHL API, geen auth. Levert team season stats (shots, goals, etc).
+// Fail-safe: bij API-outage/timeout → leeg return, hockey scan gaat door zonder signal.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Map api-sports NHL team namen naar NHL API team abbreviations (tri-code).
+// Wordt gebruikt om /club-stats-season/{ABBREV}/now op te vragen.
+const NHL_TEAM_ABBREV = {
+  'anaheim ducks': 'ANA',
+  'arizona coyotes': 'UTA', 'utah mammoth': 'UTA', 'utah hockey club': 'UTA',
+  'boston bruins': 'BOS',
+  'buffalo sabres': 'BUF',
+  'calgary flames': 'CGY',
+  'carolina hurricanes': 'CAR',
+  'chicago blackhawks': 'CHI',
+  'colorado avalanche': 'COL',
+  'columbus blue jackets': 'CBJ',
+  'dallas stars': 'DAL',
+  'detroit red wings': 'DET',
+  'edmonton oilers': 'EDM',
+  'florida panthers': 'FLA',
+  'los angeles kings': 'LAK', 'la kings': 'LAK',
+  'minnesota wild': 'MIN',
+  'montreal canadiens': 'MTL',
+  'nashville predators': 'NSH',
+  'new jersey devils': 'NJD',
+  'new york islanders': 'NYI',
+  'new york rangers': 'NYR',
+  'ottawa senators': 'OTT',
+  'philadelphia flyers': 'PHI',
+  'pittsburgh penguins': 'PIT',
+  'seattle kraken': 'SEA',
+  'san jose sharks': 'SJS',
+  'st. louis blues': 'STL', 'st louis blues': 'STL',
+  'tampa bay lightning': 'TBL',
+  'toronto maple leafs': 'TOR',
+  'vancouver canucks': 'VAN',
+  'vegas golden knights': 'VGK',
+  'washington capitals': 'WSH',
+  'winnipeg jets': 'WPG',
+};
+
+function nhlTeamAbbrev(teamName) {
+  const key = (teamName || '').toLowerCase().trim();
+  return NHL_TEAM_ABBREV[key] || null;
+}
+
+const NHL_FETCH_TIMEOUT_MS = 5000;
+const NHL_STATS_TTL_MS = 60 * 60 * 1000; // 1u cache per team
+let _nhlStatsCache = {}; // abbrev → { data, at }
+
+async function nhlFetch(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NHL_FETCH_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': 'EdgePickr/9.x' },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    clearTimeout(timer);
+    return null;
+  }
+}
+
+// Haal team season stats op via nhl.com public API. Retry-safe, cached 1u.
+// Returns null bij outage of ongeldige data.
+async function fetchNhlTeamStats(abbrev) {
+  if (!abbrev) return null;
+  const cached = _nhlStatsCache[abbrev];
+  if (cached && Date.now() - cached.at < NHL_STATS_TTL_MS) return cached.data;
+  try {
+    const url = `https://api-web.nhle.com/v1/club-stats-season/${abbrev}`;
+    const data = await nhlFetch(url);
+    // Response: array van seasons; pak huidige (laatste).
+    const seasons = Array.isArray(data) ? data : null;
+    if (!seasons || !seasons.length) {
+      _nhlStatsCache[abbrev] = { data: null, at: Date.now() };
+      return null;
+    }
+    // De huidige actieve seizoen heeft gameTypeId=2 (regular) of 3 (playoffs)
+    const current = seasons.filter(s => s.gameTypeId === 2 || s.gameTypeId === 3).pop() || seasons.pop();
+    if (!current) {
+      _nhlStatsCache[abbrev] = { data: null, at: Date.now() };
+      return null;
+    }
+    // Normaliseer naar internal schema
+    const stats = {
+      abbrev,
+      season: current.season,
+      gp: current.gamesPlayed || 0,
+      goalsFor: current.goalsFor || 0,
+      goalsAgainst: current.goalsAgainst || 0,
+      shotsFor: current.shotsForPerGame ? current.shotsForPerGame * (current.gamesPlayed || 0) : 0,
+      shotsAgainst: current.shotsAgainstPerGame ? current.shotsAgainstPerGame * (current.gamesPlayed || 0) : 0,
+      shotsForPerGame: current.shotsForPerGame || 0,
+      shotsAgainstPerGame: current.shotsAgainstPerGame || 0,
+      ppPct: current.powerPlayPct || 0,
+      pkPct: current.penaltyKillPct || 0,
+    };
+    _nhlStatsCache[abbrev] = { data: stats, at: Date.now() };
+    return stats;
+  } catch {
+    _nhlStatsCache[abbrev] = { data: null, at: Date.now() };
+    return null;
+  }
+}
+
 // Scan-wide filter: alleen odds van deze bookies tellen mee voor pick generation.
 // Consensus/fair-probability blijft uit ALLE bookies berekend (markt-truth).
 let _preferredBookiesLower = null;
@@ -2503,7 +2615,20 @@ async function runHockey(emit) {
           }
         }
 
-        const totalAdv = goalDiffAdj + homeRecordAdj;
+        // NHL shots-differential signal (van nhl.com public API).
+        // Cached per team voor 1u; bij API-outage geen signal (graceful fallback).
+        const hmAbbrev = nhlTeamAbbrev(hm);
+        const awAbbrev = nhlTeamAbbrev(aw);
+        let shotsSig = { adj: 0, note: null, valid: false };
+        if (hmAbbrev && awAbbrev) {
+          const [hmNhl, awNhl] = await Promise.all([
+            fetchNhlTeamStats(hmAbbrev).catch(() => null),
+            fetchNhlTeamStats(awAbbrev).catch(() => null),
+          ]);
+          shotsSig = shotsDifferentialAdjustment(hmNhl, awNhl);
+        }
+
+        const totalAdv = goalDiffAdj + homeRecordAdj + shotsSig.adj;
 
         const ha = league.ha || 0.03;
         const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv);
@@ -2526,10 +2651,12 @@ async function runHockey(emit) {
         if (b2bAdj !== 0) matchSignals.push(`b2b:${b2bAdj>0?'+':''}${(b2bAdj*100).toFixed(1)}%`);
         if (Math.abs(goalDiffAdj) >= 0.005) matchSignals.push(`goal_diff:${goalDiffAdj>0?'+':''}${(goalDiffAdj*100).toFixed(1)}%`);
         if (Math.abs(homeRecordAdj) >= 0.005) matchSignals.push(`home_away_record:${homeRecordAdj>0?'+':''}${(homeRecordAdj*100).toFixed(1)}%`);
+        if (shotsSig.valid && Math.abs(shotsSig.adj) >= 0.003) matchSignals.push(`nhl_shots_diff:${shotsSig.adj>0?'+':''}${(shotsSig.adj*100).toFixed(1)}%`);
 
         const posStr = posAdj !== 0 ? ` | Positie: ${posAdj>0?'+':''}${(posAdj*100).toFixed(1)}%` : '';
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
-        const sharedNotes = `${posStr}${formNote}${b2bNote}${goalDiffNote}${homeRecordNote}`;
+        const shotsNote = shotsSig.valid ? ` | ${shotsSig.note}` : '';
+        const sharedNotes = `${posStr}${formNote}${b2bNote}${goalDiffNote}${homeRecordNote}${shotsNote}`;
 
         // Per-game diagnostics (admin-only)
         const picksBefore = picks.length;

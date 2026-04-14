@@ -10,7 +10,7 @@ const {
   poisson, poissonOver, poisson3Way,
   devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck,
   normalizeTeamName, teamMatchScore, normalizeSport, detectMarket,
-  pitcherAdjustment, recomputeWl,
+  pitcherAdjustment, shotsDifferentialAdjustment, recomputeWl,
   NHL_OT_HOME_SHARE, MODEL_MARKET_DIVERGENCE_THRESHOLD,
 } = modelMath;
 
@@ -1249,6 +1249,42 @@ test('pitcherAdjustment: note bevat ERA-verschil', () => {
   assert.ok(r.note.includes('Adams'));
   assert.ok(r.note.includes('3.00'));
   assert.ok(r.note.includes('4.20'));
+});
+
+// ── NHL shots-differential signal ──────────────────────────────────────────
+
+test('shotsDifferentialAdjustment: dominant home → positieve adj', () => {
+  const home = { gp: 50, shotsFor: 1700, shotsAgainst: 1300 }; // SF% = 0.567
+  const away = { gp: 50, shotsFor: 1400, shotsAgainst: 1600 }; // SF% = 0.467
+  const r = shotsDifferentialAdjustment(home, away);
+  assert.strictEqual(r.valid, true);
+  assert.ok(r.adj > 0, 'home dominanter in shot-control → positieve adj');
+});
+
+test('shotsDifferentialAdjustment: clamped op ±3%', () => {
+  const home = { gp: 50, shotsFor: 2000, shotsAgainst: 1000 }; // 0.667
+  const away = { gp: 50, shotsFor: 1000, shotsAgainst: 2000 }; // 0.333
+  const r = shotsDifferentialAdjustment(home, away);
+  assert.ok(Math.abs(r.adj - 0.03) < 1e-9, 'extreme verschil → clamped 3%');
+});
+
+test('shotsDifferentialAdjustment: <20 GP → invalid', () => {
+  const home = { gp: 10, shotsFor: 300, shotsAgainst: 250 };
+  const away = { gp: 50, shotsFor: 1500, shotsAgainst: 1500 };
+  assert.strictEqual(shotsDifferentialAdjustment(home, away).valid, false);
+});
+
+test('shotsDifferentialAdjustment: missing data → safe null', () => {
+  assert.strictEqual(shotsDifferentialAdjustment(null, null).valid, false);
+  assert.strictEqual(shotsDifferentialAdjustment({}, {}).valid, false);
+  assert.strictEqual(shotsDifferentialAdjustment({ gp: 30, shotsFor: NaN, shotsAgainst: 100 }, { gp: 30, shotsFor: 100, shotsAgainst: 100 }).valid, false);
+});
+
+test('shotsDifferentialAdjustment: balanced teams → adj ≈ 0', () => {
+  const home = { gp: 50, shotsFor: 1500, shotsAgainst: 1500 };
+  const away = { gp: 50, shotsFor: 1500, shotsAgainst: 1500 };
+  const r = shotsDifferentialAdjustment(home, away);
+  assert.ok(Math.abs(r.adj) < 1e-9, 'gelijk = 0 adj');
 });
 
 // ── Double Chance derived probs ─────────────────────────────────────────────
