@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.6.5';
+const APP_VERSION    = '10.6.6';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2385,6 +2385,27 @@ function setPreferredBookies(list) {
   }
 }
 
+// Groepeer spreads per point-line en return beste edge-qualifying pick.
+// Voorkomt mixing-points bug waarbij bestFromArr over ALLE points zoekt en
+// pick wordt geskipt door de maxOdds-3.8 ceiling bij extreme point-lines.
+function bestSpreadPick(spreads, fairProb, minEdge, minOdds = 1.60, maxOdds = 3.8) {
+  if (!spreads || !spreads.length) return null;
+  const byPoint = {};
+  for (const s of spreads) {
+    const k = String(s.point);
+    (byPoint[k] = byPoint[k] || []).push(s);
+  }
+  let best = null;
+  for (const [pt, pool] of Object.entries(byPoint)) {
+    const top = bestFromArr(pool);
+    if (top.price < minOdds || top.price > maxOdds) continue;
+    const edge = fairProb * top.price - 1;
+    if (edge < minEdge) continue;
+    if (!best || edge > best.edge) best = { ...top, point: parseFloat(pt), edge };
+  }
+  return best;
+}
+
 // Best odds uit parsed array; als preferredBookies is ingesteld, alleen die tellen.
 function bestFromArr(arr) {
   let pool = arr || [];
@@ -2745,31 +2766,23 @@ async function runBasketball(emit) {
           }
         }
 
-        // Spread
-        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
-        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
-        if (homeSpr.length) {
-          const best = bestFromArr(homeSpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpHome * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
-                `Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+        // Spread (NBA, variabele lijnen) — groepeer per point, pak beste binnen preferred pool.
+        {
+          const homeSpr = parsed.spreads.filter(o => o.side === 'home');
+          const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          if (bH) {
+            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+              `Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-        }
-        if (awaySpr.length) {
-          const best = bestFromArr(awaySpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpAway * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
-                `Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          if (bA) {
+            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+              `Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
 
@@ -3353,9 +3366,9 @@ async function runHockey(emit) {
           }
         }
 
-        // Puck line (spread)
-        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
-        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+        // Puck line (spread) — NHL standard is ±1.5. Zelfde fix als MLB run line.
+        const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
+        const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
         if (homeSpr.length) {
           const best = bestFromArr(homeSpr);
           if (best.price >= 1.60 && best.price <= 3.8) {
@@ -3774,9 +3787,11 @@ async function runBaseball(emit) {
           }
         }
 
-        // Run Line (spread, usually -1.5/+1.5)
-        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
-        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+        // Run Line (spread) — MLB standard is ±1.5. Eerder bug: pool mixte
+        // verschillende point-lines (bv -1.5 @ 2.17 en -2.5 @ 4.20), waardoor
+        // bestFromArr soms >3.8 terugkwam en pick geskipt werd. Nu filter op ±1.5.
+        const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
+        const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
         if (homeSpr.length) {
           const best = bestFromArr(homeSpr);
           if (best.price >= 1.60 && best.price <= 3.8) {
@@ -4215,31 +4230,23 @@ async function runFootballUS(emit) {
           }
         }
 
-        // Spread (e.g., Home -3.5)
-        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
-        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
-        if (homeSpr.length) {
-          const best = bestFromArr(homeSpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpHome * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
-                `Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+        // Spread (NFL, vaste lijn per match, bookies variëren ±0.5)
+        {
+          const homeSpr = parsed.spreads.filter(o => o.side === 'home');
+          const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          if (bH) {
+            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+              `Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-        }
-        if (awaySpr.length) {
-          const best = bestFromArr(awaySpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpAway * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
-                `Spread | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          if (bA) {
+            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+              `Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
 
@@ -4633,31 +4640,23 @@ async function runHandball(emit) {
           }
         }
 
-        // Handicap
-        const homeSpr = parsed.spreads.filter(o => o.side === 'home');
-        const awaySpr = parsed.spreads.filter(o => o.side === 'away');
-        if (homeSpr.length) {
-          const best = bestFromArr(homeSpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpHome * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = homeSpr[0].point > 0 ? `+${homeSpr[0].point}` : `${homeSpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, best.price,
-                `Handicap | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpHome*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+        // Handicap (handball, variabele lijnen)
+        {
+          const homeSpr = parsed.spreads.filter(o => o.side === 'home');
+          const awaySpr = parsed.spreads.filter(o => o.side === 'away');
+          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          if (bH) {
+            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+              `Handicap | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-        }
-        if (awaySpr.length) {
-          const best = bestFromArr(awaySpr);
-          if (best.price >= 1.60 && best.price <= 3.8) {
-            const sEdge = fpAway * best.price - 1;
-            if (sEdge >= MIN_EDGE + 0.01) {
-              const pt = awaySpr[0].point > 0 ? `+${awaySpr[0].point}` : `${awaySpr[0].point}`;
-              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, best.price,
-                `Handicap | ${best.bookie}: ${best.price}${sharedNotes} | ${ko}`,
-                Math.round(fpAway*100), sEdge * 0.20, kickoffTime, best.bookie, matchSignals);
-            }
+          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          if (bA) {
+            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+              `Handicap | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
       }

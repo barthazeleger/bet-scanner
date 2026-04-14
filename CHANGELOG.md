@@ -2,6 +2,14 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.6.6] - 2026-04-14
+
+### Fixed (KRITIEK — spread/handicap mixing-points bug in ALLE sports)
+- **Oorzaak**: `homeSpr = spreads.filter(side==='home')` gaf ALLE point-lines terug in één array. `bestFromArr(homeSpr)` pakte vervolgens de hoogste prijs ongeacht point-line. Gevolg: een bookie met -3.5 @ 4.20 wint van dezelfde sport met -1.5 @ 2.17, en check `price <= 3.8` gooide de hele pick weg.
+- **Gevolg voor gebruiker**: Dodgers -1.5 @ Unibet 2.17 (7/10 pick) verscheen wel in Unibet-only scan (pool uniform op -1.5) maar NIET in [Bet365+Unibet] scan (waar Bet365's extreme run line de pool contamineerde).
+- **Fix**: Nieuwe module-helper `bestSpreadPick(spreads, fairProb, minEdge)` groepeert per point, runt `bestFromArr` per point-groep, pakt beste edge-qualifying. Toegepast op MLB run line, NHL puck line (beide met extra `±1.5` filter want vaste standard), NBA spread, NFL spread, handball handicap.
+- **Secundaire fix**: label `homeSpr[0].point` was niet gekoppeld aan best.price — kon "Dodgers -1.5" tonen terwijl best eigenlijk Dodgers -2 was. Nu toont label het point van de daadwerkelijke best-pick.
+
 ## [10.6.5] - 2026-04-14
 
 ### Fixed (kritiek)
