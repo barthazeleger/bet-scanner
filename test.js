@@ -1416,6 +1416,123 @@ test('full pipeline: model-market agreement → accept', () => {
   assert.strictEqual(sanity.agree, true, 'model binnen 0.04 van markt → accepteer');
 });
 
+// ── Regression: code-review findings v9.4.1 ────────────────────────────────
+
+console.log('\n  Code-review regressions (v9.4.1):');
+
+// Helper: simuleer de wl-recompute logica van PUT /api/bets/:id na odds/units edit
+function recomputeWl(row, unitEur = 25) {
+  if (!row || (row.uitkomst !== 'W' && row.uitkomst !== 'L')) return null;
+  const inzet = row.inzet != null ? row.inzet : +((row.units || 0) * unitEur).toFixed(2);
+  return row.uitkomst === 'W'
+    ? +((row.odds - 1) * inzet).toFixed(2)
+    : +(-inzet).toFixed(2);
+}
+
+test('recomputeWl: W bet met hogere odds geeft hogere wl', () => {
+  const row = { uitkomst: 'W', odds: 2.0, units: 1.0, inzet: 25 };
+  const wl1 = recomputeWl(row);
+  row.odds = 2.5; // odds aangepast
+  const wl2 = recomputeWl(row);
+  assert.ok(wl2 > wl1, 'hogere odds → hogere winst');
+});
+
+test('recomputeWl: L bet met hogere inzet geeft groter verlies', () => {
+  const row = { uitkomst: 'L', odds: 2.0, units: 1.0, inzet: 25 };
+  const wl1 = recomputeWl(row);
+  row.inzet = 50; // inzet verhoogd
+  const wl2 = recomputeWl(row);
+  assert.ok(wl2 < wl1, 'hogere inzet → groter verlies');
+  assert.strictEqual(wl1, -25);
+  assert.strictEqual(wl2, -50);
+});
+
+test('recomputeWl: Open bet → null (geen herberekening)', () => {
+  assert.strictEqual(recomputeWl({ uitkomst: 'Open', odds: 2.0, units: 1.0 }), null);
+});
+
+test('recomputeWl: ontbrekende inzet valt terug op units * unitEur', () => {
+  const row = { uitkomst: 'W', odds: 2.0, units: 1.0 };
+  const wl = recomputeWl(row, 25);
+  assert.strictEqual(wl, 25, '1U×€25×(2.0-1) = €25');
+});
+
+// 2FA status check mirror
+function authGateAfterCode(user) {
+  if (!user) return { ok: false, code: 401, error: 'Verificatie mislukt' };
+  if (user.status === 'blocked') return { ok: false, code: 403, error: 'Account geblokkeerd · neem contact op' };
+  if (user.status === 'pending') return { ok: false, code: 403, error: 'Je account wacht nog op goedkeuring. Check je email.' };
+  return { ok: true };
+}
+
+test('2FA status-gate: blocked user geweigerd na code-verify', () => {
+  const r = authGateAfterCode({ id: 1, email: 'x@y.com', status: 'blocked' });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 403);
+  assert.ok(r.error.includes('geblokkeerd'));
+});
+
+test('2FA status-gate: pending user geweigerd', () => {
+  const r = authGateAfterCode({ id: 1, email: 'x@y.com', status: 'pending' });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 403);
+});
+
+test('2FA status-gate: approved user doorgelaten', () => {
+  const r = authGateAfterCode({ id: 1, email: 'x@y.com', status: 'approved' });
+  assert.strictEqual(r.ok, true);
+});
+
+test('2FA status-gate: ontbrekende user → 401', () => {
+  const r = authGateAfterCode(null);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 401);
+});
+
+// Scheduler: admin-timers moeten opgeslagen zijn voor cancelation
+function planAdminScans(admin, userScanTimers, mockScheduler) {
+  const id = admin.id;
+  // Clear oude
+  if (userScanTimers[id]) {
+    userScanTimers[id].forEach(h => h && clearTimeout(h));
+  }
+  if (!admin.settings?.scanEnabled) {
+    userScanTimers[id] = [];
+    return;
+  }
+  const times = admin.settings.scanTimes?.length ? admin.settings.scanTimes : ['07:30'];
+  userScanTimers[id] = times.map(t => mockScheduler(t));
+}
+
+test('scheduler: admin scan-handles worden opgeslagen', () => {
+  const timers = {};
+  let callCount = 0;
+  const fake = (t) => { callCount++; return { fake: true, t }; };
+  planAdminScans({ id: 1, settings: { scanTimes: ['07:30', '14:30'], scanEnabled: true } }, timers, fake);
+  assert.strictEqual(timers[1].length, 2, '2 handles opgeslagen');
+  assert.strictEqual(callCount, 2);
+});
+
+test('scheduler: reschedule vervangt oude handles zonder duplicaten', () => {
+  const timers = {};
+  const made = [];
+  const fake = (t) => { const h = { t }; made.push(h); return h; };
+  // Eerste planning: 2 tijden
+  planAdminScans({ id: 1, settings: { scanTimes: ['07:30', '14:30'], scanEnabled: true } }, timers, fake);
+  // Reschedule met 1 tijd
+  planAdminScans({ id: 1, settings: { scanTimes: ['09:00'], scanEnabled: true } }, timers, fake);
+  assert.strictEqual(timers[1].length, 1, 'na reschedule 1 actieve handle');
+  assert.strictEqual(made.length, 3, 'totaal 3 handles ooit gemaakt (2 oud + 1 nieuw)');
+});
+
+test('scheduler: scanEnabled=false clearst timers', () => {
+  const timers = {};
+  const fake = (t) => ({ t });
+  planAdminScans({ id: 1, settings: { scanTimes: ['07:30'], scanEnabled: true } }, timers, fake);
+  planAdminScans({ id: 1, settings: { scanEnabled: false } }, timers, fake);
+  assert.strictEqual(timers[1].length, 0, 'scanEnabled=false → geen actieve timers');
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);

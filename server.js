@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.4.0';
+const APP_VERSION    = '9.4.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5118,6 +5118,9 @@ app.post('/api/auth/verify-code', async (req, res) => {
     const users = await loadUsers();
     const user = users.find(u => u.email === email.toLowerCase());
     if (!user) return res.status(401).json({ error: 'Verificatie mislukt' });
+    // Herhaal status-check: account kan tussen code-uitgifte en verify geblokkeerd of niet-goedgekeurd zijn
+    if (user.status === 'blocked') return res.status(403).json({ error: 'Account geblokkeerd · neem contact op' });
+    if (user.status === 'pending') return res.status(403).json({ error: 'Je account wacht nog op goedkeuring. Check je email.' });
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id: user.id, email: user.email, role: user.role, settings: user.settings } });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
@@ -5907,7 +5910,7 @@ app.post('/api/bets', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Uitkomst updaten
+// Uitkomst / bet-velden updaten
 app.put('/api/bets/:id', async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -5925,7 +5928,25 @@ app.put('/api/bets/:id', async (req, res) => {
       if (userId) updateQuery = updateQuery.eq('user_id', userId);
       await updateQuery;
     }
-    if (uitkomst) await updateBetOutcome(id, uitkomst, userId);
+    if (uitkomst) {
+      // Uitkomst in dezelfde request: updateBetOutcome herberekent wl
+      await updateBetOutcome(id, uitkomst, userId);
+    } else if (odds != null || units != null) {
+      // Odds of units aangepast zonder nieuwe uitkomst: als bet al settled is, wl herberekenen
+      // zodat bankroll/ROI consistent blijft. Voorkomt stale wl-waarden op historische bets.
+      let readQ = supabase.from('bets').select('*').eq('bet_id', id);
+      if (userId) readQ = readQ.eq('user_id', userId);
+      const { data: row } = await readQ.single();
+      if (row && (row.uitkomst === 'W' || row.uitkomst === 'L')) {
+        const newInzet = row.inzet != null ? row.inzet : +((row.units || 0) * UNIT_EUR).toFixed(2);
+        const newWl = row.uitkomst === 'W'
+          ? +((row.odds - 1) * newInzet).toFixed(2)
+          : +(-newInzet).toFixed(2);
+        let wlQ = supabase.from('bets').update({ wl: newWl }).eq('bet_id', id);
+        if (userId) wlQ = wlQ.eq('user_id', userId);
+        await wlQ;
+      }
+    }
     res.json(await readBets(userId));
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
@@ -7710,13 +7731,26 @@ function scheduleScanAtHour(timeInput) {
 }
 
 function scheduleDailyScan() {
-  // Laad admin settings voor scan-tijden; fallback naar 07:30
+  // Laad admin settings; plan scans en bewaar handles in userScanTimers[admin.id]
+  // zodat rescheduleUserScans(admin) ze netjes kan opruimen en voorkomen dubbele scans.
   loadUsers().then(users => {
-    const admin = users.find(u => u.role === 'admin') || { settings: defaultSettings() };
+    const admin = users.find(u => u.role === 'admin');
+    if (!admin) {
+      // Geen admin-user bekend; plan een losse default-scan. Handle bewaren in _globalScanTimers.
+      _globalScanTimers.push(scheduleScanAtHour('07:30'));
+      return;
+    }
+    // Clear eventuele bestaande admin-timers voor we nieuwe plannen
+    if (userScanTimers[admin.id]) {
+      userScanTimers[admin.id].forEach(h => clearTimeout(h));
+    }
     const times = admin.settings?.scanTimes?.length ? admin.settings.scanTimes : ['07:30'];
-    times.forEach(t => scheduleScanAtHour(t));
-  }).catch(() => scheduleScanAtHour('07:30'));
+    userScanTimers[admin.id] = times.map(t => scheduleScanAtHour(t));
+  }).catch(() => {
+    _globalScanTimers.push(scheduleScanAtHour('07:30'));
+  });
 }
+const _globalScanTimers = []; // fallback-handles als geen admin-user bekend is
 
 // ── DAGELIJKSE UITSLAG CHECK (09:03 AM) ──────────────────────────────────────
 function scheduleDailyResultsCheck() {
