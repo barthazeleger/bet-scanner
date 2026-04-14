@@ -77,11 +77,28 @@ const app = express();
 app.use(express.json({ limit: '50kb' }));
 
 // ── SECURITY HEADERS ──────────────────────────────────────────────────────────
+// CSP: 'unsafe-inline' is nodig omdat index.html veel inline <script>/<style> heeft.
+// Beperk verder strict tot self + benodigde externe API hosts (apple-icon push).
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join('; ');
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
@@ -219,7 +236,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.0.1';
+const APP_VERSION    = '10.0.2';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5990,6 +6007,10 @@ app.post('/api/prematch', (req, res) => {
       if (skippedReasons.same_sport_cap) emit({ log: `🎯 ${skippedReasons.same_sport_cap} pick(s) geskipt: max ${MAX_PER_SPORT} per sport bereikt` });
       if (droppedCount > 0) emit({ log: `🎯 ${topPicks.length}/${MAX_PICKS} picks geselecteerd (${droppedCount} weggelaten door diversification + ranking)` });
 
+      // Tag elke pick met selected=true/false zodat POTD/UI alleen uit selectie kiezen
+      // maar audit/training het volledige lijstje heeft.
+      const topSet = new Set(topPicks);
+      for (const p of allPicks) p.selected = topSet.has(p);
       // Save ALL gerankede picks (incl. niet-geselecteerde) naar scan history voor audit
       saveScanEntry(allPicks, 'prematch', beforeKill);
 
@@ -6830,14 +6851,20 @@ app.get('/api/picks', (req, res) => {
 app.get('/api/potd', requireAdmin, async (req, res) => {
   try {
     let allPicks = [...lastPrematchPicks, ...lastLivePicks];
-    // Fallback: laad uit scan history als geheugen leeg is (na deploy)
+    // Fallback: laad uit scan history als geheugen leeg is (na deploy).
+    // Filter op `selected: true` zodat we picks die door diversification zijn uitgesloten
+    // niet alsnog als POTD pakken.
     if (!allPicks.length) {
       const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
-      if (history.length) allPicks = history[0].picks || [];
+      if (history.length) {
+        const raw = history[0].picks || [];
+        const selectedOnly = raw.filter(p => p.selected !== false); // ondersteun pre-v10.0.2 entries (undefined → keep)
+        allPicks = selectedOnly.length ? selectedOnly : raw;
+      }
     }
     if (!allPicks.length) return res.json({ error: 'Geen picks beschikbaar · draai eerst een scan' });
 
-    // #1 pick = hoogste expectedEur
+    // #1 pick = hoogste expectedEur uit toegestane (selected) picks
     const pick = [...allPicks].sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0))[0];
 
     // Record ophalen
@@ -6918,27 +6945,39 @@ app.get('/api/potd', requireAdmin, async (req, res) => {
 });
 
 // Scan history · laatste N scans met picks
+// SECURITY: model-internals (reason, kelly, ep, strength, expectedEur, signals, scanType)
+// alleen voor admin; non-admin krijgen public-safe veldset zodat IP niet lekt.
+const PUBLIC_PICK_FIELDS = ['match', 'league', 'label', 'odd', 'units', 'prob', 'edge', 'score', 'kickoff', 'bookie', 'sport', 'selected'];
+function safePick(p, isAdmin) {
+  if (isAdmin) return p;
+  const out = {};
+  for (const k of PUBLIC_PICK_FIELDS) if (p[k] !== undefined) out[k] = p[k];
+  return out;
+}
+function safePicksList(picks, isAdmin) {
+  return (picks || []).map(p => safePick(p, isAdmin));
+}
+
 app.get('/api/scan-history', async (req, res) => {
   const isAdmin = req.user?.role === 'admin';
-  // Admin sees ALL scan history (including null user_id entries from system scans).
-  // Non-admin users see only their own + global (null user_id) scans.
   try {
     let query = supabase.from('scan_history').select('*')
       .order('ts', { ascending: false }).limit(SCAN_HISTORY_MAX);
     if (!isAdmin && req.user?.id) {
-      // Try per-user + null filter. If user_id column doesn't exist, this fails silently below.
       query = query.or(`user_id.eq.${req.user.id},user_id.is.null`);
     }
     const { data, error } = await query;
     if (error) throw new Error(error.message);
     const history = (data || []).map(r => ({
-      ts: r.ts, type: r.type, totalEvents: r.total_events, picks: r.picks || []
+      ts: r.ts, type: r.type, totalEvents: r.total_events,
+      picks: safePicksList(r.picks || [], isAdmin),
     }));
     return res.json(history);
   } catch (e) {
     console.error('scan-history query fout:', e.message);
-    const history = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
-    res.json(history);
+    const raw = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
+    const filtered = (raw || []).map(r => ({ ...r, picks: safePicksList(r.picks || [], isAdmin) }));
+    res.json(filtered);
   }
 });
 
@@ -7141,43 +7180,37 @@ app.post('/api/analyze', async (req, res) => {
       }
     } catch {}
 
+    // SECURITY: model-internals (reason, signals, kelly, ep) alleen voor admin.
+    const isAdmin = req.user?.role === 'admin';
+    const projectPick = (p) => {
+      const score = p.score || (p.kelly ? Math.min(10, Math.max(5, Math.round((p.kelly - 0.015) / 0.135 * 5) + 5)) : null);
+      const base = {
+        match: p.match, league: p.league, label: p.label, odd: p.odd,
+        prob: p.prob, units: p.units, edge: p.edge, score,
+        kickoff: p.kickoff, bookie: p.bookie, sport: p.sport || 'football',
+      };
+      if (isAdmin) {
+        base.reason = p.reason;
+        base.signals = p.signals;
+        if (p.kelly !== undefined) base.kelly = p.kelly;
+        if (p.ep !== undefined) base.ep = p.ep;
+        if (p.expectedEur !== undefined) base.expectedEur = p.expectedEur;
+      }
+      return base;
+    };
+
     // If market specified, filter
     if (market) {
       const marketLc = market.toLowerCase();
       const marketMatches = matches.filter(p => (p.label || '').toLowerCase().includes(marketLc.split(' ')[0]));
-      if (marketMatches.length) {
-        const best = marketMatches[0];
-        return res.json({
-          match: best.match, league: best.league, label: best.label, odd: best.odd,
-          prob: best.prob, units: best.units, reason: best.reason, edge: best.edge,
-          score: best.score || (best.kelly ? Math.min(10, Math.max(5, Math.round((best.kelly - 0.015) / 0.135 * 5) + 5)) : null),
-          kickoff: best.kickoff, bookie: best.bookie, signals: best.signals,
-          sport: best.sport || 'football',
-        });
-      }
+      if (marketMatches.length) return res.json(projectPick(marketMatches[0]));
     }
 
     // Return all markets for this match
-    if (matches.length === 1) {
-      const best = matches[0];
-      return res.json({
-        match: best.match, league: best.league, label: best.label, odd: best.odd,
-        prob: best.prob, units: best.units, reason: best.reason, edge: best.edge,
-        score: best.score || (best.kelly ? Math.min(10, Math.max(5, Math.round((best.kelly - 0.015) / 0.135 * 5) + 5)) : null),
-        kickoff: best.kickoff, bookie: best.bookie, signals: best.signals,
-        sport: best.sport || 'football',
-      });
-    }
+    if (matches.length === 1) return res.json(projectPick(matches[0]));
 
     // Multiple results: return multi
-    const results = matches.map(p => ({
-      match: p.match, league: p.league, label: p.label, odd: p.odd,
-      prob: p.prob, units: p.units, reason: p.reason, edge: p.edge,
-      score: p.score || (p.kelly ? Math.min(10, Math.max(5, Math.round((p.kelly - 0.015) / 0.135 * 5) + 5)) : null),
-      kickoff: p.kickoff, bookie: p.bookie, signals: p.signals,
-      sport: p.sport || 'football',
-    }));
-    return res.json({ multi: true, results });
+    return res.json({ multi: true, results: matches.map(projectPick) });
   } catch (e) {
     console.error('Analyze error:', e.message);
     res.status(500).json({ error: 'Analyse mislukt' });
