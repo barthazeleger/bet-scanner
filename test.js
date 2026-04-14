@@ -2,33 +2,21 @@
 
 const assert = require('assert');
 
-// ─── STANDALONE COPIES OF PURE FUNCTIONS FROM server.js ──────────────────────
-// These are copied to test in isolation without needing Supabase/env vars.
+// Pure helpers uit de ECHTE productie-module — geen mirrors meer.
+// Als iemand de implementatie in lib/model-math.js verandert, breken de tests hier.
+const modelMath = require('./lib/model-math');
+const {
+  epBucketKey, calcKelly, kellyToUnits, KELLY_FRACTION,
+  poisson, poissonOver, poisson3Way,
+  devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck,
+  normalizeTeamName, teamMatchScore, normalizeSport, detectMarket,
+  pitcherAdjustment, recomputeWl,
+  NHL_OT_HOME_SHARE, MODEL_MARKET_DIVERGENCE_THRESHOLD,
+} = modelMath;
 
-// EP Bucket Key
-function epBucketKey(ep) {
-  if (ep >= 0.55) return '0.55';
-  if (ep >= 0.45) return '0.45';
-  if (ep >= 0.38) return '0.38';
-  if (ep >= 0.30) return '0.30';
-  return '0.28';
-}
-
-// Kelly Criterion
-const KELLY_FRACTION = 0.50;
-function calcKelly(ep, odd) {
-  const k = ((ep * (odd - 1)) - (1 - ep)) / (odd - 1);
-  return k * KELLY_FRACTION;
-}
-
-// Poisson
-function factorial(n) {
-  let r = 1; for (let i = 2; i <= n; i++) r *= i; return r;
-}
-
-function poissonProb(lambda, k) {
-  return Math.exp(-lambda) * Math.pow(lambda, k) / factorial(k);
-}
+// Voor tests die nog factorial/poissonProb (oude naam) nodig hebben; wrappers via lib.
+function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
+function poissonProb(lambda, k) { return poisson(k, lambda); }
 
 // calcForm
 function calcForm(evts, tid) {
@@ -67,10 +55,7 @@ function createRateLimiter() {
   };
 }
 
-// Unit sizing from half-Kelly
-function kellyToUnits(hk) {
-  return hk > 0.09 ? '1.0U' : hk > 0.04 ? '0.5U' : '0.3U';
-}
+// kellyToUnits komt uit lib/model-math.js
 
 // Score: kelly -> 5-10 scale (implied by strength sorting in server)
 function kellyScore(hk) {
@@ -949,95 +934,8 @@ test('settings whitelist blocks dangerous keys', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MARKET-DERIVED PROBABILITY HELPERS (mirrors server.js)
-// Pure functions gekopieerd voor isolatie. Indien de server-versie wijzigt,
-// update deze mirror ook en draai tests.
+// MARKET-DERIVED PROBABILITY HELPERS komen nu uit lib/model-math.js (geen mirrors meer).
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function devigProportional(oddsArray) {
-  if (!Array.isArray(oddsArray) || !oddsArray.length) return null;
-  const impliedProbs = [];
-  for (const o of oddsArray) {
-    const price = parseFloat(o);
-    if (!price || price <= 1.0 || !isFinite(price)) return null;
-    impliedProbs.push(1 / price);
-  }
-  const sum = impliedProbs.reduce((a, b) => a + b, 0);
-  if (!sum || !isFinite(sum) || sum <= 0) return null;
-  return { probs: impliedProbs.map(p => p / sum), vig: +(sum - 1).toFixed(4) };
-}
-
-function consensus3Way(threeWayOdds) {
-  if (!Array.isArray(threeWayOdds) || !threeWayOdds.length) return null;
-  const byBookie = {};
-  for (const o of threeWayOdds) {
-    const bk = o.bookie || 'unknown';
-    if (!byBookie[bk]) byBookie[bk] = {};
-    byBookie[bk][o.side] = parseFloat(o.price);
-  }
-  const devigged = [];
-  for (const bk of Object.keys(byBookie)) {
-    const b = byBookie[bk];
-    if (!b.home || !b.draw || !b.away) continue;
-    const d = devigProportional([b.home, b.draw, b.away]);
-    if (d) devigged.push(d.probs);
-  }
-  if (!devigged.length) return null;
-  const avgHome = devigged.reduce((s, p) => s + p[0], 0) / devigged.length;
-  const avgDraw = devigged.reduce((s, p) => s + p[1], 0) / devigged.length;
-  const avgAway = devigged.reduce((s, p) => s + p[2], 0) / devigged.length;
-  const total = avgHome + avgDraw + avgAway;
-  return { home: avgHome / total, draw: avgDraw / total, away: avgAway / total, bookieCount: devigged.length };
-}
-
-const NHL_OT_HOME_SHARE = 0.52;
-
-function deriveIncOTProbFrom3Way(pReg, otHomeShare = NHL_OT_HOME_SHARE) {
-  if (!pReg || typeof pReg.home !== 'number' || typeof pReg.draw !== 'number' || typeof pReg.away !== 'number') return null;
-  const share = Math.max(0, Math.min(1, otHomeShare));
-  return { home: pReg.home + pReg.draw * share, away: pReg.away + pReg.draw * (1 - share) };
-}
-
-function modelMarketSanityCheck(modelProb, marketProb, threshold = 0.04) {
-  if (typeof modelProb !== 'number' || typeof marketProb !== 'number' || isNaN(modelProb) || isNaN(marketProb)) {
-    return { agree: false, divergence: null, marketProb, modelProb, threshold, reason: 'invalid_input' };
-  }
-  const divergence = +Math.abs(modelProb - marketProb).toFixed(4);
-  return { agree: divergence <= threshold, divergence, marketProb: +marketProb.toFixed(4), modelProb: +modelProb.toFixed(4), threshold };
-}
-
-// Poisson helpers
-function poisson(k, lambda) {
-  if (lambda <= 0) return k === 0 ? 1 : 0;
-  let result = Math.exp(-lambda);
-  for (let i = 1; i <= k; i++) result *= lambda / i;
-  return result;
-}
-
-function poissonOver(lambda, line) {
-  if (typeof lambda !== 'number' || !isFinite(lambda) || lambda < 0) return 0;
-  if (typeof line !== 'number' || !isFinite(line)) return 0;
-  const threshold = Math.floor(line);
-  let cumulative = 0;
-  for (let k = 0; k <= threshold; k++) cumulative += poisson(k, lambda);
-  return Math.max(0, Math.min(1, 1 - cumulative));
-}
-
-function poisson3Way(expHome, expAway, maxGoals = 12) {
-  let pHome = 0, pTie = 0, pAway = 0;
-  for (let h = 0; h <= maxGoals; h++) {
-    const ph = poisson(h, expHome);
-    for (let a = 0; a <= maxGoals; a++) {
-      const pa = poisson(a, expAway);
-      const joint = ph * pa;
-      if (h > a) pHome += joint;
-      else if (h === a) pTie += joint;
-      else pAway += joint;
-    }
-  }
-  const total = pHome + pTie + pAway;
-  return { pHome: pHome / total, pDraw: pTie / total, pAway: pAway / total };
-}
 
 console.log('\n  Market-derived probability toolkit:');
 
@@ -1298,15 +1196,7 @@ test('poissonOver: lambda=0 edge case', () => {
 
 // ── Pitcher adjustment (MLB) ────────────────────────────────────────────────
 
-function pitcherAdjustment(homePitcher, awayPitcher) {
-  if (!homePitcher?.era || !awayPitcher?.era) return { adj: 0, note: null, valid: false };
-  if ((homePitcher.ip || 0) < 10 || (awayPitcher.ip || 0) < 10) return { adj: 0, note: null, valid: false };
-  const eraDiff = awayPitcher.era - homePitcher.era;
-  const raw = eraDiff * 0.017;
-  const clamped = Math.max(-0.06, Math.min(0.06, raw));
-  const note = `Pitchers: ${homePitcher.name?.split(' ').pop() || 'H'} ${homePitcher.era.toFixed(2)} vs ${awayPitcher.name?.split(' ').pop() || 'A'} ${awayPitcher.era.toFixed(2)} (Δ${eraDiff > 0 ? '+' : ''}${eraDiff.toFixed(2)})`;
-  return { adj: clamped, note, valid: true };
-}
+// pitcherAdjustment komt uit lib/model-math.js
 
 test('pitcherAdjustment: home pitcher beter → positieve adj', () => {
   const r = pitcherAdjustment(
@@ -1420,14 +1310,7 @@ test('full pipeline: model-market agreement → accept', () => {
 
 console.log('\n  Code-review regressions (v9.4.1):');
 
-// Helper: simuleer de wl-recompute logica van PUT /api/bets/:id na odds/units edit
-function recomputeWl(row, unitEur = 25) {
-  if (!row || (row.uitkomst !== 'W' && row.uitkomst !== 'L')) return null;
-  const inzet = row.inzet != null ? row.inzet : +((row.units || 0) * unitEur).toFixed(2);
-  return row.uitkomst === 'W'
-    ? +((row.odds - 1) * inzet).toFixed(2)
-    : +(-inzet).toFixed(2);
-}
+// recomputeWl komt uit lib/model-math.js
 
 test('recomputeWl: W bet met hogere odds geeft hogere wl', () => {
   const row = { uitkomst: 'W', odds: 2.0, units: 1.0, inzet: 25 };

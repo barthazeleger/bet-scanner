@@ -8,6 +8,17 @@ const jwt            = require('jsonwebtoken');
 const bcrypt         = require('bcryptjs');
 const webpush        = require('web-push');
 
+// Pure math & model helpers — geïmporteerd uit lib zodat test.js dezelfde code test
+const modelMath = require('./lib/model-math');
+const {
+  NHL_OT_HOME_SHARE, MODEL_MARKET_DIVERGENCE_THRESHOLD, KELLY_FRACTION,
+  poisson, poissonOver, poisson3Way,
+  devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck,
+  normalizeTeamName, teamMatchScore, normalizeSport,
+  detectMarket, calcKelly, kellyToUnits, epBucketKey,
+  pitcherAdjustment, recomputeWl,
+} = modelMath;
+
 // ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -248,13 +259,7 @@ function rescheduleUserScans(user) {
 // ── CALIBRATIE · leren van resultaten ────────────────────────────────────────
 // ep-bucket sleutels: de ranges die overeenkomen met de epW bonuses in mkP
 const EP_BUCKETS = ['0.28','0.30','0.38','0.45','0.55'];
-function epBucketKey(ep) {
-  if (ep >= 0.55) return '0.55';
-  if (ep >= 0.45) return '0.45';
-  if (ep >= 0.38) return '0.38';
-  if (ep >= 0.30) return '0.30';
-  return '0.28';
-}
+// epBucketKey() komt uit lib/model-math.js
 // Standaard epW gewichten (worden overschreven door calibratie na 100 bets)
 const DEFAULT_EPW = { '0.28':0.80, '0.30':0.95, '0.38':1.05, '0.45':1.15, '0.55':1.25 };
 
@@ -297,21 +302,7 @@ async function saveCalib(c) {
   } catch (e) { console.error('saveCalib error:', e.message); }
 }
 
-function detectMarket(markt = '') {
-  const m = markt.toLowerCase();
-  // 3-weg 60-min markten (hockey/handbal regulation) krijgen hun eigen bucket
-  const is60min = m.includes('60-min') || m.includes('60 min') || m.includes('🕐');
-  if (m.includes('gelijkspel') || m.includes('draw') || m.includes('x2') || m.includes('1x')) {
-    return is60min ? 'draw60' : 'draw';
-  }
-  if (m.includes('wint') || m.includes('winner') || m.includes('home') || m.includes('thuis')) {
-    if (m.includes('✈️') || m.includes('away') || m.includes('uit') || m.match(/→.*away/)) return is60min ? 'away60' : 'away';
-    return is60min ? 'home60' : 'home';
-  }
-  if (m.includes('over') || m.includes('>')) return 'over';
-  if (m.includes('under') || m.includes('<')) return 'under';
-  return 'other';
-}
+// detectMarket() komt uit lib/model-math.js
 
 function updateCalibration(bet, userId = null) {
   if (!bet || !['W','L'].includes(bet.uitkomst)) return;
@@ -970,7 +961,7 @@ const TOP_FB = new Set([
 const MAX_WINNER_ODDS  = 4.0;   // geen winnaar-bets boven deze koers (Wharton: >4.0 = variance ruin)
 const BLOWOUT_OPP_MAX  = 1.35;  // tegenstander ≤ 1.35 = mismatched wedstrijd
 const MIN_EP           = 0.52;  // minimale geschatte kans (~52%) · boven 50% = meer wins dan losses structureel
-const KELLY_FRACTION   = 0.50;  // half-Kelly: veiligst voor kleine bankroll (aanbevolen door Wharton)
+// KELLY_FRACTION komt uit lib/model-math.js (0.50 half-Kelly)
 
 // ── DRAWDOWN PROTECTION ──────────────────────────────────────────────────────
 // Bij een losing streak: verlaag automatisch stakes om bankroll te beschermen
@@ -1810,143 +1801,9 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
   return { moneyline: ml, totals: tots, spreads: spr, halfML, halfTotals, halfSpreads, nrfi, oddEven, threeWay, teamTotals, doubleChance, dnb };
 }
 
-// Poisson PMF: P(X = k) voor X ~ Poisson(lambda)
-function poisson(k, lambda) {
-  if (lambda <= 0) return k === 0 ? 1 : 0;
-  let result = Math.exp(-lambda);
-  for (let i = 1; i <= k; i++) result *= lambda / i;
-  return result;
-}
-
-// P(X > line) waar X ~ Poisson(lambda). Voor lines 1.5, 2.5 etc.
-// Gebruikt voor over/under team-totals, totals, player props met count-data.
-function poissonOver(lambda, line) {
-  if (typeof lambda !== 'number' || !isFinite(lambda) || lambda < 0) return 0;
-  if (typeof line !== 'number' || !isFinite(line)) return 0;
-  const threshold = Math.floor(line); // 1.5 → 1; P(X > 1) = P(X >= 2)
-  let cumulative = 0;
-  const maxK = Math.max(threshold, Math.ceil(lambda * 3 + 10));
-  for (let k = 0; k <= threshold; k++) cumulative += poisson(k, lambda);
-  // clamp voor numerieke stabiliteit
-  return Math.max(0, Math.min(1, 1 - cumulative));
-}
-
-// Bivariate Poisson (independence assumed): P(home>away), P(tie), P(away>home) na regulation.
-// Gebruikt voor hockey 3-weg ML (60-min regulatie, voor OT).
-function poisson3Way(expHome, expAway, maxGoals = 12) {
-  let pHome = 0, pTie = 0, pAway = 0;
-  for (let h = 0; h <= maxGoals; h++) {
-    const ph = poisson(h, expHome);
-    for (let a = 0; a <= maxGoals; a++) {
-      const pa = poisson(a, expAway);
-      const joint = ph * pa;
-      if (h > a) pHome += joint;
-      else if (h === a) pTie += joint;
-      else pAway += joint;
-    }
-  }
-  const total = pHome + pTie + pAway;
-  return { pHome: pHome / total, pDraw: pTie / total, pAway: pAway / total };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MARKET-DERIVED PROBABILITY TOOLKIT
-// Voor sanity-checks tussen ons model en de market consensus.
-// Alle waardes zijn dynamisch afleidbaar; waar een default nodig is, is 'ie
-// expliciet gemarkeerd zodat er later uit data gecalibreerd kan worden.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Proportional devig: gegeven een array van odds voor wederzijds-uitsluitende
-// outcomes, retourneer fair (vig-vrije) kansen. Simpelste methode, accuraat genoeg
-// voor markten met vig < ~10%. Voor hogere vig (Asian books): overweeg Shin's method.
-// Returns: { probs: [...], vig: number } of null bij invalid input.
-function devigProportional(oddsArray) {
-  if (!Array.isArray(oddsArray) || !oddsArray.length) return null;
-  const impliedProbs = [];
-  for (const o of oddsArray) {
-    const price = parseFloat(o);
-    if (!price || price <= 1.0 || !isFinite(price)) return null;
-    impliedProbs.push(1 / price);
-  }
-  const sum = impliedProbs.reduce((a, b) => a + b, 0);
-  if (!sum || !isFinite(sum) || sum <= 0) return null;
-  return {
-    probs: impliedProbs.map(p => p / sum),
-    vig: +(sum - 1).toFixed(4),
-  };
-}
-
-// Consensus-probability uit 3-way markt over meerdere bookies.
-// Gemiddelde van per-bookie devigged probs (elke bookie apart devigd, dan gemiddelde).
-// Dit is stabieler dan eerst averagen dan devigen (zware overround bookies bias weg).
-// Returns: { home, draw, away, bookieCount } of null.
-function consensus3Way(threeWayOdds) {
-  if (!Array.isArray(threeWayOdds) || !threeWayOdds.length) return null;
-  // Groepeer per bookie
-  const byBookie = {};
-  for (const o of threeWayOdds) {
-    const bk = o.bookie || 'unknown';
-    if (!byBookie[bk]) byBookie[bk] = {};
-    byBookie[bk][o.side] = parseFloat(o.price);
-  }
-  const devigged = [];
-  for (const bk of Object.keys(byBookie)) {
-    const b = byBookie[bk];
-    if (!b.home || !b.draw || !b.away) continue; // volledige 3-way vereist
-    const d = devigProportional([b.home, b.draw, b.away]);
-    if (d) devigged.push(d.probs);
-  }
-  if (!devigged.length) return null;
-  const avgHome = devigged.reduce((s, p) => s + p[0], 0) / devigged.length;
-  const avgDraw = devigged.reduce((s, p) => s + p[1], 0) / devigged.length;
-  const avgAway = devigged.reduce((s, p) => s + p[2], 0) / devigged.length;
-  // Re-normaliseer (kleine afwijking door rounding)
-  const total = avgHome + avgDraw + avgAway;
-  return {
-    home: avgHome / total,
-    draw: avgDraw / total,
-    away: avgAway / total,
-    bookieCount: devigged.length,
-  };
-}
-
-// NHL OT home win rate: historische data 2010-2024 geeft ~52% home voordeel in OT
-// (home ijs-voordeel blijft ook in OT). 0.50 is veiligere default; dynamisch
-// calibreren zodra we genoeg AOT/AP games in settled bets hebben (TODO: calib uit data).
-// Niet hardcoden in gebruik — altijd via constante hieronder refereren.
-const NHL_OT_HOME_SHARE = 0.52;
-
-// Threshold voor model-vs-market divergentie. 4% is conservatieve start;
-// dynamisch calibreren: na N picks track hit rate per divergence-bucket
-// (TODO: autoTune bij >= 50 settled hockey bets).
-const MODEL_MARKET_DIVERGENCE_THRESHOLD = 0.04;
-
-// Converteer 60-min 3-way fair probs naar inc-OT 2-way fair probs.
-// Bij tie na reg: OT/SO resolveert. otHomeShare is P(home wint in OT | reg tie).
-function deriveIncOTProbFrom3Way(pReg, otHomeShare = NHL_OT_HOME_SHARE) {
-  if (!pReg || typeof pReg.home !== 'number' || typeof pReg.draw !== 'number' || typeof pReg.away !== 'number') return null;
-  const share = Math.max(0, Math.min(1, otHomeShare));
-  return {
-    home: pReg.home + pReg.draw * share,
-    away: pReg.away + pReg.draw * (1 - share),
-  };
-}
-
-// Sanity check: stem model-prob overeen met market consensus?
-// Returns { agree, divergence, marketProb, modelProb, threshold }.
-function modelMarketSanityCheck(modelProb, marketProb, threshold = MODEL_MARKET_DIVERGENCE_THRESHOLD) {
-  if (typeof modelProb !== 'number' || typeof marketProb !== 'number' || isNaN(modelProb) || isNaN(marketProb)) {
-    return { agree: false, divergence: null, marketProb, modelProb, threshold, reason: 'invalid_input' };
-  }
-  const divergence = +Math.abs(modelProb - marketProb).toFixed(4);
-  return {
-    agree: divergence <= threshold,
-    divergence,
-    marketProb: +marketProb.toFixed(4),
-    modelProb: +modelProb.toFixed(4),
-    threshold,
-  };
-}
+// poisson / poissonOver / poisson3Way / devigProportional / consensus3Way /
+// deriveIncOTProbFrom3Way / modelMarketSanityCheck / NHL_OT_HOME_SHARE /
+// MODEL_MARKET_DIVERGENCE_THRESHOLD komen uit lib/model-math.js
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MLB STATS API (statsapi.mlb.com)
@@ -2048,20 +1905,7 @@ async function fetchMlbProbablePitchers(date) {
   }
 }
 
-// Pitcher-edge signal: ERA-diff omzetten in kansaanpassing (±6% max).
-// Lage ERA = betere pitcher = team scoort minder tegen = teamwaarde hoger.
-// Vereist minimaal 10 IP per pitcher voor betrouwbaar signal (anders null).
-function pitcherAdjustment(homePitcher, awayPitcher) {
-  if (!homePitcher?.era || !awayPitcher?.era) return { adj: 0, note: null, valid: false };
-  if ((homePitcher.ip || 0) < 10 || (awayPitcher.ip || 0) < 10) return { adj: 0, note: null, valid: false };
-  // Lagere ERA thuis = betere pitcher thuis = meer home-waarde
-  const eraDiff = awayPitcher.era - homePitcher.era; // positief als home pitcher beter
-  // MLB league-avg ERA ~4.00; 1 punt verschil ≈ 0.07 edge richting betere pitcher team
-  const raw = eraDiff * 0.017;
-  const clamped = Math.max(-0.06, Math.min(0.06, raw));
-  const note = `Pitchers: ${homePitcher.name?.split(' ').pop() || 'H'} ${homePitcher.era.toFixed(2)} vs ${awayPitcher.name?.split(' ').pop() || 'A'} ${awayPitcher.era.toFixed(2)} (Δ${eraDiff > 0 ? '+' : ''}${eraDiff.toFixed(2)})`;
-  return { adj: clamped, note, valid: true };
-}
+// pitcherAdjustment() komt uit lib/model-math.js
 
 // Scan-wide filter: alleen odds van deze bookies tellen mee voor pick generation.
 // Consensus/fair-probability blijft uit ALLE bookies berekend (markt-truth).
@@ -5409,19 +5253,7 @@ app.get('/api/bets/correlations', async (req, res) => {
 // Haalt huidige odds op voor het specifieke event en vergelijkt met gelogde odds.
 // Stuurt Telegram ping als: odds gedrift >8%, of als aftrap veranderd is.
 // ── SPORT-AWARE API HELPERS ──────────────────────────────────────────────────
-// Normaliseer sport-string (Dutch UI labels of varianten) naar canonical English slug
-function normalizeSport(s) {
-  const k = (s || '').toString().trim().toLowerCase();
-  const map = {
-    voetbal: 'football', football: 'football', soccer: 'football',
-    basketball: 'basketball', basketbal: 'basketball', nba: 'basketball',
-    ijshockey: 'hockey', hockey: 'hockey', nhl: 'hockey', 'ice hockey': 'hockey',
-    honkbal: 'baseball', baseball: 'baseball', mlb: 'baseball',
-    'american football': 'american-football', 'american-football': 'american-football', nfl: 'american-football',
-    handbal: 'handball', handball: 'handball',
-  };
-  return map[k] || 'football';
-}
+// normalizeSport() komt uit lib/model-math.js
 
 function getSportApiConfig(sport) {
   sport = normalizeSport(sport);
@@ -5436,32 +5268,7 @@ function getSportApiConfig(sport) {
   return configs[sport] || configs.football;
 }
 
-// Normaliseer teamnaam: accenten eraf, lowercase, veelvoorkomende prefixes strippen.
-// Gebruikt voor fuzzy matching over alle sporten (accented namen, Egyptische clubs, etc.).
-function normalizeTeamName(s) {
-  return (s || '').toString().toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // accenten weg
-    .replace(/\bfc\b|\bcf\b|\bac\b|\bsc\b|\bbk\b/g, '') // veelvoorkomende prefixes/suffixes
-    .replace(/[^a-z0-9\s]/g, ' ') // rare tekens vervangen door spatie
-    .replace(/\s+/g, ' ').trim();
-}
-
-// Fuzzy team match: probeer exact, bevat, en woordoverlap.
-function teamMatchScore(apiName, queryName) {
-  const a = normalizeTeamName(apiName);
-  const q = normalizeTeamName(queryName);
-  if (!a || !q) return 0;
-  if (a === q) return 100;
-  if (a.includes(q) || q.includes(a)) return 80;
-  // Word overlap
-  const aw = new Set(a.split(' ').filter(w => w.length >= 3));
-  const qw = new Set(q.split(' ').filter(w => w.length >= 3));
-  if (!aw.size || !qw.size) return 0;
-  let overlap = 0;
-  for (const w of qw) if (aw.has(w)) overlap++;
-  const ratio = overlap / Math.max(aw.size, qw.size);
-  return Math.round(ratio * 70); // tot 70 voor gedeeltelijke overlap
-}
+// normalizeTeamName() en teamMatchScore() komen uit lib/model-math.js
 
 // Zoek fixture/game ID op teamnamen voor elke sport
 // Zoekt over gisteren + vandaag + morgen (Amsterdam-tz) zodat nachtwedstrijden
