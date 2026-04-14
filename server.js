@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.14';
+const APP_VERSION    = '10.7.15';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1719,7 +1719,7 @@ async function preFetchFootballFixtures(emit, today, tomorrow, dateFrom, dateTo)
 
 async function enrichWithApiSports(emit, activeSoccerKeys = null) {
   if (!AF_KEY) return;
-  emit({ log: '📡 api-sports.io: data ophalen voor actieve competities...' });
+  emit({ log: '📡 api-sports.io: ⚽ voetbal-data ophalen (standings, blessures, scheidsrechters) voor actieve competities...' });
 
   let callsUsed = 0;
   const MAX_CALLS = 85; // bewaar buffer
@@ -1790,7 +1790,7 @@ async function enrichWithApiSports(emit, activeSoccerKeys = null) {
       await sleep(120); // respect rate limit
     } catch {}
   }
-  emit({ log: `✅ Standings: ${Object.keys(afCache.teamStats).length} competities geladen (${callsUsed} calls${skippedInactive ? `, ${skippedInactive} inactief geskipt` : ''})` });
+  emit({ log: `✅ ⚽ Standings voetbal: ${Object.keys(afCache.teamStats).length} competities geladen (${callsUsed} calls${skippedInactive ? `, ${skippedInactive} inactief geskipt` : ''})` });
 
   // ── STAP 2: Blessures per competitie (1 call per league) ─────────────────
   // FIX: gebruik AF_LEAGUE_MAP direct (was .startsWith('soccer') filter die 0 items teruggaf).
@@ -1815,7 +1815,7 @@ async function enrichWithApiSports(emit, activeSoccerKeys = null) {
     } catch {}
   }
   const injCount = Object.values(afCache.injuries).reduce((s,v) => s + Object.keys(v).length, 0);
-  emit({ log: `✅ Blessures: ${injCount} teams met geblesseerde spelers (${callsUsed} calls)` });
+  emit({ log: `✅ ⚽ Blessures voetbal: ${injCount} teams met geblesseerde spelers (${callsUsed} calls)` });
 
   // ── STAP 3: Aankomende fixtures met scheidsrechter (top leagues) ─────────
   // FIX: keys matchen nu AF_FOOTBALL_LEAGUES.key (was 'soccer_' prefix die niet bestond).
@@ -1840,8 +1840,8 @@ async function enrichWithApiSports(emit, activeSoccerKeys = null) {
       await sleep(120);
     } catch {}
   }
-  emit({ log: `✅ Scheidsrechters: ${Object.keys(afCache.referees).length} wedstrijden (${callsUsed} calls)` });
-  emit({ log: `📊 api-sports klaar · ${callsUsed} calls gebruikt (All Sports · 7500/dag per sport)` });
+  emit({ log: `✅ ⚽ Scheidsrechters voetbal: ${Object.keys(afCache.referees).length} wedstrijden (${callsUsed} calls)` });
+  emit({ log: `📊 Voetbal-enrichment klaar · ${callsUsed} calls (multi-sport data wordt per-league binnen elk sport-loop opgehaald)` });
 }
 
 // Haal H2H op voor twee teams (lazy-loaded, max 5x per scan)
