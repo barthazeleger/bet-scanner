@@ -271,7 +271,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.0.3';
+const APP_VERSION    = '10.1.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1226,6 +1226,15 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'footbal
                    signals: signals || [], referee: referee || null, dataConfidence: dataConf, sport };
 
     combiPool.push(pick);            // altijd in combi-pool (ook lage odds)
+
+    // Adaptive MIN_EDGE gate: voor markten met <100 settled bets vereist
+    // strenger edge percentage. Voorkomt dat we vroeg te veel risico nemen op
+    // markten zonder bewezen CLV-historie. Helper definieert tier (PROVEN/EARLY/UNPROVEN).
+    if (typeof adaptiveMinEdge === 'function') {
+      const requiredEdgePct = adaptiveMinEdge(sport, label, 0.055) * 100;
+      if (edge < requiredEdgePct) return; // te zwak voor singles, blijft wel in combiPool
+    }
+
     if (odd >= MIN_ODDS) picks.push(pick);  // alleen in singles als >= MIN_ODDS
   };
   return { picks, combiPool, mkP };
@@ -5883,6 +5892,55 @@ app.get('/api/admin/v2/signal-performance', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
+// GET /api/admin/v2/per-bookie-stats — ROI/CLV per bookmaker
+// Reviewer: 'executable edge meten op specifieke bookies'
+app.get('/api/admin/v2/per-bookie-stats', requireAdmin, async (req, res) => {
+  try {
+    const { data: bets, error } = await supabase.from('bets')
+      .select('tip, sport, markt, odds, uitkomst, wl, clv_pct, inzet')
+      .in('uitkomst', ['W', 'L']);
+    if (error) return res.status(500).json({ error: error.message });
+    const all = bets || [];
+    if (!all.length) return res.json({ bookies: {}, summary: { totalBets: 0 } });
+
+    const byBookie = {};
+    for (const b of all) {
+      const bk = (b.tip || 'Unknown').trim();
+      if (!byBookie[bk]) byBookie[bk] = { n: 0, w: 0, sumPnl: 0, sumStake: 0, clvN: 0, sumClv: 0, posClv: 0 };
+      const s = byBookie[bk];
+      s.n++;
+      if (b.uitkomst === 'W') s.w++;
+      s.sumPnl += parseFloat(b.wl || 0);
+      s.sumStake += parseFloat(b.inzet || 0);
+      if (typeof b.clv_pct === 'number' && !isNaN(b.clv_pct)) {
+        s.clvN++;
+        s.sumClv += b.clv_pct;
+        if (b.clv_pct > 0) s.posClv++;
+      }
+    }
+    const result = {};
+    for (const [bk, s] of Object.entries(byBookie)) {
+      const winRate = s.n ? (s.w / s.n * 100) : 0;
+      const roiPct = s.sumStake ? (s.sumPnl / s.sumStake * 100) : 0;
+      result[bk] = {
+        n: s.n,
+        win_rate_pct: +winRate.toFixed(1),
+        roi_pct: +roiPct.toFixed(2),
+        total_pnl_eur: +s.sumPnl.toFixed(2),
+        total_stake_eur: +s.sumStake.toFixed(2),
+        avg_clv_pct: s.clvN ? +(s.sumClv / s.clvN).toFixed(2) : null,
+        positive_clv_pct: s.clvN ? +(s.posClv / s.clvN * 100).toFixed(1) : null,
+        clv_sample: s.clvN,
+      };
+    }
+    res.json({
+      bookies: result,
+      summary: { totalBets: all.length, bookieCount: Object.keys(byBookie).length },
+      note: 'Toont executable edge per bookie. Lage ROI/CLV op een specifieke bookie kan duiden op slechte odds-shopping of late line movement.',
+    });
+  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
+});
+
 // GET /api/admin/v2/market-thresholds — toon huidige adaptive MIN_EDGE per markt
 app.get('/api/admin/v2/market-thresholds', requireAdmin, async (req, res) => {
   try {
@@ -8220,6 +8278,62 @@ function scheduleKickoffWindowPolling() {
   console.log('📸 Kickoff-window polling actief (t-6h/1h/15m, elke 5 min)');
 }
 
+// ── CLV HEALTH ALERTS + DRAWDOWN WATCHER (v10.1.0) ──────────────────────────
+// Telegram-pings bij milestones zodat we sneller weten of model gezond is.
+// Geen automatisch ingrijpen — alleen observeren (per reviewer-advies).
+let _lastClvAlertN = 0;     // bet count bij laatste CLV alert
+let _lastDdAlertAt = 0;     // timestamp laatste drawdown alert
+const CLV_ALERT_INTERVAL = 25;          // ping elke 25 nieuwe settled CLV bets
+const DD_ALERT_THRESHOLD = -0.15;       // -15% bankroll over 7d
+const DD_ALERT_COOLDOWN_MS = 24 * 3600 * 1000; // max 1x/dag
+
+function scheduleHealthAlerts() {
+  const INTERVAL_MS = 60 * 60 * 1000; // hourly check
+
+  async function runHealthCheck() {
+    try {
+      // CLV milestone alert
+      const { data: clvBets } = await supabase.from('bets')
+        .select('clv_pct, sport, markt').not('clv_pct', 'is', null);
+      const all = (clvBets || []).filter(b => typeof b.clv_pct === 'number');
+      if (all.length >= _lastClvAlertN + CLV_ALERT_INTERVAL) {
+        const avgClv = all.reduce((s, b) => s + b.clv_pct, 0) / all.length;
+        const positive = all.filter(b => b.clv_pct > 0).length;
+        const posPct = (positive / all.length * 100).toFixed(1);
+        const verdict = avgClv > 1 ? '✅ EDGE BEWEZEN'
+                      : avgClv > 0 ? '🟢 mild positief'
+                      : avgClv > -2 ? '🟡 neutraal'
+                      : '🔴 STRUCTUREEL NEGATIEF';
+        await tg(`📊 CLV Milestone\n${all.length} settled bets met CLV data\nGemiddelde CLV: ${avgClv > 0 ? '+' : ''}${avgClv.toFixed(2)}%\n${positive}/${all.length} positief (${posPct}%)\n${verdict}`).catch(() => {});
+        _lastClvAlertN = all.length;
+      }
+
+      // Drawdown soft alert (alleen warn, geen pause)
+      if (Date.now() - _lastDdAlertAt > DD_ALERT_COOLDOWN_MS) {
+        const { bets, stats } = await readBets();
+        if (stats?.bankroll != null && stats?.startBankroll != null) {
+          const sevenDaysAgo = Date.now() - 7 * 86400000;
+          const recentSettled = (bets || []).filter(b => {
+            if (b.uitkomst === 'Open') return false;
+            const dm = (b.datum || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
+            if (!dm) return false;
+            return Date.parse(`${dm[3]}-${dm[2]}-${dm[1]}`) > sevenDaysAgo;
+          });
+          const recent7dPnl = recentSettled.reduce((s, b) => s + parseFloat(b.wl || 0), 0);
+          const recent7dPct = stats.startBankroll > 0 ? recent7dPnl / stats.startBankroll : 0;
+          if (recent7dPct < DD_ALERT_THRESHOLD) {
+            await tg(`⚠️ DRAWDOWN ALERT (soft)\nLaatste 7 dagen: ${(recent7dPct * 100).toFixed(1)}% (€${recent7dPnl.toFixed(2)})\nBankroll: €${stats.bankroll}\n\nGeen automatische pause. Overweeg unit-grootte verlagen of stop manueel.`).catch(() => {});
+            _lastDdAlertAt = Date.now();
+          }
+        }
+      }
+    } catch (e) { console.error('Health alerts fout:', e.message); }
+  }
+
+  setTimeout(() => { runHealthCheck(); setInterval(runHealthCheck, INTERVAL_MS); }, 10 * 60 * 1000);
+  console.log('🔔 Health alerts actief (CLV milestones + soft drawdown, hourly)');
+}
+
 // ── SIGNAL STATS REFRESH (v9.11.0) ──────────────────────────────────────────
 // Wekelijks: aggregeer per signal de avg CLV, avg PnL, lift vs market.
 // Schrijft naar signal_stats tabel; dashboard kan hier signal-performance zien.
@@ -8695,6 +8809,7 @@ app.listen(PORT, () => {
   scheduleKickoffWindowPolling();
   scheduleAutoRetraining();
   scheduleSignalStatsRefresh();
+  scheduleHealthAlerts();
 
   // Kill-switch initial load + 30-min refresh
   refreshKillSwitch().then(() => console.log(`🛑 Kill-switch geladen (${KILL_SWITCH.set.size} actief)`));

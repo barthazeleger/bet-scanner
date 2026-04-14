@@ -2135,6 +2135,71 @@ test('adaptiveMinEdge: nooit lager dan baseMinEdge', () => {
   assert.strictEqual(compute(50, 0.10), 0.10);
 });
 
+// ── v10.1.0 profit-focus: per-bookie ROI + CLV alerts + drawdown ────────────
+
+console.log('\n  v10.1.0 profit-focus:');
+
+test('per-bookie ROI: pos PnL → pos ROI%', () => {
+  const bookieAgg = (bets) => {
+    const out = {};
+    for (const b of bets) {
+      const bk = b.tip || 'X';
+      if (!out[bk]) out[bk] = { n: 0, w: 0, sumPnl: 0, sumStake: 0 };
+      out[bk].n++;
+      if (b.uitkomst === 'W') out[bk].w++;
+      out[bk].sumPnl += parseFloat(b.wl || 0);
+      out[bk].sumStake += parseFloat(b.inzet || 0);
+    }
+    return Object.fromEntries(Object.entries(out).map(([bk, s]) => [bk, {
+      n: s.n, win_rate_pct: s.n ? +(s.w / s.n * 100).toFixed(1) : 0,
+      roi_pct: s.sumStake ? +(s.sumPnl / s.sumStake * 100).toFixed(2) : 0,
+    }]));
+  };
+  const bets = [
+    { tip: 'Bet365', uitkomst: 'W', wl: 25, inzet: 25 },
+    { tip: 'Bet365', uitkomst: 'L', wl: -25, inzet: 25 },
+    { tip: 'Bet365', uitkomst: 'W', wl: 30, inzet: 25 },
+    { tip: 'Unibet', uitkomst: 'L', wl: -25, inzet: 25 },
+    { tip: 'Unibet', uitkomst: 'L', wl: -25, inzet: 25 },
+  ];
+  const result = bookieAgg(bets);
+  assert.strictEqual(result.Bet365.n, 3);
+  assert.strictEqual(result.Bet365.win_rate_pct, 66.7);
+  assert.ok(result.Bet365.roi_pct > 0, 'Bet365 winstgevend');
+  assert.ok(result.Unibet.roi_pct < 0, 'Unibet verlies');
+});
+
+test('CLV milestone alert: triggert elke N nieuwe bets', () => {
+  const interval = 25;
+  let lastN = 0;
+  const checkAlert = (currentN) => {
+    if (currentN >= lastN + interval) { lastN = currentN; return true; }
+    return false;
+  };
+  assert.strictEqual(checkAlert(10), false);
+  assert.strictEqual(checkAlert(24), false);
+  assert.strictEqual(checkAlert(25), true, 'eerste milestone');
+  assert.strictEqual(checkAlert(26), false, 'net na alert geen dubbele');
+  assert.strictEqual(checkAlert(50), true, 'tweede milestone');
+});
+
+test('drawdown alert: triggert bij <-15% over 7d met cooldown', () => {
+  const threshold = -0.15;
+  const cooldownMs = 24 * 3600 * 1000;
+  let lastAlertAt = 0;
+  const check = (recentPctPnl, now = Date.now()) => {
+    if (now - lastAlertAt < cooldownMs) return false;
+    if (recentPctPnl < threshold) { lastAlertAt = now; return true; }
+    return false;
+  };
+  assert.strictEqual(check(-0.10), false, 'binnen tolerance');
+  assert.strictEqual(check(-0.20), true, 'over threshold → alert');
+  assert.strictEqual(check(-0.30), false, 'cooldown actief');
+  // Simuleer 25u later
+  lastAlertAt = Date.now() - 25 * 3600 * 1000;
+  assert.strictEqual(check(-0.20), true, 'na cooldown weer alert');
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
