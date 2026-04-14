@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.2.1';
+const APP_VERSION    = '9.3.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1756,6 +1756,105 @@ function poisson3Way(expHome, expAway, maxGoals = 12) {
   return { pHome: pHome / total, pDraw: pTie / total, pAway: pAway / total };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARKET-DERIVED PROBABILITY TOOLKIT
+// Voor sanity-checks tussen ons model en de market consensus.
+// Alle waardes zijn dynamisch afleidbaar; waar een default nodig is, is 'ie
+// expliciet gemarkeerd zodat er later uit data gecalibreerd kan worden.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Proportional devig: gegeven een array van odds voor wederzijds-uitsluitende
+// outcomes, retourneer fair (vig-vrije) kansen. Simpelste methode, accuraat genoeg
+// voor markten met vig < ~10%. Voor hogere vig (Asian books): overweeg Shin's method.
+// Returns: { probs: [...], vig: number } of null bij invalid input.
+function devigProportional(oddsArray) {
+  if (!Array.isArray(oddsArray) || !oddsArray.length) return null;
+  const impliedProbs = [];
+  for (const o of oddsArray) {
+    const price = parseFloat(o);
+    if (!price || price <= 1.0 || !isFinite(price)) return null;
+    impliedProbs.push(1 / price);
+  }
+  const sum = impliedProbs.reduce((a, b) => a + b, 0);
+  if (!sum || !isFinite(sum) || sum <= 0) return null;
+  return {
+    probs: impliedProbs.map(p => p / sum),
+    vig: +(sum - 1).toFixed(4),
+  };
+}
+
+// Consensus-probability uit 3-way markt over meerdere bookies.
+// Gemiddelde van per-bookie devigged probs (elke bookie apart devigd, dan gemiddelde).
+// Dit is stabieler dan eerst averagen dan devigen (zware overround bookies bias weg).
+// Returns: { home, draw, away, bookieCount } of null.
+function consensus3Way(threeWayOdds) {
+  if (!Array.isArray(threeWayOdds) || !threeWayOdds.length) return null;
+  // Groepeer per bookie
+  const byBookie = {};
+  for (const o of threeWayOdds) {
+    const bk = o.bookie || 'unknown';
+    if (!byBookie[bk]) byBookie[bk] = {};
+    byBookie[bk][o.side] = parseFloat(o.price);
+  }
+  const devigged = [];
+  for (const bk of Object.keys(byBookie)) {
+    const b = byBookie[bk];
+    if (!b.home || !b.draw || !b.away) continue; // volledige 3-way vereist
+    const d = devigProportional([b.home, b.draw, b.away]);
+    if (d) devigged.push(d.probs);
+  }
+  if (!devigged.length) return null;
+  const avgHome = devigged.reduce((s, p) => s + p[0], 0) / devigged.length;
+  const avgDraw = devigged.reduce((s, p) => s + p[1], 0) / devigged.length;
+  const avgAway = devigged.reduce((s, p) => s + p[2], 0) / devigged.length;
+  // Re-normaliseer (kleine afwijking door rounding)
+  const total = avgHome + avgDraw + avgAway;
+  return {
+    home: avgHome / total,
+    draw: avgDraw / total,
+    away: avgAway / total,
+    bookieCount: devigged.length,
+  };
+}
+
+// NHL OT home win rate: historische data 2010-2024 geeft ~52% home voordeel in OT
+// (home ijs-voordeel blijft ook in OT). 0.50 is veiligere default; dynamisch
+// calibreren zodra we genoeg AOT/AP games in settled bets hebben (TODO: calib uit data).
+// Niet hardcoden in gebruik — altijd via constante hieronder refereren.
+const NHL_OT_HOME_SHARE = 0.52;
+
+// Threshold voor model-vs-market divergentie. 4% is conservatieve start;
+// dynamisch calibreren: na N picks track hit rate per divergence-bucket
+// (TODO: autoTune bij >= 50 settled hockey bets).
+const MODEL_MARKET_DIVERGENCE_THRESHOLD = 0.04;
+
+// Converteer 60-min 3-way fair probs naar inc-OT 2-way fair probs.
+// Bij tie na reg: OT/SO resolveert. otHomeShare is P(home wint in OT | reg tie).
+function deriveIncOTProbFrom3Way(pReg, otHomeShare = NHL_OT_HOME_SHARE) {
+  if (!pReg || typeof pReg.home !== 'number' || typeof pReg.draw !== 'number' || typeof pReg.away !== 'number') return null;
+  const share = Math.max(0, Math.min(1, otHomeShare));
+  return {
+    home: pReg.home + pReg.draw * share,
+    away: pReg.away + pReg.draw * (1 - share),
+  };
+}
+
+// Sanity check: stem model-prob overeen met market consensus?
+// Returns { agree, divergence, marketProb, modelProb, threshold }.
+function modelMarketSanityCheck(modelProb, marketProb, threshold = MODEL_MARKET_DIVERGENCE_THRESHOLD) {
+  if (typeof modelProb !== 'number' || typeof marketProb !== 'number' || isNaN(modelProb) || isNaN(marketProb)) {
+    return { agree: false, divergence: null, marketProb, modelProb, threshold, reason: 'invalid_input' };
+  }
+  const divergence = +Math.abs(modelProb - marketProb).toFixed(4);
+  return {
+    agree: divergence <= threshold,
+    divergence,
+    marketProb: +marketProb.toFixed(4),
+    modelProb: +modelProb.toFixed(4),
+    threshold,
+  };
+}
+
 // Scan-wide filter: alleen odds van deze bookies tellen mee voor pick generation.
 // Consensus/fair-probability blijft uit ALLE bookies berekend (markt-truth).
 let _preferredBookiesLower = null;
@@ -2380,10 +2479,33 @@ async function runHockey(emit) {
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
         const sharedNotes = `${posStr}${formNote}${b2bNote}${goalDiffNote}${homeRecordNote}`;
 
-        // 2-way ML voor NHL UITGESCHAKELD:
-        // api-sports 'Home/Away' (2 values) kan per bookie 60-min-met-push of incl-OT zijn.
-        // Geen betrouwbare manier om de twee te onderscheiden via de feed.
-        // Alleen 3-way 60-min Poisson picks hieronder (onambiguous).
+        // ── 2-way ML MET MARKET-SANITY-CHECK ──
+        // Probleem: api-sports 'Home/Away' kan per bookie 60-min-met-push of incl-OT zijn.
+        // Oplossing: derive fair inc-OT prob uit 3-way markt consensus; accepteer 2-way pick
+        // alleen als ons model-prob binnen threshold van market-derived prob zit.
+        // Dit filtert false edges die ontstaan door product-mismatch of model-overconfidence.
+        const marketFairReg = parsed.threeWay?.length ? consensus3Way(parsed.threeWay) : null;
+        const marketFairIncOT = marketFairReg ? deriveIncOTProbFrom3Way(marketFairReg) : null;
+
+        if (marketFairIncOT) {
+          const sanityHome = modelMarketSanityCheck(adjHome, marketFairIncOT.home);
+          const sanityAway = modelMarketSanityCheck(adjAway, marketFairIncOT.away);
+
+          // Alleen accepteren als én bookie OT-inclusief is én model-markt overeenstemt
+          if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS
+              && isOTBookieHockey(bH.bookie) && sanityHome.agree) {
+            mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
+              `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | Markt-fair: ${(marketFairIncOT.home*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
+              Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, [...matchSignals, 'sanity_ok']);
+          }
+          if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS
+              && isOTBookieHockey(bA.bookie) && sanityAway.agree) {
+            mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
+              `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | Markt-fair: ${(marketFairIncOT.away*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, [...matchSignals, 'sanity_ok']);
+          }
+        }
+        // Als geen 3-way markt beschikbaar: géén 2-way pick (te riskant zonder sanity)
 
         // ── 3-weg ML (Home/Draw/Away 60-min regulation) via Poisson ──
         // Veilig voor elke bookie: 3-weg wordt altijd op 60-min gesettled, geen OT-verschil.
@@ -2411,19 +2533,26 @@ async function runHockey(emit) {
           const e3D = bD3.price > 0 ? p3.pDraw * bD3.price - 1 : -1;
           const e3A = bA3.price > 0 ? p3.pAway * bA3.price - 1 : -1;
 
+          // Sanity-check Poisson tegen market consensus: als ons model > threshold
+          // divergeert van de market, skip de pick. Poisson kan scheef gaan bij
+          // teams met extreme vorm-variatie of onvolledige standings.
+          const sanH3 = marketFairReg ? modelMarketSanityCheck(p3.pHome, marketFairReg.home) : { agree: true };
+          const sanD3 = marketFairReg ? modelMarketSanityCheck(p3.pDraw, marketFairReg.draw) : { agree: true };
+          const sanA3 = marketFairReg ? modelMarketSanityCheck(p3.pAway, marketFairReg.away) : { agree: true };
+
           const threeNote = ` | λh:${expHome.toFixed(2)} λa:${expAway.toFixed(2)} | 60-min`;
-          if (e3H >= MIN_EDGE && bH3.price >= 1.60 && bH3.price <= MAX_WINNER_ODDS)
+          if (e3H >= MIN_EDGE && bH3.price >= 1.60 && bH3.price <= MAX_WINNER_ODDS && sanH3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${hm} wint (60-min)`, bH3.price,
-              `3-way: ${(p3.pHome*100).toFixed(1)}% | ${bH3.bookie}: ${bH3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml']);
-          if (e3D >= MIN_EDGE && bD3.price >= 2.80 && bD3.price <= 8.00)
+              `3-way: ${(p3.pHome*100).toFixed(1)}% | Markt: ${marketFairReg ? (marketFairReg.home*100).toFixed(1)+'%' : 'n/a'} | ${bH3.bookie}: ${bH3.price}${threeNote} | ${ko}`,
+              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+          if (e3D >= MIN_EDGE && bD3.price >= 2.80 && bD3.price <= 8.00 && sanD3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 Gelijkspel (60-min)`, bD3.price,
-              `3-way: ${(p3.pDraw*100).toFixed(1)}% gelijk na 60 min | ${bD3.bookie}: ${bD3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pDraw*100), e3D * 0.20, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml']);
-          if (e3A >= MIN_EDGE && bA3.price >= 1.60 && bA3.price <= MAX_WINNER_ODDS)
+              `3-way: ${(p3.pDraw*100).toFixed(1)}% gelijk | Markt: ${marketFairReg ? (marketFairReg.draw*100).toFixed(1)+'%' : 'n/a'} | ${bD3.bookie}: ${bD3.price}${threeNote} | ${ko}`,
+              Math.round(p3.pDraw*100), e3D * 0.20, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+          if (e3A >= MIN_EDGE && bA3.price >= 1.60 && bA3.price <= MAX_WINNER_ODDS && sanA3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${aw} wint (60-min)`, bA3.price,
-              `3-way: ${(p3.pAway*100).toFixed(1)}% | ${bA3.bookie}: ${bA3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml']);
+              `3-way: ${(p3.pAway*100).toFixed(1)}% | Markt: ${marketFairReg ? (marketFairReg.away*100).toFixed(1)+'%' : 'n/a'} | ${bA3.bookie}: ${bA3.price}${threeNote} | ${ko}`,
+              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
         }
 
         // Over/Under total goals
@@ -3466,19 +3595,25 @@ async function runHandball(emit) {
           const e3D = bD3.price > 0 ? p3.pDraw * bD3.price - 1 : -1;
           const e3A = bA3.price > 0 ? p3.pAway * bA3.price - 1 : -1;
 
+          // Sanity-check handbal Poisson tegen markt consensus (zelfde principe als hockey)
+          const marketFairHb = consensus3Way(parsed.threeWay);
+          const sanH3 = marketFairHb ? modelMarketSanityCheck(p3.pHome, marketFairHb.home) : { agree: true };
+          const sanD3 = marketFairHb ? modelMarketSanityCheck(p3.pDraw, marketFairHb.draw) : { agree: true };
+          const sanA3 = marketFairHb ? modelMarketSanityCheck(p3.pAway, marketFairHb.away) : { agree: true };
+
           const threeNote = ` | λh:${expHome.toFixed(1)} λa:${expAway.toFixed(1)} | 60-min`;
-          if (e3H >= MIN_EDGE && bH3.price >= 1.60 && bH3.price <= MAX_WINNER_ODDS)
+          if (e3H >= MIN_EDGE && bH3.price >= 1.60 && bH3.price <= MAX_WINNER_ODDS && sanH3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${hm} wint (60-min)`, bH3.price,
-              `3-way: ${(p3.pHome*100).toFixed(1)}% | ${bH3.bookie}: ${bH3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml']);
-          if (e3D >= MIN_EDGE && bD3.price >= 4.00 && bD3.price <= 15.00)
+              `3-way: ${(p3.pHome*100).toFixed(1)}% | Markt: ${marketFairHb ? (marketFairHb.home*100).toFixed(1)+'%' : 'n/a'} | ${bH3.bookie}: ${bH3.price}${threeNote} | ${ko}`,
+              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+          if (e3D >= MIN_EDGE && bD3.price >= 4.00 && bD3.price <= 15.00 && sanD3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 Gelijkspel (60-min)`, bD3.price,
-              `3-way: ${(p3.pDraw*100).toFixed(1)}% gelijk na 60 min | ${bD3.bookie}: ${bD3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pDraw*100), e3D * 0.18, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml']);
-          if (e3A >= MIN_EDGE && bA3.price >= 1.60 && bA3.price <= MAX_WINNER_ODDS)
+              `3-way: ${(p3.pDraw*100).toFixed(1)}% gelijk | Markt: ${marketFairHb ? (marketFairHb.draw*100).toFixed(1)+'%' : 'n/a'} | ${bD3.bookie}: ${bD3.price}${threeNote} | ${ko}`,
+              Math.round(p3.pDraw*100), e3D * 0.18, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+          if (e3A >= MIN_EDGE && bA3.price >= 1.60 && bA3.price <= MAX_WINNER_ODDS && sanA3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${aw} wint (60-min)`, bA3.price,
-              `3-way: ${(p3.pAway*100).toFixed(1)}% | ${bA3.bookie}: ${bA3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml']);
+              `3-way: ${(p3.pAway*100).toFixed(1)}% | Markt: ${marketFairHb ? (marketFairHb.away*100).toFixed(1)+'%' : 'n/a'} | ${bA3.bookie}: ${bA3.price}${threeNote} | ${ko}`,
+              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
         }
 
         // Moneyline picks

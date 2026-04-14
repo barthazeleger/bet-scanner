@@ -948,6 +948,338 @@ test('settings whitelist blocks dangerous keys', () => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARKET-DERIVED PROBABILITY HELPERS (mirrors server.js)
+// Pure functions gekopieerd voor isolatie. Indien de server-versie wijzigt,
+// update deze mirror ook en draai tests.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function devigProportional(oddsArray) {
+  if (!Array.isArray(oddsArray) || !oddsArray.length) return null;
+  const impliedProbs = [];
+  for (const o of oddsArray) {
+    const price = parseFloat(o);
+    if (!price || price <= 1.0 || !isFinite(price)) return null;
+    impliedProbs.push(1 / price);
+  }
+  const sum = impliedProbs.reduce((a, b) => a + b, 0);
+  if (!sum || !isFinite(sum) || sum <= 0) return null;
+  return { probs: impliedProbs.map(p => p / sum), vig: +(sum - 1).toFixed(4) };
+}
+
+function consensus3Way(threeWayOdds) {
+  if (!Array.isArray(threeWayOdds) || !threeWayOdds.length) return null;
+  const byBookie = {};
+  for (const o of threeWayOdds) {
+    const bk = o.bookie || 'unknown';
+    if (!byBookie[bk]) byBookie[bk] = {};
+    byBookie[bk][o.side] = parseFloat(o.price);
+  }
+  const devigged = [];
+  for (const bk of Object.keys(byBookie)) {
+    const b = byBookie[bk];
+    if (!b.home || !b.draw || !b.away) continue;
+    const d = devigProportional([b.home, b.draw, b.away]);
+    if (d) devigged.push(d.probs);
+  }
+  if (!devigged.length) return null;
+  const avgHome = devigged.reduce((s, p) => s + p[0], 0) / devigged.length;
+  const avgDraw = devigged.reduce((s, p) => s + p[1], 0) / devigged.length;
+  const avgAway = devigged.reduce((s, p) => s + p[2], 0) / devigged.length;
+  const total = avgHome + avgDraw + avgAway;
+  return { home: avgHome / total, draw: avgDraw / total, away: avgAway / total, bookieCount: devigged.length };
+}
+
+const NHL_OT_HOME_SHARE = 0.52;
+
+function deriveIncOTProbFrom3Way(pReg, otHomeShare = NHL_OT_HOME_SHARE) {
+  if (!pReg || typeof pReg.home !== 'number' || typeof pReg.draw !== 'number' || typeof pReg.away !== 'number') return null;
+  const share = Math.max(0, Math.min(1, otHomeShare));
+  return { home: pReg.home + pReg.draw * share, away: pReg.away + pReg.draw * (1 - share) };
+}
+
+function modelMarketSanityCheck(modelProb, marketProb, threshold = 0.04) {
+  if (typeof modelProb !== 'number' || typeof marketProb !== 'number' || isNaN(modelProb) || isNaN(marketProb)) {
+    return { agree: false, divergence: null, marketProb, modelProb, threshold, reason: 'invalid_input' };
+  }
+  const divergence = +Math.abs(modelProb - marketProb).toFixed(4);
+  return { agree: divergence <= threshold, divergence, marketProb: +marketProb.toFixed(4), modelProb: +modelProb.toFixed(4), threshold };
+}
+
+// Poisson helpers
+function poisson(k, lambda) {
+  if (lambda <= 0) return k === 0 ? 1 : 0;
+  let result = Math.exp(-lambda);
+  for (let i = 1; i <= k; i++) result *= lambda / i;
+  return result;
+}
+
+function poisson3Way(expHome, expAway, maxGoals = 12) {
+  let pHome = 0, pTie = 0, pAway = 0;
+  for (let h = 0; h <= maxGoals; h++) {
+    const ph = poisson(h, expHome);
+    for (let a = 0; a <= maxGoals; a++) {
+      const pa = poisson(a, expAway);
+      const joint = ph * pa;
+      if (h > a) pHome += joint;
+      else if (h === a) pTie += joint;
+      else pAway += joint;
+    }
+  }
+  const total = pHome + pTie + pAway;
+  return { pHome: pHome / total, pDraw: pTie / total, pAway: pAway / total };
+}
+
+console.log('\n  Market-derived probability toolkit:');
+
+// ── devigProportional ────────────────────────────────────────────────────────
+
+test('devigProportional: 2-way balanced odds', () => {
+  const r = devigProportional([1.95, 1.95]);
+  assert.ok(r !== null, 'should return result');
+  assert.strictEqual(r.probs.length, 2);
+  assert.ok(Math.abs(r.probs[0] - 0.5) < 1e-6, 'both probs should be 0.5');
+  assert.ok(Math.abs(r.probs[1] - 0.5) < 1e-6);
+  // vig = sum of 1/1.95 * 2 - 1 ≈ 0.0256
+  assert.ok(r.vig > 0.02 && r.vig < 0.03, `vig ${r.vig} should be ~0.025`);
+});
+
+test('devigProportional: 2-way skewed odds (favorite + underdog)', () => {
+  const r = devigProportional([1.50, 2.80]);
+  assert.ok(r !== null);
+  // Favorite prob > 0.5, underdog < 0.5
+  assert.ok(r.probs[0] > 0.55);
+  assert.ok(r.probs[1] < 0.45);
+  // Probs sum to 1
+  assert.ok(Math.abs(r.probs[0] + r.probs[1] - 1) < 1e-9);
+});
+
+test('devigProportional: 3-way hockey typical', () => {
+  // Fair scenario: home 50%, draw 20%, away 30%, with 4% vig
+  // Odds roughly: 1/(.50*1.04) = 1.923, 1/(.20*1.04) = 4.808, 1/(.30*1.04) = 3.205
+  const r = devigProportional([1.923, 4.808, 3.205]);
+  assert.ok(r !== null);
+  assert.ok(Math.abs(r.probs[0] - 0.50) < 0.005, `home should be ~0.50, got ${r.probs[0]}`);
+  assert.ok(Math.abs(r.probs[1] - 0.20) < 0.005);
+  assert.ok(Math.abs(r.probs[2] - 0.30) < 0.005);
+  assert.ok(Math.abs(r.vig - 0.04) < 0.002);
+});
+
+test('devigProportional: probs always sum to 1.0', () => {
+  const tests = [[2.0, 2.0], [1.5, 3.5], [1.3, 4.5, 10.0], [1.8, 4.0, 2.5], [5.0, 1.2]];
+  for (const odds of tests) {
+    const r = devigProportional(odds);
+    const sum = r.probs.reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(sum - 1.0) < 1e-9, `sum=${sum} for ${odds}`);
+  }
+});
+
+test('devigProportional: invalid inputs return null', () => {
+  assert.strictEqual(devigProportional(null), null);
+  assert.strictEqual(devigProportional([]), null);
+  assert.strictEqual(devigProportional('not an array'), null);
+  assert.strictEqual(devigProportional([0]), null);
+  assert.strictEqual(devigProportional([1.0]), null); // odds <=1 invalid
+  assert.strictEqual(devigProportional([-1.5]), null);
+  assert.strictEqual(devigProportional([Infinity]), null);
+  assert.strictEqual(devigProportional([NaN]), null);
+});
+
+test('devigProportional: handles stringified numbers', () => {
+  const r = devigProportional(['1.95', '1.95']);
+  assert.ok(r !== null);
+  assert.ok(Math.abs(r.probs[0] - 0.5) < 1e-6);
+});
+
+// ── consensus3Way ────────────────────────────────────────────────────────────
+
+test('consensus3Way: single bookie = devigged that bookie', () => {
+  const odds = [
+    { bookie: 'Bet365', side: 'home', price: 2.0 },
+    { bookie: 'Bet365', side: 'draw', price: 4.0 },
+    { bookie: 'Bet365', side: 'away', price: 2.5 },
+  ];
+  const c = consensus3Way(odds);
+  assert.ok(c !== null);
+  assert.strictEqual(c.bookieCount, 1);
+  // Devigged: 1/2, 1/4, 1/2.5 = 0.5, 0.25, 0.4 → sum 1.15
+  // Fair: 0.5/1.15, 0.25/1.15, 0.4/1.15
+  assert.ok(Math.abs(c.home - 0.5/1.15) < 1e-6);
+  assert.ok(Math.abs(c.draw - 0.25/1.15) < 1e-6);
+  assert.ok(Math.abs(c.away - 0.4/1.15) < 1e-6);
+});
+
+test('consensus3Way: multi-bookie averages', () => {
+  const odds = [
+    { bookie: 'A', side: 'home', price: 2.0 }, { bookie: 'A', side: 'draw', price: 4.0 }, { bookie: 'A', side: 'away', price: 2.5 },
+    { bookie: 'B', side: 'home', price: 2.1 }, { bookie: 'B', side: 'draw', price: 3.8 }, { bookie: 'B', side: 'away', price: 2.4 },
+  ];
+  const c = consensus3Way(odds);
+  assert.ok(c !== null);
+  assert.strictEqual(c.bookieCount, 2);
+  // Home prob: between the two bookies'
+  assert.ok(c.home > 0.40 && c.home < 0.50);
+  // Sum to 1
+  const sum = c.home + c.draw + c.away;
+  assert.ok(Math.abs(sum - 1.0) < 1e-9);
+});
+
+test('consensus3Way: incomplete bookies are skipped', () => {
+  const odds = [
+    { bookie: 'A', side: 'home', price: 2.0 }, { bookie: 'A', side: 'away', price: 2.5 }, // no draw
+    { bookie: 'B', side: 'home', price: 2.1 }, { bookie: 'B', side: 'draw', price: 3.8 }, { bookie: 'B', side: 'away', price: 2.4 },
+  ];
+  const c = consensus3Way(odds);
+  assert.ok(c !== null);
+  assert.strictEqual(c.bookieCount, 1, 'alleen B moet meetellen');
+});
+
+test('consensus3Way: no valid bookies returns null', () => {
+  assert.strictEqual(consensus3Way(null), null);
+  assert.strictEqual(consensus3Way([]), null);
+  assert.strictEqual(consensus3Way([{ bookie: 'A', side: 'home', price: 2 }]), null); // incompleet
+});
+
+test('consensus3Way: probs always normalized', () => {
+  const odds = [
+    { bookie: 'A', side: 'home', price: 1.5 }, { bookie: 'A', side: 'draw', price: 6 }, { bookie: 'A', side: 'away', price: 4 },
+    { bookie: 'B', side: 'home', price: 1.45 }, { bookie: 'B', side: 'draw', price: 6.5 }, { bookie: 'B', side: 'away', price: 4.2 },
+  ];
+  const c = consensus3Way(odds);
+  const sum = c.home + c.draw + c.away;
+  assert.ok(Math.abs(sum - 1.0) < 1e-9);
+});
+
+// ── deriveIncOTProbFrom3Way ──────────────────────────────────────────────────
+
+test('deriveIncOTProbFrom3Way: 50/50 OT share', () => {
+  const pReg = { home: 0.40, draw: 0.20, away: 0.40 };
+  const r = deriveIncOTProbFrom3Way(pReg, 0.50);
+  assert.ok(r !== null);
+  assert.ok(Math.abs(r.home - 0.50) < 1e-9, 'home inc OT = 0.40 + 0.20*0.50 = 0.50');
+  assert.ok(Math.abs(r.away - 0.50) < 1e-9);
+  assert.ok(Math.abs(r.home + r.away - 1.0) < 1e-9);
+});
+
+test('deriveIncOTProbFrom3Way: home OT advantage 0.52 (NHL default)', () => {
+  const pReg = { home: 0.40, draw: 0.20, away: 0.40 };
+  const r = deriveIncOTProbFrom3Way(pReg, 0.52);
+  // home = 0.40 + 0.20 * 0.52 = 0.504, away = 0.40 + 0.20 * 0.48 = 0.496
+  assert.ok(Math.abs(r.home - 0.504) < 1e-9);
+  assert.ok(Math.abs(r.away - 0.496) < 1e-9);
+  assert.ok(Math.abs(r.home + r.away - 1.0) < 1e-9);
+});
+
+test('deriveIncOTProbFrom3Way: extreme OT share clamped', () => {
+  const pReg = { home: 0.40, draw: 0.20, away: 0.40 };
+  const rOverMax = deriveIncOTProbFrom3Way(pReg, 1.5); // clamp to 1
+  assert.ok(Math.abs(rOverMax.home - 0.60) < 1e-9);
+  const rUnderMin = deriveIncOTProbFrom3Way(pReg, -0.5); // clamp to 0
+  assert.ok(Math.abs(rUnderMin.home - 0.40) < 1e-9);
+});
+
+test('deriveIncOTProbFrom3Way: invalid input returns null', () => {
+  assert.strictEqual(deriveIncOTProbFrom3Way(null), null);
+  assert.strictEqual(deriveIncOTProbFrom3Way({}), null);
+  assert.strictEqual(deriveIncOTProbFrom3Way({ home: 0.4, draw: 0.2 }), null); // missing away
+  assert.strictEqual(deriveIncOTProbFrom3Way({ home: 'x', draw: 0.2, away: 0.4 }), null);
+});
+
+// ── modelMarketSanityCheck ───────────────────────────────────────────────────
+
+test('modelMarketSanityCheck: agree when within threshold', () => {
+  const r = modelMarketSanityCheck(0.50, 0.52, 0.04);
+  assert.strictEqual(r.agree, true);
+  assert.ok(Math.abs(r.divergence - 0.02) < 1e-9);
+});
+
+test('modelMarketSanityCheck: disagree when above threshold', () => {
+  const r = modelMarketSanityCheck(0.70, 0.50, 0.04);
+  assert.strictEqual(r.agree, false);
+  assert.ok(r.divergence > 0.04);
+});
+
+test('modelMarketSanityCheck: exactly at threshold agrees', () => {
+  const r = modelMarketSanityCheck(0.50, 0.54, 0.04);
+  assert.strictEqual(r.agree, true, 'divergence 0.04 = threshold → agree');
+});
+
+test('modelMarketSanityCheck: invalid inputs reject safely', () => {
+  assert.strictEqual(modelMarketSanityCheck(NaN, 0.5, 0.04).agree, false);
+  assert.strictEqual(modelMarketSanityCheck(null, 0.5, 0.04).agree, false);
+  assert.strictEqual(modelMarketSanityCheck(0.5, undefined, 0.04).agree, false);
+  assert.strictEqual(modelMarketSanityCheck('0.5', 0.5, 0.04).agree, false);
+});
+
+test('modelMarketSanityCheck: default threshold is 0.04', () => {
+  const r = modelMarketSanityCheck(0.50, 0.55);
+  assert.strictEqual(r.agree, false, 'divergence 0.05 > default 0.04');
+  assert.strictEqual(r.threshold, 0.04);
+});
+
+// ── Poisson3Way regression ───────────────────────────────────────────────────
+
+test('poisson3Way: balanced teams → ~equal probs', () => {
+  const r = poisson3Way(3.0, 3.0);
+  assert.ok(Math.abs(r.pHome - r.pAway) < 0.01, 'balanced → equal');
+  // Sum = 1
+  assert.ok(Math.abs(r.pHome + r.pDraw + r.pAway - 1.0) < 1e-9);
+});
+
+test('poisson3Way: favorite (more goals) wins more', () => {
+  const r = poisson3Way(4.0, 2.0);
+  assert.ok(r.pHome > r.pAway, 'home scoort meer → home wint vaker');
+  assert.ok(r.pHome > 0.5);
+});
+
+test('poisson3Way: low-scoring → higher draw %', () => {
+  const rLow = poisson3Way(2.0, 2.0);
+  const rHigh = poisson3Way(5.0, 5.0);
+  assert.ok(rLow.pDraw > rHigh.pDraw, 'lage goals → meer draws');
+});
+
+test('poisson3Way: zero goals handled', () => {
+  const r = poisson3Way(0, 0);
+  assert.ok(r.pDraw > 0.99, '0 goals → bijna zeker 0-0 draw');
+});
+
+// ── Integration scenario's ──────────────────────────────────────────────────
+
+test('full pipeline: LA Kings example catches bad pick', () => {
+  // Market odds (alle 11 bookies geven ~deze range voor 3-way Vancouver vs LA)
+  const threeWay = [
+    { bookie: 'A', side: 'home', price: 3.20 }, // Vancouver reg prob ~0.31
+    { bookie: 'A', side: 'draw', price: 4.30 }, // draw reg prob ~0.23
+    { bookie: 'A', side: 'away', price: 1.98 }, // LA Kings reg prob ~0.51
+    { bookie: 'B', side: 'home', price: 3.15 },
+    { bookie: 'B', side: 'draw', price: 4.40 },
+    { bookie: 'B', side: 'away', price: 2.00 },
+  ];
+  const consensus = consensus3Way(threeWay);
+  const incOT = deriveIncOTProbFrom3Way(consensus, 0.52);
+  // LA Kings inc-OT fair prob ~ 0.51 + 0.23 * 0.48 ≈ 0.62
+  assert.ok(incOT.away > 0.55 && incOT.away < 0.65, `LA Kings inc-OT should be ~0.62, got ${incOT.away}`);
+
+  // Ons model zei 0.688 (68.8%). Markt zegt ~0.62. Divergentie ~0.07.
+  const modelLA = 0.688;
+  const sanity = modelMarketSanityCheck(modelLA, incOT.away, 0.04);
+  assert.strictEqual(sanity.agree, false, 'model 0.688 vs markt ~0.62 > 0.04 threshold → SKIP (bescherming tegen slechte pick)');
+});
+
+test('full pipeline: model-market agreement → accept', () => {
+  const threeWay = [
+    { bookie: 'A', side: 'home', price: 2.50 },
+    { bookie: 'A', side: 'draw', price: 4.00 },
+    { bookie: 'A', side: 'away', price: 2.70 },
+  ];
+  const consensus = consensus3Way(threeWay);
+  const incOT = deriveIncOTProbFrom3Way(consensus, 0.50);
+  // Model dat bijna overeenkomt met markt
+  const modelHome = incOT.home + 0.02;
+  const sanity = modelMarketSanityCheck(modelHome, incOT.home, 0.04);
+  assert.strictEqual(sanity.agree, true, 'model binnen 0.04 van markt → accepteer');
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
