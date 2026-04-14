@@ -4056,9 +4056,9 @@ async function renderRecentBets(bets) {
   // Model status
   const ms = document.getElementById('rb-model-status');
   const c = window._calibData;
-  if (c && c.totalSettled >= 3) {
+  if (c && c.totalSettled >= 3 && c.markets) {
     const lines = Object.entries(c.markets)
-      .filter(([,v]) => v.n >= 3)
+      .filter(([,v]) => v && v.n >= 3)
       .map(([mk, v]) => {
         const wr = Math.round(v.w / v.n * 100);
         const dot = v.multiplier < 0.85 ? '🔴' : v.multiplier > 1.1 ? '🟢' : '🟡';
