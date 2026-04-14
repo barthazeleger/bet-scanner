@@ -174,7 +174,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.6.0';
+const APP_VERSION    = '9.6.1';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -4227,6 +4227,28 @@ async function runPrematch(emit) {
         const fp = fairProbs(bookies, hm, aw);
         if (!fp) continue;
 
+        // v2 snapshots (fail-safe) — fixture + odds + consensus
+        snap.upsertFixture(supabase, {
+          id: fid, sport: 'football', leagueId: league.id, leagueName: league.name,
+          season: league.season, homeTeamId: f.teams?.home?.id, homeTeamName: hm,
+          awayTeamId: f.teams?.away?.id, awayTeamName: aw, startTime: kickoffMs, status: 'scheduled',
+        }).catch(() => {});
+        snap.writeOddsSnapshots(supabase, fid, snap.flattenFootballBookies(bookies, hm, aw)).catch(() => {});
+
+        if (fp.home != null && fp.away != null) {
+          // 1X2 consensus snapshot
+          const ipSum = (1/Math.max(0.01, fp._rawOdds?.home || (1/fp.home))) +
+                        (1/Math.max(0.01, fp._rawOdds?.away || (1/fp.away))) +
+                        (fp.draw ? (1/Math.max(0.01, fp._rawOdds?.draw || (1/fp.draw))) : 0);
+          snap.writeMarketConsensus(supabase, {
+            fixtureId: fid, marketType: '1x2', line: null,
+            consensusProb: { home: fp.home, draw: fp.draw || 0, away: fp.away },
+            bookmakerCount: bookies.length,
+            overround: ipSum > 0 ? Math.max(0, ipSum - 1) : null,
+            qualityScore: snap.consensusQualityScore(bookies.length, Math.max(0, ipSum - 1)),
+          }).catch(() => {});
+        }
+
         // ── Predictions (api-football.com model als extra signaal) ────
         let predAdj = 0, predNote = '';
         if (apiCallsUsed < 280) {
@@ -7431,6 +7453,65 @@ app.post('/api/backfill-times', requireAdmin, async (req, res) => {
 
 // ── ODDS MOVEMENT ALERTS ─────────────────────────────────────────────────────
 // Elke 60 minuten: check odds drift voor open bets met kickoff < 12 uur weg.
+// ── FIXTURE SNAPSHOT POLLING (v9.6.0) ────────────────────────────────────────
+// Schrijft odds_snapshots throughout-the-day voor upcoming fixtures uit de
+// fixtures tabel. Hierdoor krijgen we line-movement data voor latere
+// CLV-analyse en walk-forward backtests.
+//
+// Cadence: elke 90 min. Cap: 30 fixtures per cycle (~30 API calls).
+// Budget: ~480 API calls/dag, ruim binnen api-sports plan.
+function scheduleFixtureSnapshotPolling() {
+  const INTERVAL_MS = 90 * 60 * 1000; // 90 min
+  const MAX_PER_CYCLE = 30;
+  const WINDOW_HOURS = 8;
+
+  async function runPolling() {
+    try {
+      const nowIso = new Date().toISOString();
+      const winIso = new Date(Date.now() + WINDOW_HOURS * 3600 * 1000).toISOString();
+      const { data: fixtures, error } = await supabase
+        .from('fixtures')
+        .select('id, sport, start_time')
+        .eq('status', 'scheduled')
+        .gte('start_time', nowIso)
+        .lte('start_time', winIso)
+        .order('start_time', { ascending: true })
+        .limit(MAX_PER_CYCLE);
+      if (error || !fixtures?.length) return;
+
+      console.log(`📸 Odds polling: ${fixtures.length} upcoming fixtures (komende ${WINDOW_HOURS}u)`);
+      let snapshotted = 0;
+      for (const fix of fixtures) {
+        try {
+          const sport = normalizeSport(fix.sport);
+          const cfg = getSportApiConfig(sport);
+          await sleep(150); // gentle pacing
+          const oddsResp = await afGet(cfg.host, cfg.oddsPath, { [cfg.fixtureParam]: fix.id }).catch(() => []);
+          if (!oddsResp?.length) continue;
+          const first = oddsResp[0];
+          // Voor football: ander parser-pad. Skip voor nu (komt via dagelijkse scan + dedicated football-monitor in latere sprint).
+          if (sport === 'football') continue;
+          const parsed = parseGameOdds([first], '', '');
+          const rows = snap.flattenParsedOdds(parsed);
+          if (!rows.length) continue;
+          await snap.writeOddsSnapshots(supabase, fix.id, rows);
+          snapshotted++;
+        } catch { /* swallow */ }
+      }
+      if (snapshotted) console.log(`📸 ${snapshotted} odds-snapshots geschreven`);
+    } catch (e) {
+      console.error('Fixture snapshot polling fout:', e.message);
+    }
+  }
+
+  // Start eerste cycle 5 min na boot, dan elke 90 min
+  setTimeout(() => {
+    runPolling();
+    setInterval(runPolling, INTERVAL_MS);
+  }, 5 * 60 * 1000);
+  console.log('📸 Fixture snapshot polling actief (start over 5 min, dan elke 90 min)');
+}
+
 function scheduleOddsMonitor() {
   const INTERVAL_MS = 60 * 60 * 1000; // 60 min
   console.log('📈 Odds monitor actief (elke 60 min)');
@@ -7686,6 +7767,7 @@ app.listen(PORT, () => {
   scheduleDailyResultsCheck();
   scheduleDailyScan();
   scheduleOddsMonitor();
+  scheduleFixtureSnapshotPolling();
 
   // Herplan pre-kickoff checks en CLV checks voor alle open bets bij herstart
   readBets().then(({ bets }) => {

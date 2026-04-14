@@ -1489,6 +1489,45 @@ test('flattenParsedOdds: lege parsed input → lege array', () => {
   assert.strictEqual(rows.length, 0);
 });
 
+test('flattenFootballBookies: h2h + totals canonicalisatie', () => {
+  const bookies = [
+    {
+      title: 'Bet365',
+      markets: [
+        { key: 'h2h', outcomes: [
+          { name: 'Manchester United', price: 2.10 },
+          { name: 'Draw', price: 3.40 },
+          { name: 'Liverpool', price: 3.20 },
+        ]},
+        { key: 'totals', outcomes: [
+          { name: 'Over', price: 1.85, point: 2.5 },
+          { name: 'Under', price: 1.95, point: 2.5 },
+        ]},
+        { key: 'btts', outcomes: [
+          { name: 'Yes', price: 1.75 },
+          { name: 'No', price: 2.05 },
+        ]},
+      ],
+    },
+  ];
+  const rows = snap.flattenFootballBookies(bookies, 'Manchester United', 'Liverpool');
+  // 3 (1x2) + 2 (totals) + 2 (btts) = 7 rows
+  assert.strictEqual(rows.length, 7);
+  // 1x2 home detected by team name
+  assert.ok(rows.find(r => r.market_type === '1x2' && r.selection_key === 'home' && r.odds === 2.10));
+  assert.ok(rows.find(r => r.market_type === '1x2' && r.selection_key === 'draw' && r.odds === 3.40));
+  assert.ok(rows.find(r => r.market_type === '1x2' && r.selection_key === 'away' && r.odds === 3.20));
+  // totals canonicalized
+  assert.ok(rows.find(r => r.market_type === 'total' && r.selection_key === 'over' && r.line === 2.5));
+  // btts
+  assert.ok(rows.find(r => r.market_type === 'btts' && r.selection_key === 'yes'));
+});
+
+test('flattenFootballBookies: lege bookies → lege array', () => {
+  assert.strictEqual(snap.flattenFootballBookies(null, 'A', 'B').length, 0);
+  assert.strictEqual(snap.flattenFootballBookies([], 'A', 'B').length, 0);
+});
+
 test('consensusQualityScore: bookie count tiers werken', () => {
   assert.strictEqual(snap.consensusQualityScore(10, 0.04), 1.0);
   assert.strictEqual(snap.consensusQualityScore(6, 0.04), 0.8);
