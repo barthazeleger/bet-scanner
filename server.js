@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.1.7';
+const APP_VERSION    = '9.1.8';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2338,8 +2338,12 @@ async function runHockey(emit) {
         const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv);
         const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5);
 
-        const bH = bestFromArr(homeOdds);
-        const bA = bestFromArr(awayOdds);
+        // Alleen 2-way ML bij bookies die inclusief OT settlen (anders overschat model de edge)
+        const isOTBookieHockey = b => !HOCKEY_60MIN_BOOKIES.some(x => (b||'').toLowerCase().includes(x));
+        const homeOddsOT = homeOdds.filter(o => isOTBookieHockey(o.bookie));
+        const awayOddsOT = awayOdds.filter(o => isOTBookieHockey(o.bookie));
+        const bH = bestFromArr(homeOddsOT.length ? homeOddsOT : homeOdds);
+        const bA = bestFromArr(awayOddsOT.length ? awayOddsOT : awayOdds);
 
         const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
         const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
@@ -2356,14 +2360,13 @@ async function runHockey(emit) {
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
         const sharedNotes = `${posStr}${formNote}${b2bNote}${goalDiffNote}${homeRecordNote}`;
 
-        // Moneyline picks — skip 60-min-only bookies (ons model is incl. OT)
-        const isOTBookie = b => !HOCKEY_60MIN_BOOKIES.some(x => (b||'').toLowerCase().includes(x));
-        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && isOTBookie(bH.bookie))
+        // Moneyline picks — homeOddsOT/awayOddsOT zijn al gefilterd op OT-bookies
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && isOTBookieHockey(bH.bookie))
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
             Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
 
-        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && isOTBookie(bA.bookie))
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && isOTBookieHockey(bA.bookie))
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
             Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
