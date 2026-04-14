@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.11';
+const APP_VERSION    = '10.7.12';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -3565,23 +3565,37 @@ async function runHockey(emit) {
           }
         }
 
-        // Puck line (spread) — NHL standard is ±1.5. Via bestSpreadPick zodat
-        // point-label uit daadwerkelijke best komt, niet uit arr[0].
+        // Puck line (spread) — NHL standard is ±1.5. Gebruik spread-specifieke
+        // devigged consensus, niet ML fpHome (Home wins ≠ Home covers -1.5).
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
           const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
-          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          // Cover-kans voor -1.5 in NHL is historisch ~0.55 × ML win prob
+          let fpHomePuck = fpHome * 0.55;
+          let fpAwayPuck = fpAway * 0.55;
+          const home15 = homeSpr.filter(s => s.point === -1.5);
+          const away15 = awaySpr.filter(s => s.point === 1.5);
+          if (home15.length >= 2 && away15.length >= 2) {
+            const avgH = home15.reduce((s,o)=>s+1/o.price, 0) / home15.length;
+            const avgA = away15.reduce((s,o)=>s+1/o.price, 0) / away15.length;
+            const tot = avgH + avgA;
+            if (tot > 1.00 && tot < 1.15) {
+              fpHomePuck = avgH / tot;
+              fpAwayPuck = avgA / tot;
+            }
+          }
+          const bH = bestSpreadPick(homeSpr, fpHomePuck, MIN_EDGE + 0.01);
           if (bH) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Puck Line | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
+              `Puck Line | ${bH.bookie}: ${bH.price} · cover ${(fpHomePuck*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fpHomePuck*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          const bA = bestSpreadPick(awaySpr, fpAwayPuck, MIN_EDGE + 0.01);
           if (bA) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Puck Line | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
+              `Puck Line | ${bA.bookie}: ${bA.price} · cover ${(fpAwayPuck*100).toFixed(1)}%${sharedNotes} | ${ko}`,
               Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
@@ -4035,19 +4049,36 @@ async function runBaseball(emit) {
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
           const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
-          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          // FIX (v10.7.12): gebruik spread-specifieke devigged consensus ipv ML fpHome.
+          // Home -1.5 cover ≠ Home wins. Markt-consensus van -1.5 pair geeft
+          // eerlijke cover-kans. Fallback: fpHome × 0.55 (historische MLB ratio).
+          let fpHomeSpread = fpHome * 0.55;
+          let fpAwaySpread = fpAway * 0.55;
+          const home15 = homeSpr.filter(s => s.point === -1.5);
+          const away15 = awaySpr.filter(s => s.point === 1.5);  // +1.5 insurance pair
+          if (home15.length >= 2 && away15.length >= 2) {
+            const avgH = home15.reduce((s,o)=>s+1/o.price, 0) / home15.length;
+            const avgA = away15.reduce((s,o)=>s+1/o.price, 0) / away15.length;
+            const tot = avgH + avgA;
+            // Sanity check: typical 2-way book is 1.02-1.12 (2-12% vig)
+            if (tot > 1.00 && tot < 1.15) {
+              fpHomeSpread = avgH / tot;
+              fpAwaySpread = avgA / tot;
+            }
+          }
+          const bH = bestSpreadPick(homeSpr, fpHomeSpread, MIN_EDGE + 0.01);
           if (bH) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Run Line | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
+              `Run Line | ${bH.bookie}: ${bH.price} · cover ${(fpHomeSpread*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fpHomeSpread*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          const bA = bestSpreadPick(awaySpr, fpAwaySpread, MIN_EDGE + 0.01);
           if (bA) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Run Line | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
+              `Run Line | ${bA.bookie}: ${bA.price} · cover ${(fpAwaySpread*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fpAwaySpread*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
 
