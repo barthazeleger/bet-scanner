@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.1.4';
+const APP_VERSION    = '9.1.5';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2311,13 +2311,14 @@ async function runHockey(emit) {
         const formNote = hmSt?.form || awSt?.form ? ` | Vorm: ${hmSt?.form?.slice(-5)||'?'} vs ${awSt?.form?.slice(-5)||'?'}` : '';
         const sharedNotes = `${posStr}${formNote}${b2bNote}${goalDiffNote}${homeRecordNote}`;
 
-        // Moneyline picks
-        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+        // Moneyline picks — skip 60-min-only bookies (ons model is incl. OT)
+        const isOTBookie = b => !HOCKEY_60MIN_BOOKIES.some(x => (b||'').toLowerCase().includes(x));
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && isOTBookie(bH.bookie))
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
             Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
 
-        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && isOTBookie(bA.bookie))
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
             Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
