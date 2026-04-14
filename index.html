@@ -178,15 +178,15 @@ nav::-webkit-scrollbar { display: none; }
 .scan-panel-pm { background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); color: #fff; }
 .scan-panel-lv { background: linear-gradient(135deg, #1a0a0a 0%, #4c0519 100%); color: #fff; }
 .scan-panel::before { content: ''; position: absolute; top: -40px; right: -40px; width: 160px; height: 160px; background: rgba(255,255,255,0.04); border-radius: 50%; pointer-events: none; }
-/* Light-mode: picks-sectie binnen de scan-panel breekt visueel uit naar page-bg */
-[data-theme="light"] .scan-panel .picks-wrap,
-[data-theme="light"] .scan-panel #picks-live,
-[data-theme="light"] .scan-panel #potd-wrap,
-[data-theme="light"] .scan-panel #potd-output,
-[data-theme="light"] .scan-panel #history-wrap { background: var(--bg); margin: 16px -24px -24px -24px; padding: 16px 24px; border-radius: 0 0 14px 14px; color: var(--text); }
+/* Light-mode: scan-panel zelf adapt naar subtiele blauwe gradient zodat alles consistent is */
+[data-theme="light"] .scan-panel-pm { background: linear-gradient(135deg, #eef2ff 0%, #dbeafe 100%); color: var(--text); }
+[data-theme="light"] .scan-panel-lv { background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%); color: var(--text); }
+[data-theme="light"] .scan-panel::before { background: rgba(99,102,241,0.06); }
+[data-theme="light"] .scan-panel .sp-tag { background: rgba(15,23,42,0.06); color: var(--text); }
 [data-theme="light"] .scan-panel .picks-hdr { color: var(--muted); }
 [data-theme="light"] .scan-panel .prob-bar  { background: var(--surface2); }
 [data-theme="light"] .scan-panel .prob-pct  { color: var(--muted); }
+[data-theme="light"] .scan-panel .log-box { background: rgba(15,23,42,0.04); border-color: var(--border); color: var(--muted); }
 .sp-icon { font-size: 32px; margin-bottom: 12px; display: block; }
 .sp-title { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
 .sp-sub { font-size: 12px; opacity: 0.55; margin-bottom: 16px; line-height: 1.5; }
@@ -1851,6 +1851,86 @@ Object.assign(LANG.nl, {
   api_total: 'Totaal',
   api_budget_reset: 'Budget reset dagelijks om middernacht UTC. Gemiddeld verbruik: ~200-400 calls per scan.',
   api_budget_high: 'Hoog verbruik — beperk handmatige rescans.',
+  // ─── v10.5 i18n expansion (card titles + JS maps + options) ───
+  nav_model: 'Model',
+  card_recent_bets: 'Recente bets',
+  card_model_health: 'Model health',
+  card_fetch_results: '🔄 Uitslagen ophalen',
+  card_add_bet: '+ Bet toevoegen',
+  card_bankroll: '📈 Bankroll verloop',
+  card_outcomes: '🎯 Uitkomsten',
+  card_per_sport: '⚽ Per sport',
+  card_hitrate_score: '📊 Hit rate per score',
+  card_hitrate_market: '🎲 Hit rate per markttype',
+  card_clv: '📉 Closing Line Value',
+  card_variance: '🎲 Variance Tracker',
+  card_signal_attribution: '🧠 Signal Attribution',
+  card_signal_attribution_sub: 'Hit rate per signal — welke signalen leveren echt edge.',
+  card_timing: '⏱️ Timing analyse',
+  card_analyzer: '🔍 Wedstrijd Analyser',
+  card_search_scan: '🔍 Zoek in laatste scan resultaten',
+  card_inbox: '📬 Inbox',
+  card_signal_weights: '🔧 Huidige Signal Gewichten',
+  card_signal_weights_sub: 'Gewichten worden automatisch aangepast op basis van prestaties. 1.0 = neutraal, >1.0 = versterkt, <1.0 = afgezwakt, 0 = inactief (logged-only).',
+  card_market_multipliers: '📊 Markt Multipliers',
+  card_market_multipliers_sub: 'Calibratie per markttype na 8+ bets. Hoog = model vertrouwt deze markt meer.',
+  card_per_sport_sub: 'Win rate en P/L per sport, gebaseerd op settled bets.',
+  card_model_updates: '🧠 Model updates',
+  card_experimental: '🧪 Experimentele signalen',
+  card_experimental_sub: 'Worden verzameld bij elke scan maar staan op weight=0 (geen scoring impact). Auto-activeren naar 0.5 zodra n≥50 picks + avg CLV > 0%. Telegram + inbox melding bij activatie.',
+  card_v2_health: '🧪 v2 Pipeline Health',
+  card_service_status: '🟢 Service Status',
+  card_api_budget: '📊 API Budget',
+  card_model_status: '🧠 Model Status',
+  card_leagues: '⚽ Competities',
+  card_how_it_works: '🎯 EdgePickr — hoe het werkt',
+  card_model_explained: '🧠 Het model uitgelegd',
+  card_datasources: '📡 Databronnen',
+  card_bet_strategy: '💰 Inzetstrategie',
+  card_subscriptions: '💳 Abonnementen',
+  card_tour: 'Rondleiding',
+  card_tour_desc: 'Bekijk een stap-voor-stap uitleg van alle functies',
+  card_changelog: '📝 Versiegeschiedenis',
+  // Sport names (JS maps)
+  sport_hockey_full: '🏒 IJshockey',
+  sport_baseball_full: '⚾ Honkbal',
+  sport_football_full: '⚽ Voetbal',
+  sport_basketball_full: '🏀 Basketball',
+  sport_nfl_full: '🏈 NFL',
+  sport_handball_full: '🤾 Handbal',
+  // Signal names (JS maps)
+  sig_home_adv: 'Thuisvoordeel',
+  sig_form: 'Vorm',
+  sig_injuries: 'Blessures',
+  sig_h2h: 'Head-to-head',
+  sig_position: 'Positie',
+  sig_home_away_split: 'Thuis/uit split',
+  sig_api_pred: 'API predictie',
+  sig_lineup: 'Opstelling',
+  sig_team_stats: 'Team stats',
+  sig_btts_scoring: 'BTTS scoring',
+  sig_btts_cleansheet: 'BTTS clean sheet',
+  // Outcome / form options
+  outcome_open: 'Open',
+  outcome_win: 'Win',
+  outcome_loss: 'Loss',
+  bookie_any: 'Elke bookie',
+  // Toggle labels
+  toggle_expand: '▼ Uitklappen',
+  toggle_collapse: '▲ Inklappen',
+  toggle_show_analysis: '▼ analyse',
+  toggle_hide_analysis: '▲ verberg analyse',
+  // Empty states
+  empty_signal_data: 'Nog geen signal data',
+  empty_market_data: 'Nog geen calibratiedata',
+  empty_per_sport: 'Nog geen data per sport',
+  empty_settled_bets: 'Nog geen settled bets.',
+  empty_signal_analysis: 'Signal data verschijnt na picks met signal tracking (nieuwe scans).',
+  error_signal_load: 'Signal analyse laden mislukt.',
+  // POTD
+  btn_potd: '📝 Genereer POTD post',
+  btn_previous_scans: 'PREVIOUS SCANS',
+  btn_previous_scans_toggle: 'toon',
 });
 Object.assign(LANG.en, {
   picks_none: 'No confident picks today',
@@ -1918,6 +1998,86 @@ Object.assign(LANG.en, {
   api_total: 'Total',
   api_budget_reset: 'Budget resets daily at midnight UTC. Average usage: ~200-400 calls per scan.',
   api_budget_high: 'High usage — limit manual rescans.',
+  // ─── v10.5 i18n expansion ───
+  nav_model: 'Model',
+  card_recent_bets: 'Recent bets',
+  card_model_health: 'Model health',
+  card_fetch_results: '🔄 Fetch results',
+  card_add_bet: '+ Add bet',
+  card_bankroll: '📈 Bankroll trend',
+  card_outcomes: '🎯 Outcomes',
+  card_per_sport: '⚽ Per sport',
+  card_hitrate_score: '📊 Hit rate by score',
+  card_hitrate_market: '🎲 Hit rate by market',
+  card_clv: '📉 Closing Line Value',
+  card_variance: '🎲 Variance tracker',
+  card_signal_attribution: '🧠 Signal attribution',
+  card_signal_attribution_sub: 'Hit rate per signal — which signals deliver real edge.',
+  card_timing: '⏱️ Timing analysis',
+  card_analyzer: '🔍 Match analyzer',
+  card_search_scan: '🔍 Search last scan results',
+  card_inbox: '📬 Inbox',
+  card_signal_weights: '🔧 Current signal weights',
+  card_signal_weights_sub: 'Weights auto-adjust based on performance. 1.0 = neutral, >1.0 = amplified, <1.0 = dampened, 0 = inactive (logged-only).',
+  card_market_multipliers: '📊 Market multipliers',
+  card_market_multipliers_sub: 'Calibration per market type after 8+ bets. Higher = model trusts this market more.',
+  card_per_sport_sub: 'Win rate and P/L per sport, based on settled bets.',
+  card_model_updates: '🧠 Model updates',
+  card_experimental: '🧪 Experimental signals',
+  card_experimental_sub: 'Collected on every scan but kept at weight=0 (no scoring impact). Auto-activate to 0.5 once n≥50 picks + avg CLV > 0%. Telegram + inbox notification on activation.',
+  card_v2_health: '🧪 v2 Pipeline Health',
+  card_service_status: '🟢 Service status',
+  card_api_budget: '📊 API budget',
+  card_model_status: '🧠 Model status',
+  card_leagues: '⚽ Leagues',
+  card_how_it_works: '🎯 EdgePickr — how it works',
+  card_model_explained: '🧠 The model explained',
+  card_datasources: '📡 Data sources',
+  card_bet_strategy: '💰 Bet strategy',
+  card_subscriptions: '💳 Subscriptions',
+  card_tour: 'Tour',
+  card_tour_desc: 'Step-by-step walk-through of every feature',
+  card_changelog: '📝 Changelog',
+  // Sport names
+  sport_hockey_full: '🏒 Ice hockey',
+  sport_baseball_full: '⚾ Baseball',
+  sport_football_full: '⚽ Football',
+  sport_basketball_full: '🏀 Basketball',
+  sport_nfl_full: '🏈 NFL',
+  sport_handball_full: '🤾 Handball',
+  // Signal names
+  sig_home_adv: 'Home advantage',
+  sig_form: 'Form',
+  sig_injuries: 'Injuries',
+  sig_h2h: 'Head-to-head',
+  sig_position: 'Position',
+  sig_home_away_split: 'Home/away split',
+  sig_api_pred: 'API prediction',
+  sig_lineup: 'Lineup',
+  sig_team_stats: 'Team stats',
+  sig_btts_scoring: 'BTTS scoring',
+  sig_btts_cleansheet: 'BTTS clean sheet',
+  // Outcome / form options
+  outcome_open: 'Open',
+  outcome_win: 'Win',
+  outcome_loss: 'Loss',
+  bookie_any: 'Any bookie',
+  // Toggle labels
+  toggle_expand: '▼ Expand',
+  toggle_collapse: '▲ Collapse',
+  toggle_show_analysis: '▼ analysis',
+  toggle_hide_analysis: '▲ hide analysis',
+  // Empty states
+  empty_signal_data: 'No signal data yet',
+  empty_market_data: 'No calibration data yet',
+  empty_per_sport: 'No per-sport data yet',
+  empty_settled_bets: 'No settled bets yet.',
+  empty_signal_analysis: 'Signal data appears after picks with signal tracking (new scans).',
+  error_signal_load: 'Failed to load signal analysis.',
+  // POTD
+  btn_potd: '📝 Generate POTD post',
+  btn_previous_scans: 'PREVIOUS SCANS',
+  btn_previous_scans_toggle: 'show',
 });
 
 function t(key) {
