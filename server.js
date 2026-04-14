@@ -298,7 +298,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.1.3';
+const APP_VERSION    = '10.1.4';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1252,16 +1252,16 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'footbal
                    strength: k*(odd-1)*vP*epW*dataConf, kelly: hk, edge, expectedEur, kickoff, bookie,
                    signals: signals || [], referee: referee || null, dataConfidence: dataConf, sport };
 
-    combiPool.push(pick);            // altijd in combi-pool (ook lage odds)
-
     // Adaptive MIN_EDGE gate: voor markten met <100 settled bets vereist
     // strenger edge percentage. Voorkomt dat we vroeg te veel risico nemen op
     // markten zonder bewezen CLV-historie. Helper definieert tier (PROVEN/EARLY/UNPROVEN).
+    // v10.1.4: combiPool wordt OOK gefilterd — geen combo's op onbewezen markten.
     if (typeof adaptiveMinEdge === 'function') {
       const requiredEdgePct = adaptiveMinEdge(sport, label, 0.055) * 100;
-      if (edge < requiredEdgePct) return; // te zwak voor singles, blijft wel in combiPool
+      if (edge < requiredEdgePct) return; // te zwak: niet in singles én niet in combiPool
     }
 
+    combiPool.push(pick);            // combi-eligible (na adaptive gate)
     if (odd >= MIN_ODDS) picks.push(pick);  // alleen in singles als >= MIN_ODDS
   };
   return { picks, combiPool, mkP };
