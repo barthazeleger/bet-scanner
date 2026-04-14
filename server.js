@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.1.2';
+const APP_VERSION    = '9.1.3';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2111,6 +2111,10 @@ async function runBasketball(emit) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // HOCKEY SCANNER · api-sports.io hockey
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Hockey bookies die ML settlen op 60-min (geen OT) → ML picks van deze bookies overslaan
+// want ons kansmodel is inclusief OT. Betekent dat er alleen ML-picks komen van Bet365, Pinnacle, DK etc.
+const HOCKEY_60MIN_BOOKIES = ['unibet', 'toto', 'betcity', 'ladbrokes'];
 
 async function runHockey(emit) {
   if (!AF_KEY) { emit({ log: '🏒 Hockey: geen API key' }); return []; }
