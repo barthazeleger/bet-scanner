@@ -160,7 +160,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '9.1.1';
+const APP_VERSION    = '9.1.2';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -179,7 +179,7 @@ function defaultSettings() {
     unitEur:       UNIT_EUR,
     language:      'nl',
     timezone:      'Europe/Amsterdam',
-    scanTimes:     [10],
+    scanTimes:     ['07:30'],
     scanEnabled:   true,
     twoFactorEnabled: false,
     telegramChatId: null,
@@ -240,8 +240,8 @@ function rescheduleUserScans(user) {
     delete userScanTimers[user.id];
   }
   if (!user?.settings?.scanEnabled) return;
-  const times = user.settings.scanTimes || [10];
-  userScanTimers[user.id] = times.map(h => scheduleScanAtHour(h));
+  const times = user.settings.scanTimes || ['07:30'];
+  userScanTimers[user.id] = times.map(t => scheduleScanAtHour(t));
 }
 
 // ── CALIBRATIE · leren van resultaten ────────────────────────────────────────
@@ -6860,39 +6860,49 @@ app.listen(PORT, () => {
 
 // ── DAGELIJKSE PRE-MATCH SCAN (10:00 AM) ─────────────────────────────────────
 // Plan een scan op een bepaald uur (0-23); geeft de timeout handle terug
-function scheduleScanAtHour(hour) {
+// Accepteert zowel number (legacy: uur) als "HH:MM" string.
+function scheduleScanAtHour(timeInput) {
+  let hour, minute;
+  if (typeof timeInput === 'number') { hour = timeInput; minute = 0; }
+  else {
+    const m = String(timeInput).match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return;
+    hour = parseInt(m[1]); minute = parseInt(m[2]);
+  }
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return;
+  const label = `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+
   const now    = new Date();
-  // hour is Amsterdam-tijd → converteer naar UTC
   const amsNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
   const offsetMs = amsNow.getTime() - now.getTime();
   const target = new Date(now);
-  target.setHours(hour, 0, 0, 0);
+  target.setHours(hour, minute, 0, 0);
   target.setTime(target.getTime() - offsetMs);
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
   const hm    = target.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
   console.log(`📡 Scan gepland om ${hm} (over ${Math.round(delay/60000)} min)`);
   return setTimeout(async () => {
-    console.log(`📡 Scan om ${hour}:00 gestart...`);
+    console.log(`📡 Scan om ${label} gestart...`);
     try {
       await runPrematch(() => {});
-      console.log(`📡 Scan om ${hour}:00 klaar`);
+      console.log(`📡 Scan om ${label} klaar`);
     } catch (e) {
-      console.error(`Scan om ${hour}:00 fout:`, e.message);
-      await tg(`⚠️ Scan om ${hour}:00 mislukt: ${e.message}`).catch(() => {});
+      console.error(`Scan om ${label} fout:`, e.message);
+      await tg(`⚠️ Scan om ${label} mislukt: ${e.message}`).catch(() => {});
     }
     // Herplan dezelfde scan voor morgen
-    scheduleScanAtHour(hour);
+    scheduleScanAtHour(timeInput);
   }, delay);
 }
 
 function scheduleDailyScan() {
-  // Laad admin settings voor scan-tijden; fallback naar 10:00
+  // Laad admin settings voor scan-tijden; fallback naar 07:30
   loadUsers().then(users => {
     const admin = users.find(u => u.role === 'admin') || { settings: defaultSettings() };
-    const times = admin.settings?.scanTimes?.length ? admin.settings.scanTimes : [10];
-    times.forEach(h => scheduleScanAtHour(h));
-  }).catch(() => scheduleScanAtHour(10));
+    const times = admin.settings?.scanTimes?.length ? admin.settings.scanTimes : ['07:30'];
+    times.forEach(t => scheduleScanAtHour(t));
+  }).catch(() => scheduleScanAtHour('07:30'));
 }
 
 // ── DAGELIJKSE UITSLAG CHECK (09:03 AM) ──────────────────────────────────────

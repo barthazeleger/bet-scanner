@@ -1365,8 +1365,12 @@ nav::-webkit-scrollbar { display: none; }
     <!-- Scan tijden -->
     <div class="settings-section">
       <div class="settings-section-title" data-i18n="prof_scan_times">Dagelijkse scan-tijden</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:10px" data-i18n="prof_scan_times_desc">Selecteer uren waarop de scan automatisch draait en picks naar Telegram stuurt</div>
-      <div id="scan-time-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px"></div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px" data-i18n="prof_scan_times_desc">Kies tot 10 tijden waarop de scan automatisch draait (HH:MM, Amsterdam-tijd)</div>
+      <div id="scan-time-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;min-height:34px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <input id="scan-time-input" type="time" step="300" class="settings-input" style="max-width:140px">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="addScanTime()">+ Voeg toe</button>
+      </div>
       <div style="margin-bottom:20px">
         <label class="settings-check">
           <input type="checkbox" id="s-scan-enabled">
@@ -3803,28 +3807,38 @@ function closeNotifDetail() {
 
 function buildScanTimePicker(selected) {
   const wrap = document.getElementById('scan-time-picker');
-  const hours = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22];
-  wrap.innerHTML = hours.map(h => {
-    const on = selected.includes(h);
-    return `<button onclick="toggleScanHour(${h}, this)"
-      style="padding:5px 12px;border-radius:20px;border:1px solid ${on ? 'var(--accent)' : 'var(--border)'};
-             background:${on ? 'var(--accent)' : 'var(--surface2)'};color:${on ? '#fff' : 'var(--muted)'};
-             font-size:12px;font-weight:600;cursor:pointer"
-      data-hour="${h}" data-on="${on}">${h}:00</button>`;
-  }).join('');
+  // Normaliseer: accepteer oude nummers (10) én nieuwe strings ("07:30")
+  const normalized = (selected || []).map(t => typeof t === 'number'
+    ? `${String(t).padStart(2,'0')}:00` : String(t))
+    .filter(t => /^\d{2}:\d{2}$/.test(t));
+  // Dedupe + sort
+  const times = [...new Set(normalized)].sort();
+  if (!times.length) { wrap.innerHTML = '<span style="color:var(--muted);font-size:12px">Nog geen scan-tijden ingesteld</span>'; return; }
+  wrap.innerHTML = times.map(t => `
+    <span data-time="${t}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;border:1px solid var(--accent);background:var(--accent);color:#0b1220;font-size:12px;font-weight:700">
+      ${t}
+      <button type="button" onclick="removeScanTime('${t}')" style="background:transparent;border:none;color:#0b1220;font-weight:700;cursor:pointer;padding:0;margin-left:2px">×</button>
+    </span>`).join('');
 }
 
-function toggleScanHour(h, btn) {
-  const on = btn.dataset.on === 'true';
-  btn.dataset.on = !on;
-  btn.style.background    = !on ? 'var(--accent)' : 'var(--surface2)';
-  btn.style.borderColor   = !on ? 'var(--accent)' : 'var(--border)';
-  btn.style.color         = !on ? '#fff' : 'var(--muted)';
+function addScanTime() {
+  const inp = document.getElementById('scan-time-input');
+  const v = (inp.value || '').trim();
+  if (!/^\d{2}:\d{2}$/.test(v)) return;
+  const cur = getSelectedScanTimes();
+  if (cur.includes(v)) return;
+  if (cur.length >= 10) return;
+  buildScanTimePicker([...cur, v]);
+  inp.value = '';
+}
+
+function removeScanTime(t) {
+  buildScanTimePicker(getSelectedScanTimes().filter(x => x !== t));
 }
 
 function getSelectedScanTimes() {
-  return [...document.querySelectorAll('#scan-time-picker button[data-on="true"]')]
-    .map(b => parseInt(b.dataset.hour));
+  return [...document.querySelectorAll('#scan-time-picker [data-time]')]
+    .map(b => b.dataset.time);
 }
 
 function profileMsg(txt, ok = false) {
