@@ -2370,14 +2370,30 @@ function filterLive() {
     evts = evts.filter(e => matchesBet(e) || String(e.id).startsWith('bet-'));
   }
 
-  // Sorteer: live wedstrijden bovenaan, daarna op starttijd (vroegst eerst)
+  // Sorteer: live wedstrijden bovenaan, daarna chronologisch op volledige datetime
+  // (zodat 04:10 morgenochtend NA 21:00 vanavond komt, niet ervoor).
+  const kickoffMs = (e) => {
+    // Check timestamp velden van api-sports event
+    if (e.timestamp) return new Date(e.timestamp).getTime();
+    if (e.kickoffMs) return e.kickoffMs;
+    // Fallback: kijk in matched bet naar datum+tijd
+    const bet = matchesBet(e) || myBetsList.find(b => String(e.id) === 'bet-' + b.id);
+    if (bet?.datum && bet?.tijd && /^\d{1,2}:\d{2}$/.test(bet.tijd)) {
+      const [dd, mm, yyyy] = bet.datum.split('-');
+      const iso = `${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}T${bet.tijd}:00`;
+      const ms = new Date(iso).getTime();
+      if (isFinite(ms)) return ms;
+    }
+    return Number.MAX_SAFE_INTEGER; // no time = bottom
+  };
   evts.sort((a, b) => {
     if (a.live && !b.live) return -1;
     if (!a.live && b.live) return 1;
-    // Beide live of beide niet-live: sorteer op starttijd
-    const tA = a.startTime || '99:99';
-    const tB = b.startTime || '99:99';
-    return tA.localeCompare(tB);
+    const msA = kickoffMs(a);
+    const msB = kickoffMs(b);
+    if (msA !== msB) return msA - msB;
+    // Laatste fallback: string compare op starttijd
+    return (a.startTime || '99:99').localeCompare(b.startTime || '99:99');
   });
 
   if (!evts.length) {
