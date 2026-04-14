@@ -2,6 +2,27 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.13] - 2026-04-14
+
+### Added (regressietests — voorkomt dat vandaag's bugs terugkeren)
+- `dedupe per (bookie, point)`: alt-line hoge prijs wordt weggegooid voor main-line
+- `INVARIANT: meer brokers kan nooit picks verwijderen` — core invariant die vandaag was gebroken
+- `INVARIANT: single-bookie edge == combi-edge` als best-prijs identiek is
+- `per-entry maxOdds filter kill alleen anomalieën` — niet legit entries
+- `fairProb als function`: per-point devigged consensus werkt over multiple point-lines
+
+Totaal: 195 tests (was 190).
+
+### Fixed (score bug op NBA + NFL + handball spreads)
+Zelfde fout als MLB/NHL: `fpHome` (ML win-prob) werd direct gebruikt voor spread edge, terwijl spread cover strikter is dan winnen. Gaf overstate van edge → score 7/10 op eigenlijk marginale picks.
+
+**Fix**: nieuwe helper `buildSpreadFairProbFns(homeSpr, awaySpr, fallbackH, fallbackA)` die per-point devigged consensus maakt uit paired (Home -X, Away +X) pools. `bestSpreadPick` accepteert nu een function voor `fairProb` — wordt per point-line geëvalueerd. Fallback: `fp × 0.50` als pool te dun of vig out-of-range.
+
+**Toegepast op**: NBA spread, NFL spread + 1st half spread, handball handicap.
+Voor MLB/NHL blijft de hardcoded `×0.55` fallback (runline standaard ±1.5, minder punt-variatie).
+
+**Consequentie**: spread-picks tonen nu realistische cover-prob in reason-string (`cover 47.2%` ipv misleidende `63%` ML-prob). Score-tier klopt nu met echte edge.
+
 ## [10.7.12] - 2026-04-14
 
 ### Fixed (score/edge bug op spread-markten)

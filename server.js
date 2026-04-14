@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.12';
+const APP_VERSION    = '10.7.13';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -2515,16 +2515,11 @@ function bestSpreadPick(spreads, fairProb, minEdge, minOdds = 1.60, maxOdds = 3.
   const byPoint = {};
   for (const s of spreads) {
     if (!s || typeof s.price !== 'number') continue;
-    if (s.price < minOdds || s.price > maxOdds) continue; // anti-anomalie: filter per entry
+    if (s.price < minOdds || s.price > maxOdds) continue;
     const k = String(s.point);
     (byPoint[k] = byPoint[k] || []).push(s);
   }
-  // KRITIEKE FIX (v10.7.10): dedupe per (bookie, point) met LOWEST price.
-  // api-sports levert soms meerdere entries per bookie op dezelfde point-line
-  // (main line + alternate line, bv Bet365 -1.5 @ 2.10 én -1.5 @ 2.55).
-  // De alt-line heeft strengere win-conditie en hogere odds. Main line = lowest.
-  // Zonder dedupe pakt bestFromArr de alt-line, edge wordt vals-hoog, ep valt
-  // onder MIN_EP → pick rejected terwijl legit main line (Unibet 2.17) beschikbaar is.
+  // Dedupe per (bookie, point) met LOWEST price = main-line (alt-lines altijd hoger).
   for (const pt of Object.keys(byPoint)) {
     const bookieMap = {};
     for (const s of byPoint[pt]) {
@@ -2537,11 +2532,50 @@ function bestSpreadPick(spreads, fairProb, minEdge, minOdds = 1.60, maxOdds = 3.
   for (const [pt, pool] of Object.entries(byPoint)) {
     const top = bestFromArr(pool);
     if (top.price <= 0) continue;
-    const edge = fairProb * top.price - 1;
+    // fairProb kan function zijn (per-point devig) of constant (legacy)
+    const fp = typeof fairProb === 'function' ? fairProb(parseFloat(pt)) : fairProb;
+    if (!fp || fp <= 0) continue;
+    const edge = fp * top.price - 1;
     if (edge < minEdge) continue;
     if (!best || edge > best.edge) best = { ...top, point: parseFloat(pt), edge };
   }
   return best;
+}
+
+// Bouw per-point devigged cover-probability map uit paired spread-pool.
+// homeSpr en awaySpr moeten al gededupeerd zijn (via parseGameOdds).
+// Voor elke point-line: no-vig devig van Home -X vs Away +X pair.
+// Returnt { fn(point) → homeProb, fn(point) → awayProb } voor bestSpreadPick.
+function buildSpreadFairProbFns(homeSpr, awaySpr, fallbackHome, fallbackAway) {
+  const homeByPt = {}, awayByPt = {};
+  for (const s of homeSpr || []) {
+    const k = s.point;
+    (homeByPt[k] = homeByPt[k] || []).push(s);
+  }
+  for (const s of awaySpr || []) {
+    // Pair van Home -X is Away +X (dezelfde bet, tegengestelde side)
+    const k = -s.point;
+    (awayByPt[k] = awayByPt[k] || []).push(s);
+  }
+  const probMap = {}; // key = home point (bv -1.5), value = {home, away}
+  for (const ptStr of Object.keys(homeByPt)) {
+    const pt = parseFloat(ptStr);
+    const h = homeByPt[pt];
+    const a = awayByPt[pt];
+    if (!h?.length || !a?.length) continue;
+    const avgH = h.reduce((s,o)=>s+1/o.price, 0) / h.length;
+    const avgA = a.reduce((s,o)=>s+1/o.price, 0) / a.length;
+    const tot = avgH + avgA;
+    if (tot > 1.00 && tot < 1.15) {
+      probMap[pt] = { home: avgH / tot, away: avgA / tot };
+    }
+  }
+  // Returns helper fns: voor home spread gebruik home-point direct,
+  // voor away spread (point is tegengesteld) negate om te matchen.
+  return {
+    homeFn: (pt) => probMap[pt]?.home ?? fallbackHome,
+    awayFn: (pt) => probMap[-pt]?.away ?? fallbackAway,
+  };
 }
 
 // Best odds uit parsed array; als preferredBookies is ingesteld, alleen die tellen.
@@ -2937,23 +2971,27 @@ async function runBasketball(emit) {
           }
         }
 
-        // Spread (NBA, variabele lijnen) — groepeer per point, pak beste binnen preferred pool.
+        // Spread (NBA, variabele lijnen) — per-point devigged consensus voor eerlijke cover-prob.
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home');
           const awaySpr = parsed.spreads.filter(o => o.side === 'away');
-          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          // NBA spread-cover ≈ 0.50 × ML wanneer geen paired consensus (fallback)
+          const { homeFn, awayFn } = buildSpreadFairProbFns(homeSpr, awaySpr, fpHome * 0.50, fpAway * 0.50);
+          const bH = bestSpreadPick(homeSpr, homeFn, MIN_EDGE + 0.01);
           if (bH) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            const fp = homeFn(bH.point);
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
+              `Spread | ${bH.bookie}: ${bH.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fp*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          const bA = bestSpreadPick(awaySpr, awayFn, MIN_EDGE + 0.01);
           if (bA) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            const fp = awayFn(bA.point);
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
+              `Spread | ${bA.bookie}: ${bA.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fp*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
 
@@ -4519,23 +4557,27 @@ async function runFootballUS(emit) {
           }
         }
 
-        // Spread (NFL, vaste lijn per match, bookies variëren ±0.5)
+        // Spread (NFL) — per-point devigged consensus voor cover-prob.
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home');
           const awaySpr = parsed.spreads.filter(o => o.side === 'away');
-          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          // NFL spread-cover ≈ 0.50 × ML wanneer geen paired consensus
+          const { homeFn, awayFn } = buildSpreadFairProbFns(homeSpr, awaySpr, fpHome * 0.50, fpAway * 0.50);
+          const bH = bestSpreadPick(homeSpr, homeFn, MIN_EDGE + 0.01);
           if (bH) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            const fp = homeFn(bH.point);
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
+              `Spread | ${bH.bookie}: ${bH.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fp*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          const bA = bestSpreadPick(awaySpr, awayFn, MIN_EDGE + 0.01);
           if (bA) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            const fp = awayFn(bA.point);
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
+              `Spread | ${bA.bookie}: ${bA.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fp*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
 
@@ -4957,23 +4999,26 @@ async function runHandball(emit) {
           }
         }
 
-        // Handicap (handball, variabele lijnen)
+        // Handicap (handball) — per-point devigged consensus voor cover-prob.
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home');
           const awaySpr = parsed.spreads.filter(o => o.side === 'away');
-          const bH = bestSpreadPick(homeSpr, fpHome, MIN_EDGE + 0.01);
+          const { homeFn, awayFn } = buildSpreadFairProbFns(homeSpr, awaySpr, fpHome * 0.50, fpAway * 0.50);
+          const bH = bestSpreadPick(homeSpr, homeFn, MIN_EDGE + 0.01);
           if (bH) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+            const fp = homeFn(bH.point);
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Handicap | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(fpHome*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
+              `Handicap | ${bH.bookie}: ${bH.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fp*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
           }
-          const bA = bestSpreadPick(awaySpr, fpAway, MIN_EDGE + 0.01);
+          const bA = bestSpreadPick(awaySpr, awayFn, MIN_EDGE + 0.01);
           if (bA) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+            const fp = awayFn(bA.point);
             mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Handicap | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
+              `Handicap | ${bA.bookie}: ${bA.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+              Math.round(fp*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
           }
         }
       }

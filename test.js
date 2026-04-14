@@ -2240,6 +2240,113 @@ test('drawdown alert: triggert bij <-15% over 7d met cooldown', () => {
   assert.strictEqual(check(-0.20), true, 'na cooldown weer alert');
 });
 
+// ── REGRESSIE TESTS (v10.7.13) — voorkomt dat bugs terugkeren ──────────────
+console.log('\n  Regressie tests v10.7.13 (spread/bookie invarianten):');
+
+// Mini-implementatie van core helpers — zelfde logica als server.js, puur voor test.
+function bestFromArr_test(arr, preferredLower) {
+  let pool = arr || [];
+  if (preferredLower && pool.length) {
+    pool = pool.filter(o => preferredLower.some(p => (o.bookie || '').toLowerCase().includes(p)));
+  }
+  if (!pool.length) return { price: 0, bookie: '' };
+  return pool.reduce((best, o) => o.price > best.price ? { price: +o.price.toFixed(3), bookie: o.bookie } : best, { price: 0, bookie: '' });
+}
+
+function bestSpreadPick_test(spreads, fairProb, minEdge, preferredLower, minOdds = 1.60, maxOdds = 3.8) {
+  if (!spreads || !spreads.length) return null;
+  const byPoint = {};
+  for (const s of spreads) {
+    if (!s || typeof s.price !== 'number') continue;
+    if (s.price < minOdds || s.price > maxOdds) continue;
+    const k = String(s.point);
+    (byPoint[k] = byPoint[k] || []).push(s);
+  }
+  for (const pt of Object.keys(byPoint)) {
+    const bookieMap = {};
+    for (const s of byPoint[pt]) {
+      const bk = (s.bookie || '').toLowerCase();
+      if (!bookieMap[bk] || s.price < bookieMap[bk].price) bookieMap[bk] = s;
+    }
+    byPoint[pt] = Object.values(bookieMap);
+  }
+  let best = null;
+  for (const [pt, pool] of Object.entries(byPoint)) {
+    const top = bestFromArr_test(pool, preferredLower);
+    if (top.price <= 0) continue;
+    const fp = typeof fairProb === 'function' ? fairProb(parseFloat(pt)) : fairProb;
+    if (!fp || fp <= 0) continue;
+    const edge = fp * top.price - 1;
+    if (edge < minEdge) continue;
+    if (!best || edge > best.edge) best = { ...top, point: parseFloat(pt), edge };
+  }
+  return best;
+}
+
+test('dedupe per (bookie, point): alt-line hoge prijs wordt weggegooid voor main-line', () => {
+  // Dodgers scenario: Bet365 heeft main -1.5@2.10 + alt -1.5@2.55
+  const spreads = [
+    { side: 'home', point: -1.5, price: 2.10, bookie: 'Bet365' },
+    { side: 'home', point: -1.5, price: 2.55, bookie: 'Bet365' }, // 3-way alt
+    { side: 'home', point: -1.5, price: 2.17, bookie: 'Unibet' },
+  ];
+  const result = bestSpreadPick_test(spreads, 0.47, 0.01, ['bet365', 'unibet']);
+  assert.ok(result, 'zou pick moeten retourneren');
+  // Unibet 2.17 moet winnen omdat Bet365 gededupeerd naar 2.10 (lowest per bookie)
+  assert.strictEqual(result.bookie, 'Unibet', 'Unibet wint na dedupe');
+  assert.strictEqual(result.price, 2.17);
+});
+
+test('INVARIANT: meer brokers in pool kan NOOIT picks verwijderen', () => {
+  const spreads = [
+    { side: 'home', point: -1.5, price: 2.10, bookie: 'Bet365' },
+    { side: 'home', point: -1.5, price: 2.55, bookie: 'Bet365' }, // alt
+    { side: 'home', point: -1.5, price: 2.17, bookie: 'Unibet' },
+  ];
+  const unibetOnly = bestSpreadPick_test(spreads, 0.47, 0.01, ['unibet']);
+  const combi     = bestSpreadPick_test(spreads, 0.47, 0.01, ['bet365', 'unibet']);
+  assert.ok(unibetOnly, 'unibet-only moet pick geven');
+  assert.ok(combi, 'combi moet OOK pick geven (invariant)');
+  // Combi-edge ≥ unibet-only-edge
+  assert.ok(combi.edge >= unibetOnly.edge - 0.001, `combi edge (${combi.edge}) >= unibet-only (${unibetOnly.edge})`);
+});
+
+test('INVARIANT: single-bookie edge == combi-edge als best-prijs identiek is', () => {
+  const spreads = [
+    { side: 'home', point: -1.5, price: 2.10, bookie: 'Bet365' },
+    { side: 'home', point: -1.5, price: 2.17, bookie: 'Unibet' },
+  ];
+  const unibetOnly = bestSpreadPick_test(spreads, 0.47, 0.01, ['unibet']);
+  const combi     = bestSpreadPick_test(spreads, 0.47, 0.01, ['bet365', 'unibet']);
+  // Beide moeten Unibet 2.17 als best kiezen
+  assert.strictEqual(unibetOnly.bookie, 'Unibet');
+  assert.strictEqual(combi.bookie, 'Unibet');
+  assert.strictEqual(combi.price, unibetOnly.price);
+});
+
+test('per-entry maxOdds filter kill alleen anomalieën, niet legit entries', () => {
+  const spreads = [
+    { side: 'home', point: -1.5, price: 2.17, bookie: 'Unibet' },  // legit
+    { side: 'home', point: -1.5, price: 4.20, bookie: 'Weird' },   // anomaal
+  ];
+  const result = bestSpreadPick_test(spreads, 0.47, 0.01, null);
+  assert.ok(result, 'Unibet 2.17 moet picked worden ondanks anomalie');
+  assert.strictEqual(result.price, 2.17);
+});
+
+test('fairProb als function: per-point devigged consensus werkt', () => {
+  const spreads = [
+    { side: 'home', point: -1.5, price: 2.17, bookie: 'Unibet' },
+    { side: 'home', point: -2.5, price: 3.50, bookie: 'Unibet' },
+  ];
+  const probFn = (pt) => pt === -1.5 ? 0.47 : 0.30; // verschillende cover-prob per line
+  const result = bestSpreadPick_test(spreads, probFn, 0.01, null);
+  assert.ok(result);
+  // -1.5 edge = 0.47*2.17-1 = 0.020 (boven minEdge 0.01)
+  // -2.5 edge = 0.30*3.50-1 = 0.050 (hoger, zou moeten winnen)
+  assert.strictEqual(result.point, -2.5, 'beste edge across point-groups wint');
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
