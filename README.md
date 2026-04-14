@@ -1,6 +1,6 @@
-# EdgePickr v9.0
+# EdgePickr v9.3
 
-Multi-sport betting analytics platform met een zelflerend Poisson-model per sport, CLV-tracking, PWA met push notificaties en een admin-panel.
+Multi-sport betting analytics platform met een zelflerend Poisson-model per sport, market-derived sanity checks, CLV-tracking, PWA met push notificaties en een admin-panel.
 
 ## Features
 
@@ -10,14 +10,17 @@ Multi-sport betting analytics platform met een zelflerend Poisson-model per spor
 | **100+ competities** | Alle top-tier leagues per sport, dynamische seizoenen (nooit meer stuk) |
 | **14 signalen** | Thuisvoordeel, vorm, H2H, blessures, standings, team stats, home/away splits, lineup, referee, API predictions, O/U adjustments, weer, Poisson, fixture congestion |
 | **Poisson model** | Per sport afzonderlijk geijkt — markt-multipliers, EP-buckets en signal-gewichten tunen zich automatisch |
+| **Model-vs-market sanity check** | Elke pick wordt gecheckt tegen devigged market consensus; picks waar model > 4% divergeert worden geskipt |
+| **3-way ML voor hockey/handbal** | Aparte 60-min regulation markt via bivariate Poisson, naast inc-OT 2-way ML. Voorkomt ambigue bookie-product settlements |
+| **Preferred bookies** | Edges worden berekend met odds van jouw bookies (Bet365 + Unibet default); consensus blijft market-truth |
 | **Kelly sizing** | Half-Kelly: 0.3U tot 2.0U, altijd gecapt op scanner-advies |
-| **CLV tracking** | Closing line odds 2 min voor aftrap, fuzzy match + backfill endpoint |
+| **CLV tracking** | Closing line odds 2 min voor aftrap, strict bookie match, fuzzy fixture match, backfill endpoint + UI-knop |
 | **Pre-kickoff check** | Drift-alert 30 min voor aftrap (±8% = markt-alarm) |
 | **Wedstrijd analyser** | Typ `Ajax vs PSV` of `NHL Rangers Bruins` → model-analyse on-the-fly (multi-sport, fuzzy) |
-| **Tracker** | Bets per dag/week/maand, W/L, CLV%, score, NET Units, variance tracker |
-| **Data tab** | Bankroll-grafiek, hit rate per score/markt, signal attribution, timing-analyse |
+| **Tracker** | Bets per dag/week/maand, W/L, CLV%, score, NET Units, variance tracker, chronologische sort (nachtwedstrijden) |
+| **Data tab** | Bankroll-grafiek, hit rate per score/markt, signal attribution, timing-analyse, per-sport winrate |
 | **PWA** | iOS/Android installatie, offline-cache, Web Push notificaties |
-| **Admin panel** | Gebruikers goedkeuren, scan history beheren, bets recalculate, model feed |
+| **Admin panel** | Gebruikers goedkeuren, scan history beheren, bets recalculate, model feed, debug endpoints |
 
 ## Stack
 
@@ -82,8 +85,25 @@ Rate-limited op 200ms per bet. Return `{ scanned, filled, failed, details }`.
 ## Testsuite
 
 ```bash
-npm test     # 82 tests · endpoints, calibratie, signals, edge cases
+npm test     # 108 tests · endpoints, calibratie, signals, edge cases, market derivation
 ```
+
+### Test-categorieën
+- Poisson / Kelly / EP buckets — statistische correctheid
+- Form / momentum / calibratie — signaal-logica
+- Security — error leaking, admin-only endpoints, settings whitelist
+- Market-derived probability toolkit — devig, consensus, inc-OT conversion, sanity check
+- Input validation — odds, units, fixture IDs
+
+## Engineering standaard
+
+EdgePickr is ontworpen met deze principes:
+
+1. **Niets hardcoded** — constants (thresholds, multipliers, rates) zijn via config of data-derived, met duidelijke TODO-calib markers waar defaults nog handmatig zijn.
+2. **Alles dynamisch** — rates, probabilities en aanpassingen komen uit live API-data of historische calibratie, niet uit assumpties.
+3. **Testen per feature** — elke nieuwe pure helper krijgt unit tests; bestaande suite moet blijven slagen.
+4. **Safety checks overal** — null guards, type coercion, defensive programming. Invalid input returnt `null` ipv crash.
+5. **Kwaliteit > volume** — liever 0 picks dan 1 foute pick. Sanity checks en ambiguity guards filtereen aggressief.
 
 ## Documentatie
 
