@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.6.6';
+const APP_VERSION    = '10.7.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1644,19 +1644,61 @@ function convertAfOdds(afBookmakers, hm, aw) {
   }).filter(bk => bk.markets.length > 0);
 }
 
-async function enrichWithApiSports(emit) {
+// Pre-fetch football fixtures om te bepalen welke leagues actief zijn vandaag.
+// Bespaart ~40 calls/scan door standings/injuries alleen te laden voor
+// competities die daadwerkelijk matches hebben in de window.
+let _footballFixturesCache = {}; // league.key → filtered fixtures[]
+
+async function preFetchFootballFixtures(emit, today, tomorrow, dateFrom, dateTo) {
+  if (!AF_KEY) return new Set();
+  _footballFixturesCache = {};
+  const active = new Set();
+  emit({ log: '🔍 Pre-fetch fixtures — bepaal actieve competities...' });
+  let calls = 0;
+  for (const league of AF_FOOTBALL_LEAGUES) {
+    try {
+      const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', {
+        league: league.id, season: league.season, from: dateFrom, to: dateTo, status: 'NS',
+      });
+      calls++;
+      const cutoffHour = 10;
+      const filtered = (fixtures || []).filter(f => {
+        const ko = new Date(f.fixture?.date);
+        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
+        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
+        if (koDate === today) return true;
+        if (koDate === tomorrow) return koH < cutoffHour;
+        return false;
+      });
+      _footballFixturesCache[league.key] = filtered;
+      if (filtered.length > 0) active.add(league.key);
+      await sleep(60);
+    } catch {}
+  }
+  emit({ log: `✅ Pre-fetch klaar: ${active.size}/${AF_FOOTBALL_LEAGUES.length} competities actief (${calls} calls)` });
+  return active;
+}
+
+async function enrichWithApiSports(emit, activeSoccerKeys = null) {
   if (!AF_KEY) return;
-  emit({ log: '📡 api-sports.io: data ophalen (blessures, H2H, scheidsrechters, vorm)...' });
+  emit({ log: '📡 api-sports.io: data ophalen voor actieve competities...' });
 
   let callsUsed = 0;
   const MAX_CALLS = 85; // bewaar buffer
+  let skippedInactive = 0;
 
   // Wis session-caches
   afCache.teamStats = {}; afCache.injuries = {}; afCache.referees = {}; afCache.h2h = {};
 
-  // ── STAP 1: Standings + teamIDs per sport (1 call per league) ───────────
+  // ── STAP 1: Standings + teamIDs per league (1 call per league) ───────────
+  // AF_LEAGUE_MAP keys matchen AF_FOOTBALL_LEAGUES.key (bv 'epl', 'egypt').
+  // Skip leagues zonder matches in scan-window (bespaart ~40 calls/scan).
   for (const [sportKey, cfg] of Object.entries(AF_LEAGUE_MAP)) {
     if (callsUsed >= MAX_CALLS) break;
+    if (activeSoccerKeys && !activeSoccerKeys.has(sportKey)) {
+      skippedInactive++;
+      continue;
+    }
     try {
       const isSoccer = cfg.host.includes('football');
       const path = isSoccer ? '/standings' : '/standings';
@@ -1710,12 +1752,13 @@ async function enrichWithApiSports(emit) {
       await sleep(120); // respect rate limit
     } catch {}
   }
-  emit({ log: `✅ Standings: ${Object.keys(afCache.teamStats).length} competities geladen (${callsUsed} calls)` });
+  emit({ log: `✅ Standings: ${Object.keys(afCache.teamStats).length} competities geladen (${callsUsed} calls${skippedInactive ? `, ${skippedInactive} inactief geskipt` : ''})` });
 
-  // ── STAP 2: Blessures per voetbalcompetitie (1 call per league) ──────────
-  const soccerLeagues = Object.entries(AF_LEAGUE_MAP).filter(([k]) => k.startsWith('soccer'));
-  for (const [sportKey, cfg] of soccerLeagues) {
+  // ── STAP 2: Blessures per competitie (1 call per league) ─────────────────
+  // FIX: gebruik AF_LEAGUE_MAP direct (was .startsWith('soccer') filter die 0 items teruggaf).
+  for (const [sportKey, cfg] of Object.entries(AF_LEAGUE_MAP)) {
     if (callsUsed >= MAX_CALLS) break;
+    if (activeSoccerKeys && !activeSoccerKeys.has(sportKey)) continue;
     try {
       const rows = await afGet(cfg.host, '/injuries', { league: cfg.league, season: cfg.season });
       callsUsed++;
@@ -1737,11 +1780,12 @@ async function enrichWithApiSports(emit) {
   emit({ log: `✅ Blessures: ${injCount} teams met geblesseerde spelers (${callsUsed} calls)` });
 
   // ── STAP 3: Aankomende fixtures met scheidsrechter (top leagues) ─────────
-  const topLeaguesForRef = ['soccer_epl','soccer_spain_la_liga','soccer_germany_bundesliga',
-                            'soccer_italy_serie_a','soccer_france_ligue_one','soccer_netherlands_eredivisie'];
+  // FIX: keys matchen nu AF_FOOTBALL_LEAGUES.key (was 'soccer_' prefix die niet bestond).
+  const topLeaguesForRef = ['epl','laliga','bundesliga','seriea','ligue1','eredivisie'];
   for (const sportKey of topLeaguesForRef) {
     const cfg = AF_LEAGUE_MAP[sportKey];
     if (!cfg || callsUsed >= MAX_CALLS) break;
+    if (activeSoccerKeys && !activeSoccerKeys.has(sportKey)) continue;
     try {
       const rows = await afGet(cfg.host, '/fixtures', {
         league: cfg.league, season: cfg.season, next: 10
@@ -4693,13 +4737,23 @@ async function runPrematch(emit) {
 
   // ── STAP 1: (ESPN removed · standings komen via enrichWithApiSports) ────
 
-  // ── STAP 2: Team stats, blessures, scheidsrechters ───────────────────────
+  // Datumbereik: vandaag + morgen (voor nachtwedstrijden tot 10:00)
+  const today    = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const dateFrom = today;
+  const dateTo   = tomorrow;
+
+  // ── STAP 1.5: Pre-fetch fixtures voor actieve leagues (1 call/league) ───
+  const activeSoccerKeys = await preFetchFootballFixtures(emit, today, tomorrow, dateFrom, dateTo);
+  // API calls voor pre-fetch worden in _footballFixturesCache opgeslagen.
+
+  // ── STAP 2: Team stats, blessures, scheidsrechters (alleen actieve leagues) ──
   h2hCallsThisScan = 0;
   weatherCallsThisScan = 0;
   // Clear team stats cache for fresh scan
   for (const k of Object.keys(teamStatsCache)) delete teamStatsCache[k];
   let teamStatsCalls = 0;
-  await enrichWithApiSports(emit);
+  await enrichWithApiSports(emit, activeSoccerKeys);
 
   // ── Calibratie ───────────────────────────────────────────────────────────
   const calib = loadCalib();
@@ -4709,34 +4763,13 @@ async function runPrematch(emit) {
   const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
-  let apiCallsUsed = 0;
+  let apiCallsUsed = AF_FOOTBALL_LEAGUES.length; // 1 call/league gebruikt in pre-fetch
 
-  // Datumbereik: vandaag + morgen (voor nachtwedstrijden tot 10:00)
-  const today    = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  const dateFrom = today;
-  const dateTo   = tomorrow;
-
-  // ── STAP 3: Per competitie fixtures + odds + predictions ────────────────
+  // ── STAP 3: Per competitie fixtures (uit cache) + odds + predictions ────
   for (const league of AF_FOOTBALL_LEAGUES) {
     try {
-      // Fixtures voor komende 2 dagen
-      const fixtures = await afGet('v3.football.api-sports.io', '/fixtures', {
-        league: league.id, season: league.season, from: dateFrom, to: dateTo, status: 'NS',
-      });
-      apiCallsUsed++;
-
-      // Filter: morgen alleen wedstrijden vóór 10:00 Amsterdam (nachtwedstrijden)
-      const cutoffHour = 10; // 10:00 volgende ochtend
-      const filtered = (fixtures || []).filter(f => {
-        const ko = new Date(f.fixture?.date);
-        const koH = parseInt(ko.toLocaleTimeString('en-US', { hour:'numeric', hour12:false, timeZone:'Europe/Amsterdam' }));
-        const koDate = ko.toLocaleDateString('sv-SE', { timeZone:'Europe/Amsterdam' });
-        // Vandaag: alles. Morgen: alleen vóór 10:00. Overmorgen+: skip
-        if (koDate === today) return true;
-        if (koDate === tomorrow) return koH < cutoffHour;
-        return false;
-      });
+      // Fixtures uit pre-fetch cache (geen extra call)
+      const filtered = _footballFixturesCache[league.key] || [];
 
       if (!filtered.length) { emit({ log: `📭 ${league.name}: geen wedstrijden` }); continue; }
       emit({ log: `✅ ${league.name}: ${filtered.length} wedstrijd(en)` });

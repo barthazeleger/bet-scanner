@@ -2,6 +2,21 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.0] - 2026-04-14
+
+### Fixed (KRITIEK — silent bugs gevonden tijdens scan-audit)
+- **Blessures werden nooit opgehaald**: STAP 2 in `enrichWithApiSports` filterde op `k.startsWith('soccer')` maar AF_LEAGUE_MAP keys zijn `'epl'`, `'laliga'`, `'egypt'` etc (géén `'soccer_'` prefix). Filter returnde 0 items → loop liep nul keer → `afCache.injuries` altijd leeg. Blessure-signaal heeft dus al maanden geen impact gehad op picks. Nu: iterate AF_LEAGUE_MAP direct.
+- **Referee pre-cache eveneens kapot**: STAP 3 gebruikte hardcoded `'soccer_epl'`, `'soccer_spain_la_liga'` → `AF_LEAGUE_MAP[key]` = undefined → skip. Ref-data kwam nog via `f.fixture?.referee` fallback, maar pre-caching deed niks. Nu: correct keys (`'epl'`, `'laliga'`, `'bundesliga'`, `'seriea'`, `'ligue1'`, `'eredivisie'`).
+
+### Optimized (football scan efficiency)
+- **Pre-fetch fixtures**: nieuwe `preFetchFootballFixtures()` draait vóór `enrichWithApiSports`. Bouwt `activeSoccerKeys` Set met alleen leagues die matches hebben in de scan-window. Standings/injuries/referees worden nu alleen opgehaald voor die leagues.
+- **Impact**: bij 13 actieve leagues uit 59 worden ~46 standings + 46 injury calls geskipt per scan. Fixtures zijn vooraf gecached zodat main scan loop ze niet opnieuw fetcht. Netto ~40% minder API calls per scan.
+- **"X scans resterend"** op homepage blijft correct (leest uit cumulatieve `callsToday`).
+
+### Pending (next)
+- Multi-sport enrichment uitbreiden: referee/injuries/standings/weather/stakes voor NBA/NFL/NHL/MLB/handball is nu nog incompleet.
+- "Stakes" signal (titelrace/degradatie/Europa-strijd) doorvoeren naar alle sports.
+
 ## [10.6.6] - 2026-04-14
 
 ### Fixed (KRITIEK — spread/handicap mixing-points bug in ALLE sports)
