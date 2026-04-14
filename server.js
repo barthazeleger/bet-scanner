@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.4.5';
+const APP_VERSION    = '10.5.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -7834,6 +7834,46 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // API status · rate limits + service health
+// Supabase DB usage — via eigen service_role key, toont DB-grootte + row counts
+// voor de belangrijkste tabellen zodat je ziet hoe dicht bij de 500MB free-tier je zit.
+app.get('/api/admin/supabase-usage', requireAdmin, async (req, res) => {
+  try {
+    const FREE_TIER_BYTES = 500 * 1024 * 1024; // 500 MB
+    // DB size via pg_database_size
+    let dbBytes = null;
+    try {
+      const { data } = await supabase.rpc('pg_database_size_bytes');
+      if (typeof data === 'number') dbBytes = data;
+    } catch {}
+    // Fallback: schat op basis van optelling van belangrijke tabellen (row counts × gemiddelde)
+    const tables = [
+      'bets', 'fixtures', 'odds_snapshots', 'feature_snapshots',
+      'market_consensus', 'pick_candidates', 'model_runs', 'signal_stats',
+      'training_examples', 'raw_api_events', 'execution_logs',
+      'notifications', 'users', 'push_subscriptions', 'scan_history', 'calibration', 'signal_weights'
+    ];
+    const counts = {};
+    for (const t of tables) {
+      try {
+        const { count, error } = await supabase.from(t).select('*', { count: 'exact', head: true });
+        counts[t] = error ? null : (count || 0);
+      } catch { counts[t] = null; }
+    }
+    res.json({
+      dbBytes,
+      freeTierBytes: FREE_TIER_BYTES,
+      usedPct: dbBytes ? Math.round(dbBytes / FREE_TIER_BYTES * 100) : null,
+      dbMB: dbBytes ? +(dbBytes / 1024 / 1024).toFixed(1) : null,
+      freeMB: 500,
+      rowCounts: counts,
+      dashboardUrl: process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace(/\.supabase\.co.*$/, '.supabase.co') + '/dashboard' : null,
+      note: dbBytes === null ? 'pg_database_size_bytes RPC niet beschikbaar — toont alleen row counts. Voor exacte DB-grootte: Supabase dashboard → Settings → Usage.' : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/status', (req, res) => {
   const uptime = process.uptime();
   const c = loadCalib();
