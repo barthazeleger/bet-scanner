@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.6.1';
+const APP_VERSION    = '10.6.2';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -9157,7 +9157,10 @@ function scheduleFixtureSnapshotPolling() {
 
 function scheduleOddsMonitor() {
   const INTERVAL_MS = 60 * 60 * 1000; // 60 min
-  console.log('📈 Odds monitor actief (elke 60 min)');
+  const RE_ALERT_DELTA = 0.03;        // alleen opnieuw alerten bij +3pp verschil of richtingswissel
+  const RE_ALERT_MIN_HOURS = 4;       // of als persistent sharp move na 4u
+  const lastAlerts = new Map();       // betId → { drift, direction, ts }
+  console.log('📈 Odds monitor actief (elke 60 min, dedup bij gelijke drift)');
 
   async function runOddsMonitor() {
     try {
@@ -9262,10 +9265,20 @@ function scheduleOddsMonitor() {
         const driftPct = (drift * 100).toFixed(1);
 
         if (Math.abs(drift) >= 0.05) {
-          if (drift < 0) {
-            await tg(`📉 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (${driftPct}%) | Scherp geld bevestigt jouw kant`).catch(() => {});
-          } else {
-            await tg(`📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`).catch(() => {});
+          const direction = drift < 0 ? 'sharp' : 'fade';
+          const prev = lastAlerts.get(bet.id);
+          const driftChangedEnough = !prev || Math.abs(drift - prev.drift) >= RE_ALERT_DELTA;
+          const directionFlipped   = prev && prev.direction !== direction;
+          const longSincePrev      = prev && (now - prev.ts) >= RE_ALERT_MIN_HOURS * 60 * 60 * 1000;
+          const shouldAlert        = !prev || directionFlipped || driftChangedEnough || longSincePrev;
+
+          if (shouldAlert) {
+            if (direction === 'sharp') {
+              await tg(`📉 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (${driftPct}%) | Scherp geld bevestigt jouw kant`).catch(() => {});
+            } else {
+              await tg(`📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`).catch(() => {});
+            }
+            lastAlerts.set(bet.id, { drift, direction, ts: now });
           }
         }
 
