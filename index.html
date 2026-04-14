@@ -1011,8 +1011,10 @@ nav::-webkit-scrollbar { display: none; }
         <div style="font-size:24px">🤖</div>
       </div>
       <p style="font-size:13px;color:var(--muted);line-height:1.75">
-        EdgePickr combineert api-football Pro data met een zelflerend model (11 signalen) om dagelijkse value bets te vinden.
-        Het doel: systematisch edge vinden waar bookmakers het mis hebben, via Kelly Criterion slim inzetten, en met CLV tracking bewijzen dat het werkt.
+        EdgePickr is een <strong>quantitative market-disagreement engine</strong> voor 6 sporten.
+        Markt = baseline truth, model = residual overlay. Volledig autonoom met point-in-time snapshots,
+        CLV-first KPI, kill-switch enforcement, en minimale operator failsafes voor noodgevallen.
+        Doel: systematisch mispricings vinden, niet "voorspellen wie wint".
       </p>
     </div>
   </div>
@@ -1022,30 +1024,34 @@ nav::-webkit-scrollbar { display: none; }
     <div class="card admin-only" style="display:none">
       <div class="card-title" style="margin-bottom:14px">🧠 Het model uitgelegd</div>
       <div style="font-size:13px;color:var(--muted);line-height:1.9">
-        <div style="margin-bottom:10px"><strong style="color:var(--text)">1. No-vig kans berekening</strong><br>
-        Alle bookmaker odds worden genormaliseerd (marge verwijderd). Het gemiddelde over alle books = consensuskans.</div>
-        <div style="margin-bottom:10px"><strong style="color:var(--text)">2. 11 signalen (api-football Pro)</strong><br>
-        <ul style="padding-left:18px;margin-top:6px">
-          <li>Thuisvoordeel per competitie (2–6%)</li>
-          <li>Vorm laatste 5 wedstrijden</li>
-          <li>Head-to-head record + BTTS-rate</li>
-          <li>Competitiestand + positieverschil</li>
-          <li>Home/away goal splits (thuis- vs uitprestaties)</li>
-          <li>Team seizoensstatistieken (goals avg, clean sheet %)</li>
-          <li>Blessures (aantal + impact)</li>
-          <li>Opstelling/rotatie (als lineup beschikbaar)</li>
-          <li>api-football AI predictions</li>
-          <li>Scheidsrechter (data-verzameling)</li>
-          <li>Over/Under team scoring adjustments</li>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">1. Markt-consensus als baseline</strong><br>
+        Per fixture worden alle bookmaker odds gedevigd (marge verwijderd) → fair market probability. Dit is de "truth anchor".</div>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">2. Model = residual overlay (niet vervanging)</strong><br>
+        Per sport een eigen Poisson/regression overlay die de markt-baseline aanpast. Final prob = market + delta. Sanity check: >4% divergentie tussen model en markt → pick wordt geweigerd.</div>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">3. Sport-specifieke signalen</strong><br>
+        <ul style="padding-left:18px;margin-top:6px;column-count:2;column-gap:24px">
+          <li>Voetbal: form, H2H, blessures, lineup, ref, predictions, weer, Poisson goals</li>
+          <li>NHL: shots-differential (nhl.com), home-ice, b2b, 3-way Poisson</li>
+          <li>MLB: starting pitcher ERA (statsapi.mlb.com), F5 markt</li>
+          <li>NBA: pace/PPG, rebound diff, home split</li>
+          <li>NFL: bye week, division rivalry, points diff</li>
+          <li>Handbal: 3-way Poisson, momentum</li>
+          <li>Hierarchical calibration: global → sport → markt → league</li>
+          <li>Per-signal CLV autotune (sneller dan W/L)</li>
         </ul>
         </div>
-        <div style="margin-bottom:10px"><strong style="color:var(--text)">3. Kelly Criterion + sizing</strong><br>
-        <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">k = (ep×(odd-1) − (1−ep)) / (odd-1)</code><br>
-        Half-Kelly voor veiligheid. 6 markten: Match Winner, Over/Under, BTTS, Draw No Bet, Handicap, Gelijkspel.</div>
-        <div style="margin-bottom:10px"><strong style="color:var(--text)">4. Self-learning</strong><br>
-        Markt multipliers recalibreren na 8+ bets. Signal gewichten auto-tunen dagelijks. EP-bucket herweging na 100 bets. Alles zichtbaar in de 📬 Inbox tab.</div>
-        <div><strong style="color:var(--text)">5. CLV + Variance tracking</strong><br>
-        Slotodds ophalen bij aftrap → CLV% per bet. Variance tracker meet geluk vs skill (σ-afwijking). Timing analyse toont wanneer je de beste odds pakt.</div>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">4. Half-Kelly + diversification</strong><br>
+        <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">k = (ep×(odd-1) − (1−ep)) / (odd-1) × 0.5</code><br>
+        Markten: Moneyline, 3-way ML 60-min (hockey/handbal), Totals, Spreads, Team Totals, BTTS, Double Chance, DNB, F5 (MLB), 1st Period O/U.<br>
+        Diversification: max 1 pick per match, max 2 per sport per dag, max 5 picks/dag totaal.</div>
+        <div style="margin-bottom:10px"><strong style="color:var(--text)">5. Discipline mechanismen (auto)</strong><br>
+        • Kill-switch: markten met avg CLV < -5% (n≥30) auto-disabled<br>
+        • Signal kill: signalen met avg CLV ≤ -3% (n≥50) gemute (weight=0)<br>
+        • Adaptive MIN_EDGE: 8% voor onbewezen markten, 6.5% early, 5.5% proven<br>
+        • Bootstrap mode: 5.5% overal tot 100 totaal settled bets<br>
+        • Drift detection: alert als markt/signal recent verslechtert</div>
+        <div><strong style="color:var(--text)">6. Point-in-time logging (v2 pipeline)</strong><br>
+        12 Supabase tabellen voor reproduceerbaarheid: fixtures, odds_snapshots (90-min polling + kickoff windows), feature_snapshots, market_consensus, model_runs, pick_candidates (incl. rejected_reason), signal_stats, training_examples. Walk-forward backtest endpoint actief.</div>
       </div>
     </div>
 
@@ -1061,31 +1067,52 @@ nav::-webkit-scrollbar { display: none; }
           </div>
         </div>
         <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <span style="font-size:20px">⚾</span>
+          <div>
+            <div style="font-weight:600">MLB StatsAPI <span style="font-size:10px;color:var(--green);font-weight:700">GRATIS</span></div>
+            <div style="color:var(--muted);font-size:12px">Probable pitchers + season stats (ERA, WHIP, IP).<br>Officiële MLB API, geen auth, voedt het MLB pitcher signal en F5 picks.</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <span style="font-size:20px">🏒</span>
+          <div>
+            <div style="font-weight:600">NHL public API <span style="font-size:10px;color:var(--green);font-weight:700">GRATIS</span></div>
+            <div style="color:var(--muted);font-size:12px">Team season stats per tri-code (shots-for/against, PP/PK%).<br>Voedt NHL shots-differential signal. Cache 1u per team.</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
           <span style="font-size:20px">📺</span>
           <div>
             <div style="font-weight:600">ESPN Scoreboard API <span style="font-size:10px;color:var(--green);font-weight:700">GRATIS</span></div>
-            <div style="color:var(--muted);font-size:12px">Live scores auto-refresh (elke 30s) op de Mijn Bets tab + uitslagen check.<br>Volledig gratis, onbeperkt, geen key nodig</div>
+            <div style="color:var(--muted);font-size:12px">Live scores auto-refresh + uitslagen check.<br>Volledig gratis, onbeperkt, geen key nodig</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <span style="font-size:20px">🌦️</span>
+          <div>
+            <div style="font-weight:600">OpenWeatherMap <span style="font-size:10px;color:var(--green);font-weight:700">GRATIS</span></div>
+            <div style="color:var(--muted);font-size:12px">Wind + regen + temp voor outdoor voetbal/NFL.<br>Free tier (60 calls/min) ruim genoeg voor scan-volume.</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <span style="font-size:20px">💾</span>
+          <div>
+            <div style="font-weight:600">Supabase (PostgreSQL) <span style="font-size:10px;color:var(--green);font-weight:700">FREE TIER</span></div>
+            <div style="color:var(--muted);font-size:12px">12 tabellen voor v2 pipeline: bets, fixtures, odds_snapshots, feature_snapshots, market_consensus, model_versions, model_runs, pick_candidates, signal_stats, training_examples, raw_api_events, execution_logs, notifications, users.</div>
           </div>
         </div>
         <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
           <span style="font-size:20px">📱</span>
           <div>
             <div style="font-weight:600">Telegram Bot API <span style="font-size:10px;color:var(--green);font-weight:700">GRATIS</span></div>
-            <div style="color:var(--muted);font-size:12px">Dagelijkse picks, pre-kickoff checks, CLV meldingen, odds alerts, model updates, milestones.<br>Volledig gratis, onbeperkt</div>
-          </div>
-        </div>
-        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-          <span style="font-size:20px">📋</span>
-          <div>
-            <div style="font-weight:600">Google Sheets <span style="font-size:10px;color:var(--green);font-weight:700">GRATIS</span></div>
-            <div style="color:var(--muted);font-size:12px">Database voor bets, users, en instellingen. Persisteert over server restarts.<br>Gratis met Google service account</div>
+            <div style="color:var(--muted);font-size:12px">Dagelijkse picks, pre-kickoff checks, CLV milestones (per markt), drawdown alerts, model updates.</div>
           </div>
         </div>
         <div style="display:flex;align-items:flex-start;gap:10px;opacity:0.5">
           <span style="font-size:20px">🚀</span>
           <div>
-            <div style="font-weight:600;text-decoration:line-through">The Odds API</div>
-            <div style="color:var(--muted);font-size:12px">Vervangen door api-football Pro (meer data, betere dekking)</div>
+            <div style="font-weight:600;text-decoration:line-through">Google Sheets · The Odds API</div>
+            <div style="color:var(--muted);font-size:12px">Beide vervangen — Sheets door Supabase, Odds API door api-sports Pro</div>
           </div>
         </div>
       </div>
@@ -1114,7 +1141,7 @@ nav::-webkit-scrollbar { display: none; }
       </div>
     </div>
     <div style="margin-top:12px;font-size:12px;color:var(--muted)">
-      Startkapitaal €100 · 1 unit = €10 · max 5 picks/dag · min odds 1.60 · min edge 5.5% · min trefkans 28%
+      Startkapitaal €500 · 1 unit = €25 (5% bankroll) · max 5 picks/dag (max 1 per match, max 2 per sport) · min odds 1.60 · adaptive min edge 5.5–8% · bootstrap mode tot 100 settled bets
     </div>
   </div>
 
@@ -1125,7 +1152,7 @@ nav::-webkit-scrollbar { display: none; }
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
         <div>
           <div style="font-weight:600">api-sports All Sports</div>
-          <div style="color:var(--muted);font-size:12px;margin-top:2px">7500 req/dag per sport · voetbal + NBA + tennis + NHL + NFL</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">7500 req/dag per sport · voetbal · NBA · MLB · NHL · NFL · handbal</div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:12px">
           <div style="font-weight:700;color:var(--accent)">€85/mnd</div>
@@ -1183,14 +1210,23 @@ nav::-webkit-scrollbar { display: none; }
           <div style="font-size:11px;color:var(--muted)">Opgezegd: 12-04-2026</div>
         </div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;opacity:0.45">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
         <div>
-          <div style="font-weight:600">api-sports All Sports</div>
-          <div style="color:var(--muted);font-size:12px;margin-top:2px">NBA · NHL · NFL · MLB — beschikbaar als ROI > 10%</div>
+          <div style="font-weight:600">Render.com <span style="font-size:10px;color:var(--green);font-weight:700">FREE</span></div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">Hosting + keep-alive · Node.js backend · auto-deploy bij push naar master</div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:12px">
-          <div style="font-weight:600;color:var(--muted)">€85/mnd</div>
-          <div style="font-size:11px;color:var(--muted)">Inactief</div>
+          <div style="font-weight:700;color:var(--green)">Gratis</div>
+          <div style="font-size:11px;color:var(--muted)">Start: 13-04-2026</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0">
+        <div>
+          <div style="font-weight:600">MLB StatsAPI · NHL public API · ESPN · OpenWeatherMap <span style="font-size:10px;color:var(--green);font-weight:700">FREE</span></div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">Pitchers, shots-differential, live scores, weer — aanvullende databronnen zonder abonnement</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-weight:700;color:var(--green)">Gratis</div>
         </div>
       </div>
     </div>
