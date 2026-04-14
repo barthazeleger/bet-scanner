@@ -2,6 +2,17 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.5.1] - 2026-04-14
+
+### Changed (score/unit alignment)
+- `kellyToUnits()` brackets aangescherpt zodat score 6/10 max 0.75U triggert (was 1.0U). Nieuwe mapping raw-Kelly%: 0.3U <3% · 0.5U 3-6% · 0.75U 6-10% · 1.0U 10-14% · 1.5U 14-20% · 2.0U >20%.
+- Inzetstrategie-kaart labels bijgewerkt (€-bedragen identiek, alleen Kelly% ranges).
+- Frontend `recUnits` helper in bet-edit modal aligned met nieuwe tiers.
+- Reden: half-Kelly + pre-CLV fase vraagt conservatievere staking; auto-stepup en signal-tuning pushen winnende markten vanzelf omhoog als CLV bewijst.
+
+### Tests
+- 190 passed (kellyToUnits tier tests ge-refactored naar nieuwe grenzen).
+
 ## [10.4.1] - 2026-04-14
 
 ### Added (NBA + NFL signal scaffolding — volledig autonoom)
