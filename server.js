@@ -864,9 +864,17 @@ const tg = async (text, type = 'info', userId = null) => {
   tgRaw(text).catch(() => {});
   const lines = text.split('\n');
   const title = lines[0].replace(/[^\w\s€%·:→←↑↓+\-.,!?()]/g, '').trim().slice(0, 100);
+  const body = lines.slice(1).join('\n').slice(0, 200);
   supabase.from('notifications').insert({
     type, title, body: text, read: false, user_id: userId
   }).then(() => {}).catch(() => {});
+  // Ook push notificatie sturen
+  sendPushToAll({
+    title: title || 'EdgePickr',
+    body: body || 'Nieuwe update',
+    tag: type,
+    url: '/',
+  }).catch(() => {});
 };
 
 // ── FORM & SIGNALS ─────────────────────────────────────────────────────────────
@@ -4237,7 +4245,7 @@ function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
   const totalInzet = bets.filter(b => b.uitkomst !== 'Open').reduce((s, b) => s + b.inzet, 0);
   const roi   = totalInzet > 0 ? wlEur / totalInzet : 0;
   const openInzet = bets.filter(b => b.uitkomst === 'Open').reduce((s, b) => s + (b.inzet || 0), 0);
-  const bankroll  = +(startBankroll + wlEur - openInzet).toFixed(2);
+  const bankroll  = +(startBankroll + wlEur).toFixed(2); // alleen settled
   const avgOdds   = total > 0 ? +(bets.reduce((s,b)=>s+b.odds,0)/total).toFixed(3) : 0;
   const avgUnits  = total > 0 ? +(bets.reduce((s,b)=>s+b.units,0)/total).toFixed(2) : 0;
   const strikeRate = (W+L) > 0 ? Math.round(W/(W+L)*100) : 0;
@@ -4252,13 +4260,13 @@ function calcStats(bets, startBankroll = START_BANKROLL, unitEur = UNIT_EUR) {
   // Variance tracker
   const settledBets = bets.filter(b => b.uitkomst === 'W' || b.uitkomst === 'L');
   const expectedWins = +settledBets.reduce((s, b) => {
-    const prob = b.score ? b.score / 100 : (b.odds > 1 ? 1 / b.odds : 0.5);
+    const prob = b.odds > 1 ? 1 / b.odds : 0.5;
     return s + prob;
   }, 0).toFixed(2);
   const actualWins = W;
   const variance = +(actualWins - expectedWins).toFixed(2);
   const varianceStdDev = +Math.sqrt(settledBets.reduce((s, b) => {
-    const prob = b.score ? b.score / 100 : (b.odds > 1 ? 1 / b.odds : 0.5);
+    const prob = b.odds > 1 ? 1 / b.odds : 0.5;
     return s + prob * (1 - prob);
   }, 0)).toFixed(2);
   const luckFactor = varianceStdDev > 0 ? +(variance / varianceStdDev).toFixed(2) : 0;
