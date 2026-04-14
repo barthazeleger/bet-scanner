@@ -2,6 +2,14 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.6.5] - 2026-04-14
+
+### Fixed (kritiek)
+- **Odds-alert dedup bleef triggeren bij zelfde drift**: oorzaak was race-condition bij Render-restart — `loadCalib()` sync kon DEFAULT_CALIB returnen voor Supabase-cache warm was, waardoor saveCalib de hele calibratie overschreef (inclusief oddsAlerts). Nu: `loadCalibAsync()` aan begin van elke run (hot cache), één batch-write aan eind (geen N-writes per bet), fail-safe op lege calib.
+
+### Added (actionable todos)
+- `evaluateActionableTodos()` draait dagelijks na resultaten-check. Inserteert sticky inbox-items voor beslissingen die actie vragen, idempotent (checkt of todo-type al bestaat). Eerste todo: **Render upgrade** bij ≥100 settled bets + avg CLV > 0%. Blijft unread tot user mark-read klikt. Framework uitbreidbaar voor meer todos (bv BetCity bij €2k bankroll).
+
 ## [10.6.4] - 2026-04-14
 
 ### Fixed (kritiek)

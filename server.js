@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.6.4';
+const APP_VERSION    = '10.6.5';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -9191,12 +9191,20 @@ function scheduleOddsMonitor() {
 
   async function runOddsMonitor() {
     try {
+      // Load calib async zodat _calibCache warm is voor we schrijven.
+      // Voorkomt dat na Render-restart de sync loadCalib() DEFAULT_CALIB returnt
+      // en saveCalib de hele calibratie overschrijft.
+      const calib = await loadCalibAsync();
+      if (!calib || typeof calib !== 'object') return; // fail-safe
+      calib.oddsAlerts = calib.oddsAlerts || {};
+
       const { bets } = await readBets();
       const openBets = bets.filter(b => b.uitkomst === 'Open' && b.tijd);
       if (!openBets.length) return;
 
       const now = Date.now();
       let checksRun = 0;
+      let dedupDirty = false;
       const MAX_CHECKS = 15; // max 15 fixtures per run (conservatief · ~30 API calls max)
 
       for (const bet of openBets) {
@@ -9293,8 +9301,6 @@ function scheduleOddsMonitor() {
 
         if (Math.abs(drift) >= 0.05) {
           const direction = drift < 0 ? 'sharp' : 'fade';
-          const calib = loadCalib();
-          calib.oddsAlerts = calib.oddsAlerts || {};
           const prev = calib.oddsAlerts[bet.id];
           const driftChangedEnough = !prev || Math.abs(drift - prev.drift) >= RE_ALERT_DELTA;
           const directionFlipped   = prev && prev.direction !== direction;
@@ -9308,15 +9314,19 @@ function scheduleOddsMonitor() {
               await tg(`📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`).catch(() => {});
             }
             calib.oddsAlerts[bet.id] = { drift, direction, ts: now };
-            // Cleanup: gooi entries ouder dan 24u weg (bets zijn dan settled/verlopen)
-            for (const k of Object.keys(calib.oddsAlerts)) {
-              if (now - calib.oddsAlerts[k].ts > 24 * 60 * 60 * 1000) delete calib.oddsAlerts[k];
-            }
-            await saveCalib(calib);
+            dedupDirty = true;
           }
         }
 
         await sleep(150);
+      }
+
+      // Eén keer saveCalib aan het eind (batch write) + 24u cleanup
+      if (dedupDirty) {
+        for (const k of Object.keys(calib.oddsAlerts)) {
+          if (now - calib.oddsAlerts[k].ts > 24 * 60 * 60 * 1000) delete calib.oddsAlerts[k];
+        }
+        await saveCalib(calib);
       }
     } catch (err) {
       console.error('Odds monitor error:', err.message);
@@ -9644,6 +9654,49 @@ function scheduleDailyResultsCheck() {
       } catch { /* swallow */ }
     }
 
+    // Actionable todos check — sticky inbox-items voor beslissingen die je moet nemen
+    await evaluateActionableTodos().catch(e => console.error('Todo-check fout:', e.message));
+
     scheduleDailyResultsCheck(); // plan volgende dag
   }, delay);
+}
+
+// ── ACTIONABLE TODOS — sticky inbox-items ───────────────────────────────────
+// Inbox-notifications die blijven staan tot user ze als gelezen markeert.
+// Idempotent: check of todo-type al bestaat (ook als 'read') voor we 'm inserten.
+async function evaluateActionableTodos() {
+  const todos = [];
+  const c = loadCalib();
+
+  // TODO: Render upgrade — bij 100 settled bets met positieve gem CLV
+  try {
+    const totalSettled = c.totalSettled || 0;
+    const clvList = (c.clvHistory || []).slice(0, 100);
+    const avgClv = clvList.length ? clvList.reduce((s, x) => s + (x.clv_pct || 0), 0) / clvList.length : 0;
+    if (totalSettled >= 100 && avgClv > 0) {
+      todos.push({
+        type: 'todo_render_upgrade',
+        title: '🚀 Tijd om Render te upgraden',
+        body: `Milestone: ${totalSettled} settled bets met avg CLV ${avgClv.toFixed(2)}%.\n\nSysteem bewijst waarde. Upgrade Render Starter ($7/mnd) voor guaranteed uptime — huidige free tier kan sleep/cold-start veroorzaken waardoor pre-kickoff checks en CLV-capture kunnen missen.\n\nRender dashboard → Upgrade Plan.`,
+      });
+    }
+  } catch {}
+
+  // Insert als nog niet bestaat
+  for (const todo of todos) {
+    try {
+      const { data } = await supabase.from('notifications')
+        .select('id').eq('type', todo.type).limit(1);
+      if (!data || !data.length) {
+        await supabase.from('notifications').insert({
+          type: todo.type,
+          title: todo.title,
+          body: todo.body,
+          read: false,
+          user_id: null,
+        });
+        console.log(`📋 Todo aangemaakt: ${todo.type}`);
+      }
+    } catch (e) { console.error('Todo insert fout:', e.message); }
+  }
 }
