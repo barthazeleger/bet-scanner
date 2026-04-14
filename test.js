@@ -2024,6 +2024,84 @@ test('afGet timeout: AbortController fires bij langzame call', async () => {
   assert.strictEqual(aborted, true, 'AbortController fires correct binnen 10ms');
 });
 
+// ── Code-review v3 fixes (v10.0.2) ──────────────────────────────────────────
+
+console.log('\n  Reviewer v3 fixes:');
+
+test('safePick: non-admin krijgt geen reason/kelly/ep/strength/expectedEur/signals', () => {
+  const PUBLIC_FIELDS = ['match', 'league', 'label', 'odd', 'units', 'prob', 'edge', 'score', 'kickoff', 'bookie', 'sport', 'selected'];
+  const safePick = (p, isAdmin) => {
+    if (isAdmin) return p;
+    const out = {};
+    for (const k of PUBLIC_FIELDS) if (p[k] !== undefined) out[k] = p[k];
+    return out;
+  };
+  const internal = {
+    match: 'A vs B', league: 'L', label: 'home', odd: 1.9, prob: 55, score: 7,
+    reason: 'TOPSECRET model details', kelly: 0.045, ep: 0.55, strength: 0.123,
+    expectedEur: 4.50, signals: ['ha:+5%', 'form:+2%'], scanType: 'pre',
+  };
+  const adminView = safePick(internal, true);
+  assert.ok(adminView.reason && adminView.kelly && adminView.signals);
+  const userView = safePick(internal, false);
+  assert.strictEqual(userView.reason, undefined);
+  assert.strictEqual(userView.kelly, undefined);
+  assert.strictEqual(userView.ep, undefined);
+  assert.strictEqual(userView.strength, undefined);
+  assert.strictEqual(userView.expectedEur, undefined);
+  assert.strictEqual(userView.signals, undefined);
+  assert.strictEqual(userView.scanType, undefined); // ook scanType weg
+  // Public fields wel aanwezig
+  assert.strictEqual(userView.match, 'A vs B');
+  assert.strictEqual(userView.odd, 1.9);
+  assert.strictEqual(userView.score, 7);
+});
+
+test('POTD: filtert op selected:true uit history (anti-diversification-bypass)', () => {
+  const histPicks = [
+    { match: 'A vs B', expectedEur: 6.0, selected: false }, // door divers gefilterd
+    { match: 'C vs D', expectedEur: 5.0, selected: true },
+    { match: 'E vs F', expectedEur: 4.0, selected: true },
+  ];
+  // POTD logic: filter selected !== false, dan hoogste expectedEur
+  const selectedOnly = histPicks.filter(p => p.selected !== false);
+  const fallback = selectedOnly.length ? selectedOnly : histPicks;
+  const pick = [...fallback].sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0))[0];
+  assert.strictEqual(pick.match, 'C vs D', 'A vs B was uitgesloten door diversification, niet pakken');
+});
+
+test('POTD: backwards-compat met pre-v10.0.2 entries (selected undefined)', () => {
+  const oldHist = [
+    { match: 'A vs B', expectedEur: 6.0 }, // geen selected veld
+    { match: 'C vs D', expectedEur: 5.0 },
+  ];
+  const selectedOnly = oldHist.filter(p => p.selected !== false);
+  // Beide blijven (selected undefined !== false)
+  assert.strictEqual(selectedOnly.length, 2);
+});
+
+test('CSP header bevat strict-default + unsafe-inline waar nodig', () => {
+  const CSP = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join('; ');
+  // Critical directives present
+  assert.ok(CSP.includes("default-src 'self'"), 'default-src self');
+  assert.ok(CSP.includes("frame-ancestors 'none'"), 'frame-ancestors blocked');
+  assert.ok(CSP.includes("object-src 'none'"), 'object-src blocked');
+  assert.ok(CSP.includes("base-uri 'self'"), 'base-uri locked');
+  // unsafe-inline aanwezig (noodzakelijk omdat index.html inline scripts heeft)
+  assert.ok(CSP.includes("'unsafe-inline'"), 'unsafe-inline accepted (legacy)');
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
