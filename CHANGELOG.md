@@ -2,6 +2,21 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.14] - 2026-04-15
+
+### Added
+- **Odds drift dashboard** — nieuwe Data-tab kaart "📉 Odds drift" toont per sport + markt + uur-vóór-kickoff bucket (0-2h / 2-6h / 6-12h / 12-24h / 24-48h / 48h+) de gemiddelde prijs-beweging t.o.v. de closing line. Groen = odds waren vroeger hoger (vroege entry beter), rood = later inzetten gaf betere prijs. Kolom "Beste entry" flaggt de optimale bucket per markt. Endpoint `/api/admin/odds-drift?days=14` met min samplegrootte 5 per bucket.
+
+## [10.8.13] - 2026-04-15
+
+### Fixed
+- **Scheduled scans sturen nu ook notificaties**: voorheen deed `scheduleScanAtHour` alleen `runPrematch()` (football, geen Telegram/push). Verklaart waarom je geen 14:00 notificatie kreeg.
+- **Scheduled scans doen nu de volle multi-sport pipeline**: basketball + hockey + baseball + NFL + handball werden overgeslagen door cron — alleen UI-triggers deden alle 6 sporten.
+
+### Changed
+- **Refactor: `runFullScan()` shared function**. Pipeline geëxtraheerd uit `app.post('/api/prematch')` route zodat handmatige én cron scans identiek draaien — multi-sport, kill-switch, diversification, pick-selectie, tg() notificatie, scan-history save. Route is nu dunne SSE wrapper.
+- Cron-scan gebruikt admin's `preferredBookies` setting voor consistente bookie-filter met UI.
+
 ## [10.8.12] - 2026-04-15
 
 ### Fixed
