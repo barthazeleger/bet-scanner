@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.22';
+const APP_VERSION    = '10.7.23';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5170,6 +5170,25 @@ async function runPrematch(emit) {
         const ko = new Date(kickoffMs)
           .toLocaleString('nl-NL', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' });
 
+        // ── Knockout / leg-info (CL, EL, Conference, domestic cups) ───
+        // v10.7.23: parse f.league.round. Voorbeelden: "Round of 16 - 1st Leg",
+        // "Quarter-finals 2nd Leg", "Semi-finals", "Final". Voor 2e leg is de
+        // aggregaatstand cruciaal (wij weten die nog niet; dat is phase 2).
+        // Phase 1: alleen LOGGEN als signaal (weight=0 default, auto-promote
+        // zodra CLV positief over ≥20 samples).
+        const roundStr = String(f.league?.round || '').toLowerCase();
+        const legMatch = roundStr.match(/(1st|2nd|first|second)\s*leg/);
+        const knockoutInfo = {
+          isKnockout: /round of|quarter|semi|final|1st leg|2nd leg|leg/i.test(roundStr),
+          leg: legMatch ? (legMatch[1].startsWith('1') || legMatch[1] === 'first' ? 1 : 2) : null,
+          stageLabel: roundStr.includes('final') && !roundStr.includes('semi') && !roundStr.includes('quarter') ? 'finale'
+                    : roundStr.includes('semi') ? 'halve finale'
+                    : roundStr.includes('quarter') ? 'kwartfinale'
+                    : roundStr.includes('round of 16') ? '1/8 finale'
+                    : roundStr.includes('round of 32') ? '1/16 finale'
+                    : null,
+        };
+
         // ── Odds ophalen van api-football.com ─────────────────────────
         await sleep(120);
         const oddsResp = await afGet('v3.football.api-sports.io', '/odds', { fixture: fid });
@@ -5412,11 +5431,24 @@ async function runPrematch(emit) {
           if (Math.abs(congestionAdj) >= 0.005) sigs.push(`congestion:${(congestionAdj*100).toFixed(1)}%`);
           if (weatherData && (weatherData.rain > 5 || weatherData.wind > 30)) sigs.push(`weather:${(weatherAdj*100).toFixed(1)}%`);
           if (poissonOverP !== null) sigs.push(`poisson_o25:${(poissonOverP*100).toFixed(1)}%`);
+          // v10.7.23: knockout stage + leg signalen (weight=0 default, auto-promote via CLV)
+          if (knockoutInfo.isKnockout) {
+            if (knockoutInfo.leg === 1) sigs.push('knockout_1st_leg:0%');
+            if (knockoutInfo.leg === 2) sigs.push('knockout_2nd_leg:0%');
+            if (knockoutInfo.stageLabel === 'finale') sigs.push('knockout_final:0%');
+            else if (knockoutInfo.stageLabel === 'halve finale') sigs.push('knockout_semi:0%');
+            else if (knockoutInfo.stageLabel === 'kwartfinale') sigs.push('knockout_quarter:0%');
+          }
           return sigs;
         };
         const matchSignals = buildSignals();
 
-        const sharedNotes = `${posStr}${splitNote}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}${weatherNote}${poissonNote}${congestionNote}`;
+        // Human-readable knockout note voor reason string
+        const knockoutNote = knockoutInfo.isKnockout && (knockoutInfo.stageLabel || knockoutInfo.leg)
+          ? ` | 🥊 ${knockoutInfo.leg ? `${knockoutInfo.leg}e leg ` : ''}${knockoutInfo.stageLabel || 'knock-out'}`
+          : '';
+
+        const sharedNotes = `${posStr}${splitNote}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}${weatherNote}${poissonNote}${congestionNote}${knockoutNote}`;
         const reasonH = `Consensus: ${(fp.home*100).toFixed(1)}%→${(adjHome2*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`;
         const reasonA = `Consensus: ${(fp.away*100).toFixed(1)}%→${(adjAway2*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`;
         const reasonD = `Gelijkspel: ${((fp.draw||0)*100).toFixed(1)}% | ${bD?.bookie}: ${bD?.price}${sharedNotes} | ${ko}`;

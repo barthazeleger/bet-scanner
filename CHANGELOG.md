@@ -2,6 +2,34 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.23] - 2026-04-15
+
+### Added (knockout / 2-leg tie awareness — v1: logging)
+Champions League, Europa League, Conference League, domestic cups. `f.league.round` bevat nu strings zoals "Round of 16 - 1st Leg", "Quarter-finals 2nd Leg", "Semi-finals", "Final". Parser extraheert:
+- `leg` (1 of 2)
+- `stageLabel` (finale / halve finale / kwartfinale / 1/8 finale / 1/16 finale)
+- `isKnockout` (boolean)
+
+**Wat er gebeurt nu:**
+- Signalen toegevoegd: `knockout_1st_leg`, `knockout_2nd_leg`, `knockout_final`, `knockout_semi`, `knockout_quarter`. Allemaal weight=0 default. Auto-promote via `autoTuneSignalsByClv` zodra ≥20 bets met positieve CLV verzameld.
+- Reason-string krijgt `🥊 2e leg kwartfinale` note.
+- `humanizePickReason` (pick-kaart analyse) vertaalt naar "return leg — aggregaatstand speelt mee" of "heenwedstrijd van 2-leg tie".
+
+**Wat NIET in v1:**
+- Aggregate score adjustment: als team +2 op aggregaat staat gaan ze vaak conservatief spelen. Dat vereist api-call per fixture om 1e leg score op te halen. Phase 2.
+- Away-goals rule (afgeschaft door UEFA 2021, maar domestic cups soms nog).
+
+### Fixed (Padres ML dedupe — user-reported)
+Padres scan gaf Unibet 1.88 terwijl Bet365 1.90 had. Twee oorzaken:
+1. `parseGameOdds` matchte ML strikt op `bet.id===1`. Sommige bookies leveren Match Winner onder andere ID, alleen herkenbaar via naam ("Match Winner", "Home/Away", "Moneyline"). Nu naam-fallback.
+2. Dedupe nam LAAGSTE prijs per bookie voor alle markten. Correct voor spread/totals (alt-lines hebben hogere prijzen), maar WRONG voor ML/DC/DNB/3way/NRFI/oddEven — die hebben geen alt-concept. Nu split: `dedupeMainLine` (lowest) voor spread/totals, `dedupeBestPrice` (highest) voor ML e.d.
+
+### Fixed (remaining silent catches — debuggability)
+14 stille catch blocks hebben nu minstens console.warn met context: pre-fetch fixtures, standings/injuries/referees enrichment, why-this-pick signal parsing, scan user-prefs load, pre-kickoff odds fetch, scan history load, analyze live-status check, Supabase RPC fallback, unit Telegram sends, market-samples refresh, loadSignalWeightsAsync. Functioneel gedrag onveranderd, alleen betere diagnose bij crashes.
+
+### Tests
+3 nieuwe regression tests: knockout-round parser, ML dedupe invariant, Padres-scenario reproduction. Totaal **226 tests, 0 failed** (was 215).
+
 ## [10.7.22] - 2026-04-15
 
 ### Security / Fixed (code-review bevindingen)

@@ -1534,6 +1534,16 @@ function humanizePickReason(pick) {
     else if (/wind/i.test(wx)) facts.push('harde wind verwacht');
   }
 
+  // Knockout / 2-leg tie: "🥊 2e leg kwartfinale"
+  const knockout = parts.find(p => /🥊|leg|knock/i.test(p));
+  if (knockout) {
+    if (/2e leg|2nd leg/i.test(knockout)) facts.push('return leg — aggregaatstand speelt mee');
+    else if (/1e leg|1st leg/i.test(knockout)) facts.push('heenwedstrijd van 2-leg tie');
+    else if (/finale/i.test(knockout)) facts.push('knock-out finale — winner-takes-all');
+    else if (/halve|semi/i.test(knockout)) facts.push('halve finale knock-out');
+    else if (/kwart|quarter/i.test(knockout)) facts.push('kwartfinale knock-out');
+  }
+
   // Stakes: "🔴 Degradatiezone" etc
   const stakes = parts.find(p => /(titelrace|degradatie|playoff|europese|niets te spelen)/i.test(p));
   if (stakes) {

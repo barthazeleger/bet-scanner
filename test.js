@@ -2597,6 +2597,30 @@ test('humanize narrative XSS: escape helper werkt', () => {
   assert.strictEqual(escape('normaal'), 'normaal');
 });
 
+test('knockout parser: detecteert leg en stage uit f.league.round', () => {
+  // Reproduceer de knockoutInfo logic uit server.js runPrematch
+  const parse = (round) => {
+    const roundStr = String(round || '').toLowerCase();
+    const legMatch = roundStr.match(/(1st|2nd|first|second)\s*leg/);
+    return {
+      isKnockout: /round of|quarter|semi|final|1st leg|2nd leg|leg/i.test(roundStr),
+      leg: legMatch ? (legMatch[1].startsWith('1') || legMatch[1] === 'first' ? 1 : 2) : null,
+      stageLabel: roundStr.includes('final') && !roundStr.includes('semi') && !roundStr.includes('quarter') ? 'finale'
+                : roundStr.includes('semi') ? 'halve finale'
+                : roundStr.includes('quarter') ? 'kwartfinale'
+                : roundStr.includes('round of 16') ? '1/8 finale'
+                : roundStr.includes('round of 32') ? '1/16 finale'
+                : null,
+    };
+  };
+  assert.deepStrictEqual(parse('Regular Season - 28'), { isKnockout: false, leg: null, stageLabel: null });
+  assert.deepStrictEqual(parse('Round of 16 - 1st Leg'), { isKnockout: true, leg: 1, stageLabel: '1/8 finale' });
+  assert.deepStrictEqual(parse('Quarter-finals 2nd Leg'), { isKnockout: true, leg: 2, stageLabel: 'kwartfinale' });
+  assert.deepStrictEqual(parse('Semi-finals'), { isKnockout: true, leg: null, stageLabel: 'halve finale' });
+  assert.deepStrictEqual(parse('Final'), { isKnockout: true, leg: null, stageLabel: 'finale' });
+  assert.deepStrictEqual(parse('Round of 32 2nd leg'), { isKnockout: true, leg: 2, stageLabel: '1/16 finale' });
+});
+
 test('parseGameOdds ML: dedupe pakt HOOGSTE prijs per bookie (geen alt-lijn risico)', () => {
   // Zelfde logic als dedupeBestPrice in parseGameOdds
   const dedupeBestPrice = (arr, keyFn) => {
