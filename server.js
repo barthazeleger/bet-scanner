@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.14';
+const APP_VERSION    = '10.8.15';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -7158,6 +7158,11 @@ app.get('/api/admin/odds-drift', requireAdmin, async (req, res) => {
   try {
     const days = Math.max(1, Math.min(30, parseInt(req.query.days) || 14));
     const sinceIso = new Date(Date.now() - days * 86400 * 1000).toISOString();
+    // v10.8.15: scope toggle. 'mine' (default) filtert naar fixtures waar user
+    // zelf op heeft gelogd — voorheen toonde de view ook sporten/wedstrijden
+    // die user nooit heeft aangeraakt. 'all' houdt het brede beeld (meer
+    // samples, betrouwbaarder per bucket), handig voor research.
+    const scope = (req.query.scope === 'all') ? 'all' : 'mine';
 
     // Stap 1: fixtures die al gestart zijn in de window (we willen close-odds)
     const nowIso = new Date().toISOString();
@@ -7166,9 +7171,22 @@ app.get('/api/admin/odds-drift', requireAdmin, async (req, res) => {
       .gte('start_time', sinceIso)
       .lt('start_time', nowIso)
       .limit(800);
-    if (!fixtures?.length) return res.json({ days, totalFixtures: 0, buckets: [] });
-    const fixtureMap = new Map(fixtures.map(f => [f.id, f]));
-    const fixtureIds = fixtures.map(f => f.id);
+    if (!fixtures?.length) return res.json({ days, scope, totalFixtures: 0, buckets: [] });
+    let allowedIds = null;
+    if (scope === 'mine') {
+      const { data: myBets } = await supabase.from('bets')
+        .select('fixture_id').eq('user_id', req.user?.id).not('fixture_id', 'is', null);
+      allowedIds = new Set((myBets || []).map(b => b.fixture_id));
+    }
+    const filteredFixtures = allowedIds
+      ? fixtures.filter(f => allowedIds.has(f.id))
+      : fixtures;
+    if (!filteredFixtures.length) return res.json({
+      days, scope, totalFixtures: 0, buckets: [],
+      note: scope === 'mine' ? 'Nog geen gelogde bets in deze window. Schakel naar scope=all voor brede data.' : undefined,
+    });
+    const fixtureMap = new Map(filteredFixtures.map(f => [f.id, f]));
+    const fixtureIds = filteredFixtures.map(f => f.id);
 
     // Stap 2: snapshots voor deze fixtures, paginated om Supabase 1000-row cap te ontwijken
     const snapshots = [];
@@ -7182,7 +7200,7 @@ app.get('/api/admin/odds-drift', requireAdmin, async (req, res) => {
       if (snaps?.length) snapshots.push(...snaps);
       if (snapshots.length >= 20000) break; // hard cap
     }
-    if (!snapshots.length) return res.json({ days, totalFixtures: fixtures.length, totalSnapshots: 0, buckets: [] });
+    if (!snapshots.length) return res.json({ days, scope, totalFixtures: filteredFixtures.length, totalSnapshots: 0, buckets: [] });
 
     // Stap 3: groeperen per (fixture, bookmaker, market_type, selection_key, line)
     // Voor elke groep: sorteer op captured_at, laatste = close line.
@@ -7260,7 +7278,7 @@ app.get('/api/admin/odds-drift', requireAdmin, async (req, res) => {
     }
 
     res.json({
-      days, totalFixtures: fixtures.length, totalSnapshots: snapshots.length,
+      days, scope, totalFixtures: filteredFixtures.length, totalSnapshots: snapshots.length,
       buckets, bestEntry,
       note: 'avg_drift_pct: % verandering naar close. Negatief = odds waren vroeger HOGER (vroege inzet beter). Positief = later inzetten was beter.',
     });
@@ -8632,13 +8650,56 @@ app.post('/api/analyze', async (req, res) => {
       console.warn('Scan history load failed:', e.message);
     }
 
-    // Find matching picks
-    const matches = allPicks.filter(p => {
+    // v10.8.15: filter op user's preferredBookies. Voorheen kreeg je soms een
+    // analyse terug van een pick met bookie die je niet eens hebt geselecteerd
+    // (bv. William Hill terwijl je alleen Bet365/Unibet hebt). Dat gebeurt als
+    // de pick oorspronkelijk onder admin-prefs is gescand maar user heeft
+    // inmiddels andere bookies. We filteren hier; bij 0 matches tonen we een
+    // waarschuwing plus de niet-gefilterde resultaten zodat user weet dat er
+    // wel een pick bestond maar buiten zijn bookie-set.
+    let userBookiesLc = null;
+    try {
+      const users = await loadUsers().catch(() => []);
+      const me = users.find(u => u.id === req.user?.id);
+      const list = me?.settings?.preferredBookies;
+      if (Array.isArray(list) && list.length) {
+        userBookiesLc = list.map(b => (b || '').toString().toLowerCase()).filter(Boolean);
+      }
+    } catch {}
+
+    const rawMatches = allPicks.filter(p => {
       const matchStr = (p.match || '').toLowerCase();
       return searchTerms.some(t => matchStr.includes(t));
     });
+    const inPrefs = (p) => !userBookiesLc
+      || userBookiesLc.some(b => (p.bookie || '').toLowerCase().includes(b));
+    const matchesPref = rawMatches.filter(inPrefs);
+    const matchesNonPref = rawMatches.filter(p => !inPrefs(p));
+    const matches = matchesPref.length ? matchesPref : [];
+    const nonPrefWarning = (!matchesPref.length && matchesNonPref.length)
+      ? {
+          warning: `Pick gevonden, maar niet bij jouw bookies (${(userBookiesLc || []).join(', ')}). Beschikbaar bij: ${Array.from(new Set(matchesNonPref.map(p => p.bookie).filter(Boolean))).join(', ') || 'onbekend'}.`,
+          matches: matchesNonPref,
+        }
+      : null;
 
     if (!matches.length) {
+      // v10.8.15: als pick wel bestaat bij een bookie buiten user's prefs,
+      // geef dat expliciet terug ipv "Geen analyse" + fixture-zoektocht. Dan
+      // weet user: pick bestaat maar niet op zijn bookies.
+      if (nonPrefWarning) {
+        const projected = nonPrefWarning.matches.slice(0, 5).map(p => {
+          const score = p.score || (p.kelly ? Math.min(10, Math.max(5, Math.round((p.kelly - 0.015) / 0.135 * 5) + 5)) : null);
+          return {
+            match: p.match, league: p.league, label: p.label, odd: p.odd,
+            prob: p.prob, units: p.units, edge: p.edge, score,
+            kickoff: p.kickoff, bookie: p.bookie, sport: p.sport || 'football',
+            warning: nonPrefWarning.warning,
+          };
+        });
+        if (projected.length === 1) return res.json(projected[0]);
+        return res.json({ multi: true, results: projected, warning: nonPrefWarning.warning });
+      }
       // Try to find upcoming fixtures via API (wider search, multi-sport)
       // Zoek gisteren + vandaag + morgen (Amsterdam) zodat nachtwedstrijden (NHL/NBA) ook gevonden worden.
       const now = Date.now();
@@ -10834,6 +10895,17 @@ function scheduleScanAtHour(timeInput) {
     // v10.8.13: cron-scan draait nu de VOLLE pipeline (multi-sport +
     // notificatie) ipv alleen football via runPrematch. Verklaart waarom
     // je voorheen geen push/Telegram op scheduled scans kreeg.
+    // v10.8.15: altijd een start-heartbeat naar notifications tabel, zodat
+    // user achteraf kan zien of de cron-tik überhaupt vuurde (onderscheidt
+    // "scheduler stilstand" vs "scan draait maar tg/push faalt").
+    try {
+      await supabase.from('notifications').insert({
+        type: 'cron_tick',
+        title: `⏱️ Cron scan ${label} gestart`,
+        body: `Scheduler triggered at ${new Date().toISOString()}`,
+        read: false, user_id: null,
+      });
+    } catch {}
     try {
       if (scanRunning) {
         console.log(`⚠️ Scan ${label}: al een scan bezig, skip cron-tik`);
@@ -10873,6 +10945,7 @@ function scheduleDailyScan() {
     const admin = users.find(u => u.role === 'admin');
     if (!admin) {
       // Geen admin-user bekend; plan een losse default-scan. Handle bewaren in _globalScanTimers.
+      console.log('⚠️ scheduleDailyScan: geen admin-user, default-scan op 07:30');
       _globalScanTimers.push(scheduleScanAtHour('07:30'));
       return;
     }
@@ -10881,11 +10954,55 @@ function scheduleDailyScan() {
       userScanTimers[admin.id].forEach(h => clearTimeout(h));
     }
     const times = admin.settings?.scanTimes?.length ? admin.settings.scanTimes : ['07:30'];
+    console.log(`📅 Admin scan-scheduler: ${times.join(', ')} (scanEnabled=${admin.settings?.scanEnabled !== false})`);
     userScanTimers[admin.id] = times.map(t => scheduleScanAtHour(t));
-  }).catch(() => {
+  }).catch((e) => {
+    console.log('⚠️ scheduleDailyScan: loadUsers faalde, default op 07:30:', e.message);
     _globalScanTimers.push(scheduleScanAtHour('07:30'));
   });
 }
+
+// v10.8.15: diagnostic endpoint. Vertelt welke scan-tijden gepland staan voor
+// admin en wanneer de volgende cron-tik valt. Bedoeld om te onderscheiden
+// tussen "scheduler heeft 21:00 niet gepland" vs "scheduler vuurde maar scan
+// faalde". Geen auth buiten requireAdmin.
+app.get('/api/admin/scheduler-status', requireAdmin, async (req, res) => {
+  try {
+    const users = await loadUsers().catch(() => []);
+    const admin = users.find(u => u.role === 'admin');
+    const times = admin?.settings?.scanTimes?.length ? admin.settings.scanTimes : ['07:30'];
+    const enabled = admin?.settings?.scanEnabled !== false;
+    const now = new Date();
+    const amsNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+    const offsetMs = amsNow.getTime() - now.getTime();
+    const upcoming = times.map(t => {
+      const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return { time: t, error: 'bad format' };
+      const target = new Date(now);
+      target.setHours(parseInt(m[1]), parseInt(m[2]), 0, 0);
+      target.setTime(target.getTime() - offsetMs);
+      if (target <= now) target.setDate(target.getDate() + 1);
+      return {
+        time: t,
+        nextFire: target.toISOString(),
+        nextFireLocal: target.toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam' }),
+        inMinutes: Math.round((target - now) / 60000),
+      };
+    }).sort((a, b) => (a.inMinutes || 0) - (b.inMinutes || 0));
+    const activeTimers = admin ? (userScanTimers[admin.id]?.length || 0) : 0;
+    res.json({
+      adminId: admin?.id || null,
+      scanEnabled: enabled,
+      configuredTimes: times,
+      activeTimers,
+      upcoming,
+      serverNow: now.toISOString(),
+      amsNow: amsNow.toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam' }),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 const _globalScanTimers = []; // fallback-handles als geen admin-user bekend is
 
 // ── DAGELIJKSE UITSLAG CHECK (10:00 Amsterdam) ───────────────────────────────
