@@ -2754,26 +2754,37 @@ test('knockout parser: detecteert leg en stage uit f.league.round', () => {
   assert.deepStrictEqual(parse('Round of 32 2nd leg'), { isKnockout: true, leg: 2, stageLabel: '1/16 finale' });
 });
 
-test('projection compounding: bankroll groeit correct bij positieve monthly rate', () => {
-  // Reproduceer renderProjections project() logica
-  const project = (bankroll, monthlyRate, months) => {
+test('projection (v10.8.2): monthly unit-review = 10% van bankroll model', () => {
+  // Reproduceer renderProjections project() logic met maand-review
+  const project = (bankroll, unitEur, betsPerMonth, avgUnits, effRoi) => {
     const out = [bankroll];
-    for (let m = 1; m <= months; m++) {
-      const next = out[m - 1] * (1 + monthlyRate);
-      out.push(+next.toFixed(2));
+    let curBank = bankroll;
+    let curUnit = unitEur;
+    for (let m = 1; m <= 12; m++) {
+      const stakePerBet = curUnit * avgUnits;
+      const monthProfit = betsPerMonth * stakePerBet * effRoi;
+      curBank = +(curBank + monthProfit).toFixed(2);
+      out.push(curBank);
+      curUnit = Math.max(1, Math.round(curBank * 0.10));
     }
     return out;
   };
-  // Bankroll 500, 5%/maand = (1.05)^12 = 1.796
-  const p = project(500, 0.05, 12);
-  assert.strictEqual(p[0], 500);
-  assert.ok(p[12] > 895 && p[12] < 900, `12m compounded ~€898, got €${p[12]}`);
-  // Negative rate: bankroll krimpt
-  const n = project(500, -0.02, 6);
-  assert.ok(n[6] < 500 && n[6] > 440, `negatieve rate krimpt bankroll, got €${n[6]}`);
-  // Zero rate: constant
-  const z = project(500, 0, 12);
-  assert.strictEqual(z[12], 500);
+  // Bankroll 250, unit 25 (=10%), 90 bets/maand × 0.75U avg, ROI 6%
+  // Maand 1: stake = 25 × 0.75 = 18.75 → profit = 90 × 18.75 × 0.06 = €101.25
+  // Bankroll na maand 1: 250 + 101.25 = 351.25
+  // Nieuwe unit: round(351.25 × 0.10) = 35
+  const p = project(250, 25, 90, 0.75, 0.06);
+  assert.strictEqual(p[0], 250);
+  assert.strictEqual(p[1], 351.25, '1e maand: 250 + 101.25');
+  // Maand 2: nieuwe unit=35, stake=26.25 → profit = 90 × 26.25 × 0.06 = 141.75
+  // Bankroll = 351.25 + 141.75 = 493
+  assert.strictEqual(p[2], 493, '2e maand met grotere unit');
+  // Bij negative ROI: bankroll daalt
+  const neg = project(250, 25, 90, 0.75, -0.05);
+  assert.ok(neg[12] < 250, 'negatieve ROI = bankroll daalt');
+  // Zero ROI = constant
+  const zero = project(250, 25, 90, 0.75, 0);
+  assert.strictEqual(zero[12], 250);
 });
 
 test('projection: scenarios factor werken lineair op ROI', () => {

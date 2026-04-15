@@ -2125,11 +2125,14 @@ function renderProjections(data) {
   const roi = s.roi || 0; // fraction
   const unitEur = userSettings?.unitEur || 25;
   // v10.8.1: aannames verwerken. Default: 3 bets/dag (=90/maand) + 0.75U avg.
-  // User kan overschrijven via window.projAssumptions in console voor wat-als.
+  // v10.8.2: BELANGRIJKE fix — projectie is LINEAIR met fixed unit-size, NIET
+  // compounded. Bij vaste 0.75U=€18.75 ongeacht bankroll-groei, is profit
+  // per maand constant. Eerder bug: compound formule gaf absurde €42M-€1B
+  // projecties omdat ie aannam dat stake meegroeit met bankroll (die doe je
+  // pas bij handmatige unit-verhoging).
   const assum = window.projAssumptions || { betsPerDay: 3, avgUnits: 0.75 };
   const betsPerMonth = assum.betsPerDay * 30;
   const avgStake = assum.avgUnits * unitEur;
-  const stakePct = bankroll > 0 ? avgStake / bankroll : 0.02;
 
   // Monthly expected return per scenario: ROI × bets/month × stake-as-%-of-bankroll
   const scenarios = [
@@ -2139,12 +2142,20 @@ function renderProjections(data) {
   ];
   const horizons = [1, 3, 6, 12]; // months
 
-  const project = (monthlyRate) => {
+  // v10.8.2: maand-review model. User herziet elke maand zijn unit:
+  // nieuwe unit = round(bankroll × 0.10). Stake = nieuwe_unit × avgUnits.
+  // Dit is "stepwise compounding" — units groeien per maand met bankroll mee.
+  const project = (effRoi) => {
     const out = [bankroll];
+    let curBank = bankroll;
+    let curUnit = unitEur; // huidige unit, herzien per maand
     for (let m = 1; m <= 12; m++) {
-      const prev = out[m - 1];
-      const next = prev * (1 + monthlyRate);
-      out.push(+next.toFixed(2));
+      const stakePerBet = curUnit * assum.avgUnits;
+      const monthProfit = betsPerMonth * stakePerBet * effRoi;
+      curBank = +(curBank + monthProfit).toFixed(2);
+      out.push(curBank);
+      // Maand-review: nieuwe unit = 10% van nieuwe bankroll, afgerond
+      curUnit = Math.max(1, Math.round(curBank * 0.10));
     }
     return out;
   };
@@ -2154,9 +2165,9 @@ function renderProjections(data) {
   // v10.8.1: per scenario — maandelijkse winst (eerste maand) + bankroll projectie
   const monthlyProfit = (factor) => betsPerMonth * avgStake * roi * factor;
 
-  // Sectie 1: maandelijkse winst verwacht
+  // Sectie 1: maandelijkse winst verwacht (eerste maand bij huidige unit)
   let monthlyHtml = `<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">
-    Aannames: <strong>${assum.betsPerDay}</strong> bets/dag (${betsPerMonth}/maand) · gemiddelde inzet <strong>${assum.avgUnits}U = ${fmt(avgStake)}</strong> · huidige ROI ${(roi*100).toFixed(1)}%
+    Aannames: <strong>${assum.betsPerDay}</strong> bets/dag (${betsPerMonth}/maand) · gemiddelde inzet <strong>${assum.avgUnits}U = ${fmt(avgStake)}</strong> · huidige ROI ${(roi*100).toFixed(1)}% · unit ge-reviewed maandelijks naar 10% van bankroll
   </div>`;
   monthlyHtml += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">';
   for (const sc of scenarios) {
@@ -2169,15 +2180,14 @@ function renderProjections(data) {
   }
   monthlyHtml += '</div>';
 
-  // Table per horizon (cumulatief bankroll met compounding)
+  // Table per horizon — maand-review model (unit = 10% van bankroll per maand)
   let tableHtml = monthlyHtml;
-  tableHtml += '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">📈 Bankroll projectie (met compounding)</div>';
+  tableHtml += '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">📈 Bankroll projectie (maandelijkse unit-review = 10% van bankroll)</div>';
   tableHtml += '<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">';
   tableHtml += `<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px 0">Scenario</th>${horizons.map(h => `<th style="text-align:right;padding:8px 6px">${h}m</th>`).join('')}</tr></thead><tbody>`;
   for (const sc of scenarios) {
     const effRoi = roi * sc.factor;
-    const monthlyRate = betsPerMonth * stakePct * effRoi;
-    const proj = project(monthlyRate);
+    const proj = project(effRoi);
     tableHtml += `<tr style="border-bottom:1px solid var(--border)">
       <td style="padding:8px 0;font-weight:600;color:${sc.col}">${sc.label}</td>
       ${horizons.map(h => {
@@ -2193,13 +2203,13 @@ function renderProjections(data) {
   }
   tableHtml += '</tbody></table></div>';
 
-  // Unit-size recommendation na 6 maanden verwacht scenario
-  const expected6m = project(betsPerMonth * stakePct * roi)[6];
-  const recommendedUnit = Math.round(expected6m * 0.04); // 4% per unit (50 units bankroll)
+  // Unit-size recommendation na 6 maanden verwacht scenario (10% rule)
+  const expected6m = project(roi)[6];
+  const recommendedUnit = Math.max(1, Math.round(expected6m * 0.10));
   const unitAdvice = recommendedUnit > unitEur * 1.2
     ? `<div style="margin-top:12px;padding:10px 14px;background:rgba(52,211,153,0.1);border-left:3px solid #34d399;border-radius:6px;font-size:12px;line-height:1.6">
         <strong>💰 Unit-size projectie:</strong> bij verwacht scenario over 6 maanden zit je op ~${fmt(expected6m)}.
-        Aanbevolen unit-size: <strong>€${recommendedUnit}</strong> (nu €${unitEur}).
+        Volgens de 10%-regel: unit van <strong>€${recommendedUnit}</strong> (nu €${unitEur}).
       </div>`
     : '';
 
@@ -4739,15 +4749,18 @@ async function loadScanHistory() {
     const wrap = document.getElementById('scan-history-wrap');
     if (wrap) wrap.style.display = 'block';
 
-    // Laad de meest recente scan automatisch als de picks-wrap nog leeg is
+    // Laad de meest recente scan automatisch als de picks-wrap nog leeg is.
+    // v10.8.2: filter op type='prematch' (= merged multi-sport result) zodat
+    // we niet de per-sport sub-entries (mlb/nhl/nba) als latest tonen die
+    // maar 1 of 0 picks bevatten.
     const pEl = document.getElementById('picks-prematch');
-    if (pEl && !pEl._picks?.length && scanHistory[0]?.picks?.length) {
-      const latest = scanHistory[0];
-      const ago    = formatAgo(latest.ts);
-      renderPicks(pEl, latest.picks);
+    const latestPrematch = (scanHistory || []).find(h => h.type === 'prematch' && h.picks?.length);
+    if (pEl && !pEl._picks?.length && latestPrematch) {
+      const ago = formatAgo(latestPrematch.ts);
+      renderPicks(pEl, latestPrematch.picks);
       const hdr = pEl.querySelector('.picks-hdr');
       if (hdr) hdr.innerHTML += ` <span style="font-size:11px;color:rgba(255,255,255,0.35);font-weight:400">· herstel ${ago}</span>`;
-      scanPicks.prematch = latest.picks;
+      scanPicks.prematch = latestPrematch.picks;
     }
   } catch {}
 }
