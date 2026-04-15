@@ -1271,7 +1271,9 @@ function applyTheme(theme) {
   html.setAttribute('data-theme', theme);
   const btn = document.getElementById('darkBtn');
   if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
-  if (typeof chartsDone !== 'undefined' && chartsDone) redrawCharts();
+  // Niet direct redraw bij init — chartsDone staat in TDZ. Window-guard voor
+  // latere theme-toggles: applyTheme wordt dan uit gebruikers-context gecalld.
+  try { if (window.chartsDone && typeof redrawCharts === 'function') redrawCharts(); } catch {}
 }
 
 const storedTheme = localStorage.getItem('theme'); // 'dark' | 'light' | null

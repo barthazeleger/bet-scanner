@@ -403,13 +403,20 @@ Object.assign(LANG.en, {
   bets_not_found: 'not found',
 });
 
+// v10.7.21: userSettings leeft in index.html inline <script>; lang.js kan
+// geladen zijn voor die declaratie. Safe accessor voorkomt TDZ ReferenceError.
+function _getLang() {
+  try { return (typeof userSettings !== 'undefined' && userSettings?.language) || 'nl'; }
+  catch { return 'nl'; }
+}
+
 function t(key) {
-  const lang = userSettings?.language || 'nl';
+  const lang = _getLang();
   return LANG[lang]?.[key] ?? LANG.nl[key] ?? key;
 }
 
 function applyLanguage() {
-  const lang = userSettings?.language || 'nl';
+  const lang = _getLang();
   document.documentElement.lang = lang;
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
