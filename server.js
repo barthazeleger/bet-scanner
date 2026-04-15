@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.3';
+const APP_VERSION    = '10.8.4';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -5438,23 +5438,26 @@ async function runPrematch(emit) {
         };
 
         // v10.7.25: bij 2e leg → fetch 1e leg en bereken aggregaat
+        // v10.8.4: ook proberen bij isKnockout met onbekende leg
+        // (api-sports geeft vaak alleen "Semi-finals" zonder leg-suffix).
+        // fetchAggregateScore returns null als er geen recent FT-match is
+        // (= dit is dan 1e leg of geen 2-leg format).
         let aggInfo = { signals: [], note: '', aggDiff: null };
         if (knockoutInfo.isKnockout) scanTelemetry.knockoutMatches++;
         if (knockoutInfo.leg === 1) scanTelemetry.knockout1stLeg++;
-        if (knockoutInfo.leg === 2) {
-          scanTelemetry.knockout2ndLeg++;
-          if (hmId && awId) {
-            try {
-              const agg = await fetchAggregateScore(hmId, awId, roundStr, f.league?.season);
-              if (agg) {
-                aggInfo = buildAggregateInfo(agg.aggHome, agg.aggAway);
-                scanTelemetry.aggregateFetched++;
-                if (aggInfo.aggDiff > 0) scanTelemetry.aggregateLeaderHome++;
-                else if (aggInfo.aggDiff < 0) scanTelemetry.aggregateLeaderAway++;
-                else scanTelemetry.aggregateSquare++;
-              }
-            } catch (e) { console.warn('Aggregate fetch failed:', e.message); }
-          }
+        const tryAggregate = knockoutInfo.isKnockout && knockoutInfo.leg !== 1 && hmId && awId;
+        if (tryAggregate) {
+          try {
+            const agg = await fetchAggregateScore(hmId, awId, roundStr, f.league?.season);
+            if (agg) {
+              aggInfo = buildAggregateInfo(agg.aggHome, agg.aggAway);
+              scanTelemetry.aggregateFetched++;
+              scanTelemetry.knockout2ndLeg++; // confirmed 2e leg via 1e leg presence
+              if (aggInfo.aggDiff > 0) scanTelemetry.aggregateLeaderHome++;
+              else if (aggInfo.aggDiff < 0) scanTelemetry.aggregateLeaderAway++;
+              else scanTelemetry.aggregateSquare++;
+            }
+          } catch (e) { console.warn('Aggregate fetch failed:', e.message); }
         }
 
         // v10.7.25: new-season indicator — eerste 4 rondes hebben te weinig
