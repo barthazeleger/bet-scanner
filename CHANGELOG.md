@@ -2,6 +2,25 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.9] - 2026-04-15
+
+### Fixed
+- **Modal odds-aanpassing bug**: bij **lagere** odds gaf de modal een HOGER unit-advies omdat het op pure Kelly rekende terwijl scanner-dampings (market multiplier, new-season, risk gates) weggevallen waren. Voorbeeld: scanner 1.91 → 0.75U, user vult 1.80 in → modal zei 1U. Klopt niet — lagere odds = minder waarde = lager advies.
+- **"✓ Gelogd" chip verdween na hard-refresh**: race tussen `loadScanHistory()` (rendert picks) en `loadBets()` (vult `betData`). Renderen gebeurde met `betData=null` → alle picks toonden "+ Log" knop ook voor al gelogde bets. Nu re-render na loadBets() complete.
+
+### Added
+- **4-tier modal line-move logica** (via nieuwe `/lib/modal-advice.js`):
+  - **Ongewijzigd (±2%)** → scanner-advies behouden
+  - **Licht (-2 tot -4%)** → origUnits × kelly-ratio, floor naar bucket (minstens 1 bucket lager)
+  - **Matig (-4 tot -6%)** → helft van scanner-advies + ⚠️ warning
+  - **Adverse (>-6%)** → 🚫 "Line moved — pick niet meer valide" + **0U aanbevolen**
+  - **Stijging (>+2%)** → pure Kelly gecapt op origUnits
+  Rationale: een grote adverse line-move is een sterk reverse-CLV signaal (bookie moved prijs vanwege sharp money op andere kant → ons model overschatte edge).
+- **Auto-refresh scan-history** op tab-focus (`visibilitychange`) + 5min interval terwijl tab zichtbaar. Detecteert nieuwe scans via timestamp-vergelijk, renders automatisch met "· vers" marker. Geen hard-refresh meer nodig.
+
+### Tests
+9 nieuwe tests in `test.js` voor 4-tier modal advice + Padres scenario (1.91→1.80) edge case. Totaal **249 tests, 0 failed** (was 240).
+
 ## [10.8.8] - 2026-04-15
 
 ### Fixed (code review v10.8.0-7 findings)

@@ -2997,6 +2997,69 @@ test('modal recUnits: bij odds-daling daalt aanbevolen units', () => {
   assert.ok(units(hkHigh) >= units(hkLow), 'units(hkLow) ≤ units(hkHigh)');
 });
 
+// ── Modal advice (v10.8.9) ───────────────────────────────────────────────────
+console.log('\n  Modal Advice (line-move tiers):');
+
+const { computeModalAdvice } = require('./lib/modal-advice');
+
+test('modal: odds ongewijzigd → severity=unchanged, rec=origUnits', () => {
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.91, prob: 0.62, origUnits: 0.75 });
+  assert.strictEqual(r.severity, 'unchanged');
+  assert.strictEqual(r.recUnits, 0.75);
+});
+
+test('modal: odds binnen ±2% → still unchanged', () => {
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.90, prob: 0.62, origUnits: 0.75 });
+  assert.strictEqual(r.severity, 'unchanged');
+});
+
+test('modal: lichte daling (-3%) → severity=light, rec < origUnits', () => {
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.85, prob: 0.62, origUnits: 0.75 });
+  assert.strictEqual(r.severity, 'light');
+  assert.ok(r.recUnits < 0.75, `light rec (${r.recUnits}) moet onder origUnits`);
+  assert.ok(r.recUnits > 0, 'light rec niet 0');
+});
+
+test('modal: matige daling (-5%) → severity=moderate, rec ≈ helft', () => {
+  const r = computeModalAdvice({ origOdds: 2.00, newOdds: 1.90, prob: 0.60, origUnits: 1.0 });
+  assert.strictEqual(r.severity, 'moderate');
+  assert.ok(r.recUnits <= 0.5, `moderate rec (${r.recUnits}) moet ≤ helft van origUnits`);
+});
+
+test('modal: grote daling (-7%) → severity=adverse, rec=0, message flags invalid', () => {
+  const r = computeModalAdvice({ origOdds: 2.00, newOdds: 1.85, prob: 0.60, origUnits: 1.0 });
+  assert.strictEqual(r.severity, 'adverse');
+  assert.strictEqual(r.recUnits, 0);
+  assert.ok(/valide|line moved/i.test(r.message), 'adverse message flagged');
+});
+
+test('modal: Padres scenario 1.91→1.80 (-5.8%) → adverse of moderate, NIET hoger dan orig', () => {
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.80, prob: 0.62, origUnits: 0.75 });
+  assert.ok(r.severity === 'moderate' || r.severity === 'adverse',
+    `expected moderate/adverse, got ${r.severity}`);
+  assert.ok(r.recUnits <= 0.75,
+    `recUnits (${r.recUnits}) NOOIT hoger dan origUnits (0.75) bij lagere odds`);
+});
+
+test('modal: hogere odds (+3%) → severity=better, rec gecapt op origUnits', () => {
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 2.00, prob: 0.62, origUnits: 0.75 });
+  assert.strictEqual(r.severity, 'better');
+  assert.ok(r.recUnits <= 0.75, 'better rec gecapt op origUnits');
+});
+
+test('modal: zero/invalid input → severity=invalid, rec=0', () => {
+  const r = computeModalAdvice({ origOdds: 0, newOdds: 1.80, prob: 0.62, origUnits: 0.75 });
+  assert.strictEqual(r.severity, 'invalid');
+  assert.strictEqual(r.recUnits, 0);
+});
+
+test('modal: lagere odds schalen origUnits met kelly-ratio, niet met pure Kelly', () => {
+  // Bij -3% daling bij zeer hoge prob zou pure Kelly nog 1U aanbevelen; we
+  // willen dat origUnits (0.3) DAALT met de Kelly-ratio, niet stijgt naar 1U.
+  const r = computeModalAdvice({ origOdds: 1.50, newOdds: 1.45, prob: 0.78, origUnits: 0.3 });
+  assert.ok(r.recUnits <= 0.3, `rec (${r.recUnits}) mag niet boven origUnits (0.3) uitkomen`);
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
