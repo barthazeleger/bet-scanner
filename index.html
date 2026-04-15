@@ -808,10 +808,14 @@
     </div>
   </div>
 
-  <!-- Changelog -->
-  <div class="card">
+  <!-- Changelog (auto-gerenderd uit CHANGELOG.md via /api/changelog) -->
+  <div class="card admin-only">
     <div class="card-title" style="margin-bottom:16px" data-i18n="card_changelog">📝 Versiegeschiedenis</div>
-    <div style="font-size:13px">
+    <div id="changelog-list" style="font-size:13px">
+      <div style="color:var(--muted)">Laden…</div>
+    </div>
+    <!-- Legacy hardcoded fallback — verborgen zodra dynamische lijst laadt -->
+    <div id="changelog-legacy" style="font-size:13px;display:none">
 
       <div style="display:flex;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
         <div style="flex-shrink:0;width:56px;text-align:right">
@@ -1257,17 +1261,32 @@
 <script>
 
 // ── THEME ────────────────────────────────────────────────────────────────────
+// v10.7.21: default = system-theme (prefers-color-scheme). Gebruiker kan nog
+// handmatig overriden via de dark-toggle; die keuze wint totdat ze "system"
+// kiezen (= localStorage.removeItem).
 const html = document.documentElement;
-const theme = localStorage.getItem('theme') || 'light';
-html.setAttribute('data-theme', theme);
-document.getElementById('darkBtn').textContent = theme === 'dark' ? '☀️' : '🌙';
+const mqDark = window.matchMedia('(prefers-color-scheme: dark)');
+
+function applyTheme(theme) {
+  html.setAttribute('data-theme', theme);
+  const btn = document.getElementById('darkBtn');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+  if (typeof chartsDone !== 'undefined' && chartsDone) redrawCharts();
+}
+
+const storedTheme = localStorage.getItem('theme'); // 'dark' | 'light' | null
+const initialTheme = storedTheme || (mqDark.matches ? 'dark' : 'light');
+applyTheme(initialTheme);
+
+// Reageer op system theme changes ALLEEN als user geen expliciete keuze heeft.
+mqDark.addEventListener('change', e => {
+  if (!localStorage.getItem('theme')) applyTheme(e.matches ? 'dark' : 'light');
+});
 
 function toggleDark() {
   const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  html.setAttribute('data-theme', next);
   localStorage.setItem('theme', next);
-  document.getElementById('darkBtn').textContent = next === 'dark' ? '☀️' : '🌙';
-  if (chartsDone) redrawCharts();
+  applyTheme(next);
 }
 
 // ── NAVIGATION ───────────────────────────────────────────────────────────────
@@ -1389,8 +1408,12 @@ function renderPicks(el, picks) {
       : '';
 
     const edgeVal  = p.edge != null ? p.edge : null;
+    const narrative = p.reason ? humanizePickReason(p) : '';
     const reasonHtml = p.reason
-      ? `<div class="pick-reason" id="reason-${i}" style="display:none;font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6;border-top:1px solid var(--border);padding-top:8px">${edgeVal!=null?`<span style="color:var(--yellow);font-weight:600">Edge +${edgeVal}%</span> · `:''} ${p.reason}</div>
+      ? `<div class="pick-reason" id="reason-${i}" style="display:none;font-size:11.5px;color:var(--text);margin-top:8px;line-height:1.6;border-top:1px solid var(--border);padding-top:8px">
+           ${narrative ? `<div style="font-size:12px;color:var(--text);margin-bottom:8px;font-style:italic">${narrative}</div>` : ''}
+           <div style="font-size:10.5px;color:var(--muted)">${edgeVal!=null?`<span style="color:var(--yellow);font-weight:600">Edge +${edgeVal}%</span> · `:''}${p.reason}</div>
+         </div>
          <button class="reason-toggle" onclick="toggleReason(${i})" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--muted);padding:4px 0 0 0">▼ analyse</button>`
       : '';
 
@@ -1453,6 +1476,88 @@ function toggleReason(i) {
   const hidden = el.style.display === 'none';
   el.style.display = hidden ? 'block' : 'none';
   if (btn) btn.textContent = hidden ? '▲ analyse verbergen' : '▼ analyse tonen';
+}
+
+// v10.7.21: Humanize pick reason — parse de technische reason-string naar 1-2
+// natuurlijke zinnen zonder signals/weights/model-details te onthullen.
+// Input string format (server.js):
+//   "Consensus: 47.3%→56.6% | Bet365: 2.05 | Form: WLDDD (-0.6) vs DLDDL (-0.81)
+//    | ❌ Alverca: Chissumba (1x) | ✈️ Pia: Claudio Mendes Vicente (6x) | 16:30"
+function humanizePickReason(pick) {
+  const r = pick.reason || '';
+  const parts = r.split('|').map(s => s.trim()).filter(Boolean);
+  const facts = [];
+
+  // Form: "Form: WLDDD (-0.6) vs DLDDL (-0.81)"
+  const form = parts.find(p => /^Form:/i.test(p));
+  if (form) {
+    const m = form.match(/Form:\s*([WLD]+)\s*\(([^)]+)\)\s*vs\s*([WLD]+)\s*\(([^)]+)\)/i);
+    if (m) {
+      const countW = s => (s.match(/W/g) || []).length;
+      const countL = s => (s.match(/L/g) || []).length;
+      const descr = (s) => {
+        const w = countW(s), l = countL(s), d = s.length - w - l;
+        if (w >= 3) return 'in goede vorm';
+        if (l >= 3) return 'in slechte vorm';
+        if (d >= 3) return 'wisselvallig';
+        return 'gemengde vorm';
+      };
+      facts.push(`Thuis ${descr(m[1])} (${countW(m[1])}W), uit ${descr(m[3])} (${countW(m[3])}W)`);
+    }
+  }
+
+  // Injuries: "❌ TeamName: Speler (Nx)" of "✈️ TeamName: Speler (Nx)"
+  const injHome = parts.filter(p => /^❌/.test(p));
+  const injAway = parts.filter(p => /^✈️/.test(p));
+  if (injHome.length) facts.push(`thuis mist ${injHome.length} basisspeler${injHome.length>1?'s':''}`);
+  if (injAway.length) facts.push(`uit mist ${injAway.length} basisspeler${injAway.length>1?'s':''}`);
+
+  // Referee: "Ref: X (hoog over)"
+  const ref = parts.find(p => /^(Ref|Scheids)/i.test(p));
+  if (ref) {
+    if (/over/i.test(ref)) facts.push('scheidsrechter neigt naar doelpuntrijke wedstrijden');
+    else if (/under/i.test(ref)) facts.push('scheidsrechter neigt naar doelpuntarme wedstrijden');
+    else if (/btts/i.test(ref)) facts.push('scheidsrechter neigt naar BTTS-wedstrijden');
+  }
+
+  // Weather: "Weer: regen 8mm" of similar
+  const wx = parts.find(p => /(weer|regen|wind|storm)/i.test(p));
+  if (wx) {
+    if (/regen|rain/i.test(wx)) facts.push('regen in de voorspelling');
+    else if (/wind/i.test(wx)) facts.push('harde wind verwacht');
+  }
+
+  // Stakes: "🔴 Degradatiezone" etc
+  const stakes = parts.find(p => /(titelrace|degradatie|playoff|europese|niets te spelen)/i.test(p));
+  if (stakes) {
+    if (/titelrace/i.test(stakes)) facts.push('directe impact op de titelrace');
+    else if (/degradatie/i.test(stakes)) facts.push('belang voor degradatiestrijd');
+    else if (/niets te spelen/i.test(stakes)) facts.push('weinig op het spel — motivatie-risico');
+    else if (/playoff/i.test(stakes)) facts.push('playoff-race op de tocht');
+    else if (/europese/i.test(stakes)) facts.push('gevecht om Europees ticket');
+  }
+
+  // Consensus / edge framing: "Consensus: 47.3%→56.6%"
+  const cons = parts.find(p => /Consensus/i.test(p));
+  let opening = '';
+  if (cons) {
+    const m = cons.match(/(\d+\.?\d*)%→(\d+\.?\d*)%/);
+    if (m) {
+      const from = +m[1], to = +m[2];
+      const delta = to - from;
+      if (Math.abs(delta) < 1.5) {
+        opening = 'Markt en model grotendeels eens';
+      } else if (delta > 0) {
+        opening = `Model ziet meer kans dan de markt prijst (+${delta.toFixed(1)}%)`;
+      } else {
+        opening = `Model ziet minder kans dan de markt suggereert (${delta.toFixed(1)}%)`;
+      }
+    }
+  }
+
+  if (!opening && !facts.length) return '';
+  if (!facts.length) return opening + '.';
+  return (opening ? opening + ': ' : '') + facts.join(', ') + '.';
 }
 
 // ── BET TRACKER ──────────────────────────────────────────────────────────────
@@ -3003,16 +3108,18 @@ async function logModalBet() {
 let notifOpen = false;
 let notifAlerts = [];
 
-function toggleNotif(e) {
+async function toggleNotif(e) {
   if (e) e.stopPropagation();
   notifOpen = !notifOpen;
   const dd = document.getElementById('notif-dropdown');
   dd.classList.toggle('open', notifOpen);
   if (notifOpen) {
     dd.style.zIndex = '9999'; // boven bottom nav
+    // FIRST mark-read in DB, THEN fetch list. Voorheen race condition:
+    // loadNotifications fetchte parallel met mark-read, kreeg unread=false
+    // voor 1 item terug en toonde die als sticky na re-open.
+    try { await api('/api/inbox-notifications/read', { method: 'PUT' }); } catch {}
     loadNotifications();
-    // Mark inbox notifications as read
-    api('/api/inbox-notifications/read', { method: 'PUT' }).catch(() => {});
   }
 }
 
@@ -3182,7 +3289,15 @@ async function clvBackfill() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true })
     }).then(r => r?.json());
     if (d.error) { msg.textContent = t('err_prefix') + d.error; return; }
-    msg.textContent = `✓ CLV backfill: ${d.filled} ingevuld, ${d.failed} overgeslagen (van ${d.scanned})`;
+    // v10.7.21: expliciete feedback als er niks te backfillen was
+    if (!d.scanned) {
+      msg.textContent = 'ℹ️ Geen bets met lege CLV gevonden. Alles is al ingevuld — gebruik "Hercomputeer CLV" in admin-tab als je bestaande waarden wil herzien.';
+    } else if (d.filled === 0) {
+      msg.textContent = `⚠️ ${d.scanned} kandidaten gevonden, 0 ingevuld (${d.failed} gefaald). Meestal omdat closing odds niet meer beschikbaar waren voor de gebruikte bookie. Zie console voor details.`;
+      console.warn('CLV backfill failures:', d.details);
+    } else {
+      msg.textContent = `✓ CLV backfill: ${d.filled} ingevuld, ${d.failed} overgeslagen (van ${d.scanned})`;
+    }
     // Refresh bets
     const bd = await api('/api/bets').then(r => r?.json());
     if (bd) { betData = bd; renderStats(bd.stats); renderBetsTable(bd.bets); }
@@ -3668,7 +3783,19 @@ function renderInboxMarkets(markets) {
   const el = document.getElementById('inbox-markets');
   const keys = Object.keys(markets || {}).filter(k => markets[k].n > 0);
   if (!keys.length) { el.innerHTML = '<div style="color:var(--muted)">Calibratie start na 8+ bets per markttype.</div>'; return; }
-  const mNames = { home:'🏠 Thuis wint', away:'✈️ Uit wint', draw:'🤝 Gelijkspel', over:'⚽ Over', under:'⚽ Under', btts:'⚽ BTTS', dnb:'⚽ Draw No Bet', other:'📋 Overig' };
+  const mNames = {
+    home:'🏠 Thuis wint', away:'✈️ Uit wint', draw:'🤝 Gelijkspel',
+    home60:'🏠 Thuis 60-min', away60:'✈️ Uit 60-min', draw60:'🤝 Gelijk 60-min',
+    over:'⚽ Over', under:'⚽ Under',
+    btts_yes:'⚽ BTTS Ja', btts_no:'🛡️ BTTS Nee',
+    dnb_home:'🏠 DNB', dnb_away:'✈️ DNB',
+    dc_1x:'🤝 Dubbele 1X', dc_x2:'🤝 Dubbele X2', dc_12:'🤝 Dubbele 12',
+    spread_home:'🏠 Spread/Handicap', spread_away:'✈️ Spread/Handicap',
+    team_total_over:'🎯 Team Over', team_total_under:'🎯 Team Under', team_total:'🎯 Team Total',
+    nrfi:'⚾ NRFI', yrfi:'⚾ YRFI',
+    odd:'🎲 Odd', even:'🎲 Even',
+    other:'📋 Overig (legacy)'
+  };
   el.innerHTML = keys.sort((a,b) => markets[b].multiplier - markets[a].multiplier).map(k => {
     const m = markets[k];
     const wr = m.n > 0 ? Math.round(m.w / m.n * 100) : 0;
@@ -4222,22 +4349,69 @@ function restoreScan(idx) {
 
 loadScanHistory();
 
+// ── CHANGELOG (auto-sync uit CHANGELOG.md) ────────────────────────────────────
+// v10.7.21: vervangt hardcoded lijst. /api/changelog parseert CHANGELOG.md
+// server-side. Fallback naar legacy hardcoded lijst bij load-failure.
+async function loadChangelog() {
+  const el = document.getElementById('changelog-list');
+  const legacy = document.getElementById('changelog-legacy');
+  if (!el) return;
+  try {
+    const r = await api('/api/changelog');
+    if (!r || !r.ok) throw new Error('fetch failed');
+    const d = await r.json();
+    if (!d.entries?.length) throw new Error('empty');
+    el.innerHTML = d.entries.map((e, idx) => {
+      const isLatest = idx === 0;
+      const versionBg = isLatest ? 'var(--accent)' : 'var(--surface2)';
+      const versionColor = isLatest ? '#fff' : 'var(--muted)';
+      const border = isLatest ? '' : ';border:1px solid var(--border)';
+      const dateStr = new Date(e.date).toLocaleDateString('nl-NL', { month: 'short', year: 'numeric' });
+      const sectionsHtml = e.sections.map(sec => {
+        // Markdown → HTML lite: **bold**, `code`, newlines
+        const txt = sec.text
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+          .replace(/`([^`]+)`/g, '<code style="background:var(--surface2);padding:1px 5px;border-radius:3px;font-size:11px">$1</code>')
+          .replace(/\n\n/g, '<br><br>')
+          .replace(/\n/g, '<br>');
+        return `<div style="margin-bottom:10px"><div style="font-weight:600;margin-bottom:4px">${sec.title}</div><div style="color:var(--muted);line-height:1.7">${txt}</div></div>`;
+      }).join('');
+      return `<div style="display:flex;gap:14px;margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid var(--border)">
+        <div style="flex-shrink:0;width:64px;text-align:right">
+          <span style="background:${versionBg};color:${versionColor};padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700${border}">v${e.version}</span><br>
+          <span style="font-size:10px;color:var(--muted);margin-top:4px;display:block">${dateStr}</span>
+        </div>
+        <div style="flex:1;min-width:0">${sectionsHtml}</div>
+      </div>`;
+    }).join('');
+  } catch {
+    // Fallback: toon hardcoded legacy lijst
+    if (legacy) { legacy.style.display = ''; el.style.display = 'none'; }
+  }
+}
+// Laden wanneer de info-tab actief wordt of direct bij init (admin-only)
+loadChangelog();
+
 // ── API LIMIET ────────────────────────────────────────────────────────────────
+// v10.7.21: toont nu football-host-specifiek ipv all-sports totaal, omdat
+// football verreweg de meeste calls trekt (fixtures, injuries, refs, weather,
+// predictions, standings, stats). Dat is de echte limiterende factor.
 async function loadApiLimit() {
   try {
     const s = await api('/api/status').then(r => r?.json());
     if (!s) return;
     const af = s.services?.apiFootball || {};
-    const calls = af.callsToday || 0;
-    const lim = af.limit || 7500;
-    const rem = af.remaining ?? (lim - calls);
+    const footballStats = af.perSport?.football || { calls: 0, limit: 7500 };
+    const calls = footballStats.calls || 0;
+    const lim = footballStats.limit || af.limit || 7500;
     const txt = document.getElementById('api-limit-text');
     const fill = document.getElementById('api-limit-fill');
     if (!txt || !fill) return;
     const pctUsed = Math.round(calls / lim * 100);
     const pctRemain = 100 - pctUsed;
-    const scansLeft = Math.floor((lim - calls) / 400); // ~400 calls per scan
-    txt.textContent = `${calls} / ${lim.toLocaleString()} calls · ~${scansLeft} scans over`;
+    const scansLeft = Math.floor((lim - calls) / 400); // ~400 football calls per scan
+    txt.textContent = `⚽ ${calls} / ${lim.toLocaleString()} football-calls · ~${scansLeft} scans over`;
     fill.style.width = pctRemain + '%';
     fill.style.background = pctRemain > 50 ? '#34d399' : pctRemain > 20 ? '#fbbf24' : '#f87171';
     txt.style.color = pctRemain > 50 ? 'rgba(255,255,255,0.7)' : pctRemain > 20 ? '#fbbf24' : '#f87171';
