@@ -2082,9 +2082,14 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
     for (const bet of (bk.bets || [])) {
       const betId = bet.id;
       const betName = (bet.name || '').toLowerCase();
-      // Moneyline — alleen 2-way entries (exact 2 values Home/Away, geen handicap).
-      // bet id 1 + value count 2 + values zijn {Home, Away} defensief.
-      if (betId === 1) {
+      // Moneyline — 2-way entries (exact 2 values Home/Away, geen handicap).
+      // v10.7.23: niet alleen bet.id===1 gebruiken, ook name-based als backup,
+      // omdat sommige bookies bij api-sports een andere bet.id krijgen maar
+      // wel een Match Winner markt hebben (bv. Padres: Unibet had id=1, Bet365
+      // onder een andere id → werd gemist waardoor user een suboptimale prijs zag).
+      const mlNames = ['match winner','home/away','winner','match odds','3way result','moneyline','money line'];
+      const isMlByName = mlNames.includes(betName);
+      if (betId === 1 || isMlByName) {
         const vals = bet.values || [];
         const names = vals.map(v => String(v.value || '').trim()).sort().join('|');
         if (vals.length === 2 && names === 'Away|Home') {
@@ -2251,7 +2256,11 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
   // edge wordt vals-hoog, ep valt onder MIN_EP, pick rejected.
   // Main line = lowest price per bookie. Toegepast op alle spread/total-achtige
   // markten waar point bestaat.
-  const dedupePool = (arr, keyFn) => {
+  // Main-line markten (spread/total): lowest price = main. Alt lines hebben
+  // hogere prijzen en moeten genegeerd. Voor ML/DC/DNB/threeWay/NRFI/oddEven
+  // geldt dat niet — daar zijn geen alt-lijnen, dus pakken we de HOOGSTE prijs
+  // om te voorkomen dat een stale/oude entry de latere betere prijs overschrijft.
+  const dedupeMainLine = (arr, keyFn) => {
     if (!arr.length) return arr;
     const seen = new Map();
     for (const o of arr) {
@@ -2261,23 +2270,35 @@ function parseGameOdds(oddsResp, homeTeam, awayTeam) {
     }
     return [...seen.values()];
   };
+  const dedupeBestPrice = (arr, keyFn) => {
+    if (!arr.length) return arr;
+    const seen = new Map();
+    for (const o of arr) {
+      const k = keyFn(o);
+      const prev = seen.get(k);
+      if (!prev || o.price > prev.price) seen.set(k, o);
+    }
+    return [...seen.values()];
+  };
   const kSide  = o => `${(o.bookie||'').toLowerCase()}|${o.side}`;
   const kPoint = o => `${(o.bookie||'').toLowerCase()}|${o.side}|${o.point}`;
   const kTeam  = o => `${(o.bookie||'').toLowerCase()}|${o.team}|${o.side}|${o.point}`;
 
   return {
-    moneyline:   dedupePool(ml,           kSide),
-    totals:      dedupePool(tots,         kPoint),
-    spreads:     dedupePool(spr,          kPoint),
-    halfML:      dedupePool(halfML,       kSide),
-    halfTotals:  dedupePool(halfTotals,   kPoint),
-    halfSpreads: dedupePool(halfSpreads,  kPoint),
-    nrfi:        dedupePool(nrfi,         kSide),
-    oddEven:     dedupePool(oddEven,      kSide),
-    threeWay:    dedupePool(threeWay,     kSide),
-    teamTotals:  dedupePool(teamTotals,   kTeam),
-    doubleChance: dedupePool(doubleChance, kSide),
-    dnb:         dedupePool(dnb,          kSide),
+    // Geen alt-lijnen → hoogste prijs per (bookie, side)
+    moneyline:   dedupeBestPrice(ml,           kSide),
+    halfML:      dedupeBestPrice(halfML,       kSide),
+    threeWay:    dedupeBestPrice(threeWay,     kSide),
+    doubleChance: dedupeBestPrice(doubleChance, kSide),
+    dnb:         dedupeBestPrice(dnb,          kSide),
+    nrfi:        dedupeBestPrice(nrfi,         kSide),
+    oddEven:     dedupeBestPrice(oddEven,      kSide),
+    // Alt-lijn risico → lowest per (bookie, side, point)
+    totals:      dedupeMainLine(tots,         kPoint),
+    spreads:     dedupeMainLine(spr,          kPoint),
+    halfTotals:  dedupeMainLine(halfTotals,   kPoint),
+    halfSpreads: dedupeMainLine(halfSpreads,  kPoint),
+    teamTotals:  dedupeMainLine(teamTotals,   kTeam),
   };
 }
 

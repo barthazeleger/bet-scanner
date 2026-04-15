@@ -2597,6 +2597,31 @@ test('humanize narrative XSS: escape helper werkt', () => {
   assert.strictEqual(escape('normaal'), 'normaal');
 });
 
+test('parseGameOdds ML: dedupe pakt HOOGSTE prijs per bookie (geen alt-lijn risico)', () => {
+  // Zelfde logic als dedupeBestPrice in parseGameOdds
+  const dedupeBestPrice = (arr, keyFn) => {
+    const seen = new Map();
+    for (const o of arr) {
+      const k = keyFn(o);
+      const prev = seen.get(k);
+      if (!prev || o.price > prev.price) seen.set(k, o);
+    }
+    return [...seen.values()];
+  };
+  const pool = [
+    { side: 'home', price: 1.89, bookie: 'Unibet' },
+    { side: 'home', price: 1.90, bookie: 'Bet365' },
+    { side: 'home', price: 1.88, bookie: 'Bet365' },  // stale/dubbele entry
+  ];
+  const deduped = dedupeBestPrice(pool, o => `${o.bookie}|${o.side}`);
+  const bet365 = deduped.find(o => o.bookie === 'Bet365');
+  assert.strictEqual(bet365.price, 1.90, 'Bet365 behoudt 1.90 (hoogste), niet 1.88');
+  // bestFromArr zou Bet365 kiezen boven Unibet
+  const best = deduped.reduce((b, o) => o.price > b.price ? o : b, { price: 0 });
+  assert.strictEqual(best.bookie, 'Bet365');
+  assert.strictEqual(best.price, 1.90);
+});
+
 test('modal recUnits: bij odds-daling daalt aanbevolen units', () => {
   // Reproduceert de logic uit updatePayout() (v10.7.22 fijne trapjes)
   const units = (hk) => hk < 0.015 ? 0
