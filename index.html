@@ -3966,6 +3966,10 @@ function renderInboxWeights(weights) {
   }).join('');
 }
 
+// v10.7.26: tabs per sport voor market multipliers.
+// Eerste tab "Recent" toont 5 meest-recent gewijzigde buckets (cross-sport)
+// o.b.v. modelLog entries. Daarna tab per sport.
+let _marketTabActive = 'recent';
 function renderInboxMarkets(markets) {
   const el = document.getElementById('inbox-markets');
   const keys = Object.keys(markets || {}).filter(k => markets[k].n > 0);
@@ -3983,18 +3987,82 @@ function renderInboxMarkets(markets) {
     odd:'🎲 Odd', even:'🎲 Even',
     other:'📋 Overig (legacy)'
   };
-  el.innerHTML = keys.sort((a,b) => markets[b].multiplier - markets[a].multiplier).map(k => {
-    const m = markets[k];
+  const sportNames = {
+    football:'⚽ Voetbal', basketball:'🏀 Basketbal', hockey:'🏒 Hockey',
+    baseball:'⚾ Baseball', 'american-football':'🏈 NFL', handball:'🤾 Handbal',
+  };
+
+  // Groepeer per sport
+  const bySport = {};
+  for (const k of keys) {
+    const parts = k.split('_');
+    const sp = sportNames[parts[0]] ? parts[0] : (parts[0] === 'american' ? 'american-football' : 'football');
+    if (!bySport[sp]) bySport[sp] = [];
+    const bucket = k.substring(sp.length + 1) || k;
+    bySport[sp].push({ key: k, bucket, ...markets[k] });
+  }
+
+  // Laatst-gewijzigd map: uit modelLog (meest recente eerst)
+  const lastUpdated = {};
+  const log = (inboxData?.log || []).filter(e => e.type === 'market_calibration' && e.market);
+  for (const e of log) {
+    if (!lastUpdated[e.market]) lastUpdated[e.market] = e.date;
+  }
+
+  // Recent lijst: 5 meest recent gewijzigde buckets cross-sport
+  const recentList = [...keys].filter(k => lastUpdated[k])
+    .sort((a, b) => new Date(lastUpdated[b]) - new Date(lastUpdated[a]))
+    .slice(0, 5);
+  // Als er geen modelLog entries zijn: fallback op hoogste |multiplier-1|
+  const fallbackRecent = [...keys].sort((a, b) => Math.abs(markets[b].multiplier - 1) - Math.abs(markets[a].multiplier - 1)).slice(0, 5);
+  const displayRecent = recentList.length ? recentList : fallbackRecent;
+
+  const sports = Object.keys(bySport).sort();
+  const tabs = [
+    { id: 'recent', label: '🕑 Recent' },
+    ...sports.map(s => ({ id: s, label: sportNames[s] || s })),
+  ];
+
+  const renderRow = (entry) => {
+    const m = entry.key ? markets[entry.key] : entry;
+    const bucketKey = entry.bucket || (entry.key ? entry.key.split('_').slice(1).join('_') || entry.key : '');
+    const sportPrefix = entry.key ? entry.key.split('_')[0] : '';
+    const sportLabel = sportPrefix && sportNames[sportPrefix] ? sportNames[sportPrefix] + ' · ' : '';
     const wr = m.n > 0 ? Math.round(m.w / m.n * 100) : 0;
     const col = m.multiplier > 1.05 ? '#34d399' : m.multiplier < 0.95 ? '#f87171' : 'var(--muted)';
     const profCol = m.profit >= 0 ? '#34d399' : '#f87171';
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-      <div style="width:140px;font-size:12px;font-weight:600">${mNames[k] || k}</div>
+      <div style="width:180px;font-size:12px;font-weight:600">${sportLabel}${mNames[bucketKey] || bucketKey}</div>
       <div style="flex:1;font-size:12px;color:var(--muted)">${m.n} bets · ${wr}% win</div>
       <div style="font-size:12px;font-weight:700;color:${profCol}">${m.profit >= 0 ? '+' : ''}€${m.profit.toFixed(2)}</div>
       <div style="font-size:12px;font-weight:700;color:${col};width:45px;text-align:right">${m.multiplier.toFixed(2)}x</div>
     </div>`;
-  }).join('');
+  };
+
+  const tabsHtml = tabs.map(t => `
+    <button onclick="_setMarketTab('${t.id}')" style="background:${_marketTabActive===t.id?'var(--accent)':'var(--surface2)'};color:${_marketTabActive===t.id?'#fff':'var(--text)'};border:1px solid var(--border);border-radius:16px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">${t.label}</button>
+  `).join('');
+
+  let contentHtml = '';
+  if (_marketTabActive === 'recent') {
+    contentHtml = displayRecent.length
+      ? displayRecent.map(k => renderRow({ key: k, bucket: k.split('_').slice(1).join('_') })).join('')
+      : '<div style="color:var(--muted);padding:12px 0">Nog geen recente calibraties.</div>';
+    contentHtml += '<div style="font-size:10.5px;color:var(--muted);margin-top:10px">Top 5 meest recent gewijzigd (cross-sport).</div>';
+  } else {
+    const rows = bySport[_marketTabActive] || [];
+    const sorted = rows.sort((a, b) => b.multiplier - a.multiplier);
+    contentHtml = sorted.map(r => renderRow(r)).join('');
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${tabsHtml}</div>
+    <div>${contentHtml}</div>
+  `;
+}
+function _setMarketTab(tab) {
+  _marketTabActive = tab;
+  if (inboxData) renderInboxMarkets(inboxData.markets);
 }
 
 // v10.7.25: Signal Performance Dashboard (task D)
