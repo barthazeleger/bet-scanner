@@ -3470,8 +3470,9 @@ function updatePayout() {
   const prob = (modalPick.prob || 0) / 100;
   if (!prob) { edgeEl.innerHTML = ''; return; }
   const origScore = modalPick.score || (modalPick.kelly ? Math.min(10, Math.max(5, Math.round((modalPick.kelly - 0.015) / 0.135 * 5) + 5)) : 0);
+  const origEdge = modalPick.edge != null ? Number(modalPick.edge) : undefined;
   const advice = (window.EPAdvice && window.EPAdvice.computeModalAdvice)
-    ? window.EPAdvice.computeModalAdvice({ origOdds, newOdds: odds, prob, origUnits, origScore })
+    ? window.EPAdvice.computeModalAdvice({ origOdds, newOdds: odds, prob, origUnits, origScore, origEdge })
     : null;
   if (!advice) { edgeEl.innerHTML = ''; return; }
 

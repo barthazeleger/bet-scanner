@@ -3056,6 +3056,26 @@ test('modal v10.8.10: damped edge schaalt mee bij nieuwe odds', () => {
   assert.ok(r.dampedEdge > 4, `damped edge bij 1.80 moet niet absurd laag, got ${r.dampedEdge}`);
 });
 
+test('modal v10.8.11: origEdge anchor → bij ongewijzigde odds matcht damped = origEdge', () => {
+  // Luton card toont Edge +7%, modal moet bij 1.91 unchanged ook 7% tonen
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.91, prob: 0.62, origUnits: 0.75, origEdge: 7 });
+  assert.strictEqual(r.severity, 'unchanged');
+  assert.ok(Math.abs(r.dampedEdge - 7) < 0.5, `expected ~7%, got ${r.dampedEdge}`);
+});
+
+test('modal v10.8.11: origEdge anchor schaalt proportioneel bij lagere odds', () => {
+  // Luton 1.91→1.86: pure 18.4→15.3 (ratio 0.832)
+  // dampedEdge = 7 × (15.3/18.4) ≈ 5.8
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.86, prob: 0.62, origUnits: 0.75, origEdge: 7 });
+  assert.ok(r.dampedEdge > 5 && r.dampedEdge < 6.5, `expected ~5.8, got ${r.dampedEdge}`);
+});
+
+test('modal v10.8.11: origEdge niet aangeleverd → fallback naar bucket-inversie', () => {
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.91, prob: 0.62, origUnits: 0.75 });
+  // Zonder origEdge: damping = 0.75/1.5 = 0.5, damped = 18.4 × 0.5 = 9.2
+  assert.ok(r.dampedEdge > 8 && r.dampedEdge < 10, `fallback expected ~9.2, got ${r.dampedEdge}`);
+});
+
 test('modal: hogere odds (+3%) → severity=better, rec gecapt op origUnits', () => {
   const r = computeModalAdvice({ origOdds: 1.91, newOdds: 2.00, prob: 0.62, origUnits: 0.75 });
   assert.strictEqual(r.severity, 'better');
