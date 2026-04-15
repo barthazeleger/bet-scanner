@@ -4138,7 +4138,7 @@ function renderInboxMarkets(markets) {
     const col = m.multiplier > 1.05 ? '#34d399' : m.multiplier < 0.95 ? '#f87171' : 'var(--muted)';
     const profCol = m.profit >= 0 ? '#34d399' : '#f87171';
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-      <div style="width:180px;font-size:12px;font-weight:600">${sportLabel}${mNames[bucketKey] || bucketKey}</div>
+      <div style="flex:1 1 160px;min-width:0;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sportLabel}${mNames[bucketKey] || bucketKey}</div>
       <div style="flex:1;font-size:12px;color:var(--muted)">${m.n} bets · ${wr}% win</div>
       <div style="font-size:12px;font-weight:700;color:${profCol}">${m.profit >= 0 ? '+' : ''}€${m.profit.toFixed(2)}</div>
       <div style="font-size:12px;font-weight:700;color:${col};width:45px;text-align:right">${m.multiplier.toFixed(2)}x</div>
@@ -4201,14 +4201,14 @@ async function loadSignalPerformance() {
       ${rows.map(r => {
         const col = statusColor(r.status);
         const clvCol = r.avgClv > 0 ? '#34d399' : r.avgClv < -1 ? '#f87171' : 'var(--muted)';
-        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600">${r.name}</div>
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;flex-wrap:wrap">
+          <div style="flex:1 1 140px;min-width:0;overflow:hidden">
+            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</div>
             <div style="font-size:11px;color:var(--muted);margin-top:2px">${r.n} bets · ${r.posCLV_pct}% positief</div>
           </div>
-          <div style="text-align:right;min-width:60px;font-weight:700;color:${clvCol}">${r.avgClv > 0 ? '+' : ''}${r.avgClv}%</div>
-          <div style="text-align:right;min-width:45px;font-weight:700">${r.weight}×</div>
-          <div style="text-align:right;min-width:140px;color:${col};font-weight:600;font-size:11px">${statusLabel(r.status)}</div>
+          <div style="text-align:right;min-width:54px;font-weight:700;color:${clvCol}">${r.avgClv > 0 ? '+' : ''}${r.avgClv}%</div>
+          <div style="text-align:right;min-width:40px;font-weight:700">${r.weight}×</div>
+          <div style="text-align:right;flex:0 0 auto;color:${col};font-weight:600;font-size:11px;white-space:nowrap">${statusLabel(r.status)}</div>
         </div>`;
       }).join('')}
       <div style="font-size:10.5px;color:var(--muted);margin-top:12px;line-height:1.5">
