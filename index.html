@@ -1574,6 +1574,115 @@ function humanizePickReason(pick) {
     else if (/europese/i.test(stakes)) facts.push('gevecht om Europees ticket');
   }
 
+  // ── Sport-specifieke signalen ──────────────────────────────────────────
+  // Baseball: "RD/g:+0.5 vs -0.3" (run differential per game)
+  const rd = parts.find(p => /RD\/g:/i.test(p));
+  if (rd) {
+    const m = rd.match(/RD\/g:\s*([+-]?\d+\.?\d*)\s*vs\s*([+-]?\d+\.?\d*)/);
+    if (m) {
+      const hm = parseFloat(m[1]), aw = parseFloat(m[2]);
+      const diff = hm - aw;
+      if (Math.abs(diff) > 1) facts.push(`${diff > 0 ? 'thuis' : 'uit'} heeft beter run differential (${Math.abs(diff).toFixed(1)}/game)`);
+    }
+  }
+  // Baseball: H/A split "H/A:0.55/0.40"
+  const ha = parts.find(p => /^H\/A:/i.test(p));
+  if (ha) {
+    const m = ha.match(/H\/A:\s*([\d.]+)\/([\d.]+)/);
+    if (m) {
+      const hmWR = parseFloat(m[1]), awWR = parseFloat(m[2]);
+      if (hmWR - awWR > 0.15) facts.push('thuis sterk thuis, uit zwak uit');
+      else if (awWR - hmWR > 0.15) facts.push('uit sterk uit, thuis zwak thuis');
+    }
+  }
+  // MLB: Pitcher "Pitcher: ERA 2.80 vs 4.20" or "Pitcher adv: home +0.8 ERA"
+  const pitcher = parts.find(p => /pitcher/i.test(p));
+  if (pitcher) {
+    if (/adv.*home|home.*adv/i.test(pitcher)) facts.push('thuis heeft pitcher-voordeel');
+    else if (/adv.*away|away.*adv/i.test(pitcher)) facts.push('uit heeft pitcher-voordeel');
+    else facts.push('pitcher-matchup relevant');
+  }
+  // NBA/NHL: B2B note "B2B: home tired" or similar
+  const b2b = parts.find(p => /B2B:/i.test(p));
+  if (b2b) {
+    if (/home/i.test(b2b) && /tired|fatig/i.test(b2b)) facts.push('thuis speelt tweede avond op rij');
+    else if (/away/i.test(b2b) && /tired|fatig/i.test(b2b)) facts.push('uit speelt tweede avond op rij');
+  }
+  // NFL: Bye week "Bye: +X%"
+  const bye = parts.find(p => /Bye:|bye week/i.test(p));
+  if (bye) {
+    if (/home/i.test(bye)) facts.push('thuis komt uit bye week (fris)');
+    else if (/away/i.test(bye)) facts.push('uit komt uit bye week (fris)');
+  }
+  // NHL shots differential
+  const shots = parts.find(p => /shots/i.test(p));
+  if (shots) {
+    const m = shots.match(/([+-]?\d+\.?\d*)/);
+    if (m && Math.abs(parseFloat(m[1])) > 3) {
+      facts.push('shots-diff significant in één richting');
+    }
+  }
+  // Streak (MLB/NBA): "Streak: W5" or similar
+  const streak = parts.find(p => /streak/i.test(p));
+  if (streak) {
+    if (/W[5-9]|W\d{2}/i.test(streak)) facts.push('team op positieve streak');
+    else if (/L[5-9]|L\d{2}/i.test(streak)) facts.push('team op negatieve streak');
+  }
+
+  // Aggregate (return-leg): "🏆 Aggregaat thuis leidt 3-2"
+  const agg = parts.find(p => /🏆|aggregaat/i.test(p));
+  if (agg) {
+    const leaderMatch = agg.match(/aggregaat\s+(thuis|uit)\s+leidt\s+(\d+)-(\d+)/i);
+    if (leaderMatch) {
+      const leader = leaderMatch[1].toLowerCase();
+      const lead = parseInt(leaderMatch[2]), trail = parseInt(leaderMatch[3]);
+      const diff = lead - trail;
+      const who = leader === 'thuis' ? 'thuis' : 'uit';
+      if (diff === 1) facts.push(`${who} verdedigt ${lead}-${trail} voorsprong — trailer moet scoren`);
+      else if (diff >= 2) facts.push(`${who} heeft riante ${lead}-${trail} voorsprong — trailer forceert, ${who} parkeert`);
+    } else if (/gelijk/i.test(agg)) {
+      facts.push('aggregaat gelijk — alles te spelen in deze leg');
+    }
+  }
+
+  // BTTS reason: "BTTS: 63.1% | ... | GF: 2.88/2.13"
+  const btts = parts.find(p => /^BTTS\s*(Nee)?:/i.test(p));
+  if (btts) {
+    const pct = btts.match(/(\d+\.?\d*)%/);
+    const gf = parts.find(p => /^GF:/i.test(p));
+    const gfMatch = gf && gf.match(/GF:\s*([\d.]+)\/([\d.]+)/);
+    if (pct && gfMatch) {
+      const hmGF = parseFloat(gfMatch[1]), awGF = parseFloat(gfMatch[2]);
+      if (hmGF >= 1.7 && awGF >= 1.7) facts.push(`beide teams scoren ruim (${hmGF}+${awGF} goals/match)`);
+      else if (hmGF < 1.0 || awGF < 1.0) facts.push(`één team scoort weinig (${hmGF}/${awGF} goals/match)`);
+    }
+    // CS hint (Clean sheets)
+    const cs = parts.find(p => /^CS:/i.test(p));
+    if (cs && /BTTS Nee/i.test(btts)) {
+      facts.push('hoge clean-sheet rate — BTTS-Nee onderbouwd');
+    }
+  }
+
+  // Over/Under consensus: "O/U consensus: 61.9% over"
+  const ou = parts.find(p => /O\/U consensus/i.test(p));
+  if (ou) {
+    const m = ou.match(/(\d+\.?\d*)%\s+(over|under)/i);
+    if (m) {
+      const pct = parseFloat(m[1]);
+      const side = m[2].toLowerCase();
+      if (pct >= 60) facts.push(`markt leunt richting ${side === 'over' ? 'veel goals' : 'weinig goals'} (${pct}%)`);
+    }
+    const ts = parts.find(p => /TeamStats:/i.test(p));
+    if (ts) {
+      const tsMatch = ts.match(/([+-]?\d+\.?\d*)%/);
+      if (tsMatch) {
+        const adj = parseFloat(tsMatch[1]);
+        if (adj > 1) facts.push('teamstats bevestigen scoringspatroon');
+        else if (adj < -1) facts.push('teamstats tempert scoringsverwachting');
+      }
+    }
+  }
+
   // Consensus / edge framing: "Consensus: 47.3%→56.6%"
   const cons = parts.find(p => /Consensus/i.test(p));
   let opening = '';
@@ -1590,6 +1699,11 @@ function humanizePickReason(pick) {
         opening = `Model ziet minder kans dan de markt suggereert (${delta.toFixed(1)}%)`;
       }
     }
+  }
+
+  // Fallback: no opening but we have facts → generic opener
+  if (!opening && facts.length) {
+    opening = 'Modelanalyse';
   }
 
   if (!opening && !facts.length) return '';
