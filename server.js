@@ -7874,7 +7874,20 @@ app.get('/api/debug/odds', requireAdmin, async (req, res) => {
           };
         }),
       }));
-      out.push({ id, home: g.teams?.home?.name, away: g.teams?.away?.name, bookmakers });
+      // v10.7.24: include date/status/league zodat debug direct toont of
+      // het de juiste fixture is (avond vs afgelopen nacht etc.).
+      const gDate = g.fixture?.date || g.date || null;
+      const nlDateTime = gDate ? new Date(gDate).toLocaleString('nl-NL', {
+        weekday:'short', day:'2-digit', month:'short', year:'numeric',
+        hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam'
+      }) : null;
+      out.push({
+        id, home: g.teams?.home?.name, away: g.teams?.away?.name,
+        dateUTC: gDate, dateNL: nlDateTime,
+        status: g.fixture?.status?.short || g.status?.short || null,
+        league: g.league?.name || null,
+        bookmakers,
+      });
     }
     res.json({ sport, datesSearched: datesFromParam, fetchedPerDate, matchesFound: matches.length, matches: out });
   } catch (e) {
