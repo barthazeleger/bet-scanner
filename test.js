@@ -2597,6 +2597,96 @@ test('humanize narrative XSS: escape helper werkt', () => {
   assert.strictEqual(escape('normaal'), 'normaal');
 });
 
+test('aggregate-score: buildAggregateInfo — leader/trailer/square', () => {
+  // Reproduceer buildAggregateInfo uit server.js
+  const build = (aggHome, aggAway) => {
+    if (aggHome == null || aggAway == null) return { signals: [], note: '' };
+    const diff = aggHome - aggAway;
+    const signals = [];
+    let note = '';
+    if (diff === 0) {
+      signals.push('leg2_all_square:0%');
+      note = ` | 🏆 Aggregaat gelijk (${aggHome}-${aggAway})`;
+    } else if (diff > 0) {
+      signals.push('leg2_home_leads_agg:0%');
+      if (diff >= 2) signals.push('leg2_home_leads_big:0%');
+      note = ` | 🏆 Aggregaat thuis leidt ${aggHome}-${aggAway}`;
+    } else {
+      signals.push('leg2_away_leads_agg:0%');
+      if (-diff >= 2) signals.push('leg2_away_leads_big:0%');
+      note = ` | 🏆 Aggregaat uit leidt ${aggAway}-${aggHome}`;
+    }
+    return { signals, note, aggDiff: diff };
+  };
+  // All square
+  assert.deepStrictEqual(build(2, 2).signals, ['leg2_all_square:0%']);
+  // Home leads small
+  assert.deepStrictEqual(build(3, 2).signals, ['leg2_home_leads_agg:0%']);
+  // Home leads big (≥2)
+  assert.deepStrictEqual(build(3, 1).signals, ['leg2_home_leads_agg:0%', 'leg2_home_leads_big:0%']);
+  // Away leads big
+  assert.deepStrictEqual(build(0, 3).signals, ['leg2_away_leads_agg:0%', 'leg2_away_leads_big:0%']);
+  // Null safe
+  assert.deepStrictEqual(build(null, 2).signals, []);
+});
+
+test('aggregate-score: Over/BTTS push-adjustment berekening', () => {
+  // Reproduceer overP / bttsYesP adjustment logic uit server.js
+  const computeOUAdj = (aggDiff) => {
+    if (aggDiff == null || aggDiff === 0) return 0;
+    const absDiff = Math.abs(aggDiff);
+    return Math.min(0.04, 0.02 * absDiff);
+  };
+  const computeBTTSAdj = (aggDiff) => {
+    if (aggDiff == null || aggDiff === 0) return 0;
+    const absDiff = Math.abs(aggDiff);
+    return Math.min(0.03, 0.02 * Math.min(2, absDiff));
+  };
+  // All square: geen adj
+  assert.strictEqual(computeOUAdj(0), 0);
+  assert.strictEqual(computeBTTSAdj(0), 0);
+  // Deficit 1: +2% op Over, +2% op BTTS
+  assert.strictEqual(computeOUAdj(1), 0.02);
+  assert.strictEqual(computeBTTSAdj(1), 0.02);
+  // Deficit 2: +4% Over, +3% BTTS (capped)
+  assert.strictEqual(computeOUAdj(2), 0.04);
+  assert.strictEqual(computeBTTSAdj(2), 0.03);
+  // Deficit 3: cap blijft gelden
+  assert.strictEqual(computeOUAdj(3), 0.04);
+  assert.strictEqual(computeBTTSAdj(3), 0.03);
+  // Symmetrisch voor away-side deficit
+  assert.strictEqual(computeOUAdj(-2), 0.04);
+  assert.strictEqual(computeBTTSAdj(-3), 0.03);
+});
+
+test('new-season indicator: detectie + damping factor', () => {
+  const parse = (roundStr) => {
+    const m = String(roundStr || '').toLowerCase().match(/regular season\s*[-–]?\s*(\d+)/i);
+    const seasonRound = m ? parseInt(m[1]) : null;
+    const earlySeason = seasonRound !== null && seasonRound <= 4;
+    return { seasonRound, earlySeason, dampingFactor: earlySeason ? 0.6 : 1.0 };
+  };
+  assert.deepStrictEqual(parse('Regular Season - 1'), { seasonRound: 1, earlySeason: true, dampingFactor: 0.6 });
+  assert.deepStrictEqual(parse('Regular Season - 4'), { seasonRound: 4, earlySeason: true, dampingFactor: 0.6 });
+  assert.deepStrictEqual(parse('Regular Season - 5'), { seasonRound: 5, earlySeason: false, dampingFactor: 1.0 });
+  assert.deepStrictEqual(parse('Regular Season - 28'), { seasonRound: 28, earlySeason: false, dampingFactor: 1.0 });
+  // Knockout rounds don't trigger early-season
+  assert.deepStrictEqual(parse('Quarter-finals'), { seasonRound: null, earlySeason: false, dampingFactor: 1.0 });
+  assert.deepStrictEqual(parse(''), { seasonRound: null, earlySeason: false, dampingFactor: 1.0 });
+});
+
+test('new-season damping: form + h2h gedempt, injuries/congestion niet', () => {
+  const computeTotalAdj = (formAdj, injAdj, h2hAdj, congestionAdj, earlySeason, damping) => {
+    if (!earlySeason) return formAdj + injAdj + h2hAdj + congestionAdj;
+    return (formAdj + h2hAdj) * damping + injAdj + congestionAdj;
+  };
+  // Full season: alles telt vol
+  assert.strictEqual(+computeTotalAdj(0.05, 0.02, 0.03, -0.01, false, 1.0).toFixed(3), 0.09);
+  // Early season: form + h2h op 60%, injuries + congestion vol
+  // (0.05 + 0.03) * 0.6 + 0.02 + -0.01 = 0.048 + 0.01 = 0.058
+  assert.strictEqual(+computeTotalAdj(0.05, 0.02, 0.03, -0.01, true, 0.6).toFixed(3), 0.058);
+});
+
 test('rest-days helper: signalen en note logica', () => {
   // Reproduceer buildRestDaysInfo logic uit server.js
   const build = (sport, kickoffMs, hmLast, awLast) => {

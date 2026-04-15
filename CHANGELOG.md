@@ -2,6 +2,53 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.25] - 2026-04-15
+
+### Added (aggregate-score Phase 2 — return-leg edge)
+Bouwt verder op v10.7.23 knockout-awareness. Bij detectie van 2e leg fetchen we nu de **1e leg score via H2H endpoint**, berekenen aggregaat en passen EV aan op Over 2.5 en BTTS markten.
+
+**Helpers:**
+- `fetchAggregateScore(hmId, awId, roundStr, season)` — zoekt 1e leg via H2H `/fixtures/headtohead?h2h=X-Y&last=5`, filtert op `1st Leg` + zelfde seizoen. Herkent dat home/away gedraaid zijn in de 2e leg.
+- `buildAggregateInfo(aggHome, aggAway)` — bouwt signalen + note. Detecteert all-square, small lead (1), big lead (≥2).
+
+**Signalen** (weight=0 default, auto-promote via CLV):
+- `leg2_all_square` / `leg2_home_leads_agg` / `leg2_home_leads_big` / `leg2_away_leads_agg` / `leg2_away_leads_big`
+- `aggregate_push_ou` / `aggregate_push_btts` (direct effect signalen)
+
+**Direct effect op probabilities** (research-backed, niet wachten op CLV-bewijs):
+- **Over 2.5**: +2% per deficit-goal, cap +4%. Trailer moet scoren → meer goals.
+- **BTTS**: +2% bij deficit=1, +3% bij deficit≥2 (cap). Leader scoort vaak ook op counters.
+- **ML**: geen auto-adjustment (leader wint vaak alsnog ondanks defensiever spel).
+
+**Human-note**: `🏆 Aggregaat thuis leidt 3-2`. Humanizer vertaalt: "thuis verdedigt voorsprong" / "uit moet minstens 2 scoren voor verlenging".
+
+### Added (new-season indicator — B)
+Vroeg in seizoen (ronde 1-4) is form/h2h minder predictief door kleine sample. Nu:
+- Detectie via `f.league.round` matcht `Regular Season - N` met N≤4
+- Signaal `early_season` (logging)
+- **Dempt form + h2h adjustments met factor 0.6** (research: form-signal is 40% minder predictief in eerste weken)
+- Injuries + congestion blijven ongedempt (die gelden direct)
+- Note `🌱 Vroeg in seizoen (ronde X)` in reason
+
+### Added (signal performance dashboard — D)
+Nieuwe Model-tab kaart "Signal Performance" toont per signaal:
+- `n` (aantal bets met dit signaal)
+- `avgClv` + kleur (groen/rood)
+- `posCLV_pct` (% bets met positieve CLV)
+- Huidige `weight` (0.0-1.5)
+- Status: 🚀 auto_promotable / ✅ active / 📈 logging_positive / 👁️ logging / 🔴 mute_candidate
+
+**Endpoint:** `GET /api/admin/signal-performance`
+Response include ook thresholds zodat UI de drempels toont.
+
+### Tests
+4 nieuwe regression tests: aggregate-score signals, Over/BTTS adj berekening, new-season detectie, damping-factor. Totaal **231 tests, 0 failed** (was 227).
+
+### Waarom deze drie samen
+- **A** levert direct meetbare edge op (geen CLV-wachttijd)
+- **B** verlaagt risico op slechte picks in seizoenstart
+- **D** geeft transparantie: je ziet live welke signalen werken en wanneer ze promoveren
+
 ## [10.7.24] - 2026-04-15
 
 ### Added (rest-days signal — alle 6 sporten)

@@ -530,6 +530,13 @@
     <div id="signal-analysis" style="padding:8px 0"><div style="color:var(--muted);font-size:13px">Laden...</div></div>
   </div>
 
+  <!-- v10.7.25: Signal Performance Dashboard (D) — per signaal: weight, CLV, status -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="margin-bottom:14px">📈 Signal Performance</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Per signaal: weight, sample-size, gemiddelde CLV en auto-promote status.</div>
+    <div id="signal-performance" style="padding:8px 0"><div style="color:var(--muted);font-size:13px">Laden...</div></div>
+  </div>
+
   <!-- Experimentele signalen (logged-only, auto-activate) -->
   <div class="card" style="margin-bottom:16px">
     <div class="card-title" style="margin-bottom:14px" data-i18n="card_experimental">🧪 Experimentele signalen</div>
@@ -3651,6 +3658,7 @@ async function loadModelTab() {
   loadSignalAnalysis();
   loadExperimentalSignals();
   loadModelLog();
+  loadSignalPerformance();
 }
 
 function loadExperimentalSignals() {
@@ -3874,6 +3882,56 @@ function renderInboxMarkets(markets) {
     </div>`;
   }).join('');
 }
+
+// v10.7.25: Signal Performance Dashboard (task D)
+// Laad /api/admin/signal-performance → per signaal status + CLV + weight.
+async function loadSignalPerformance() {
+  const el = document.getElementById('signal-performance');
+  if (!el) return;
+  try {
+    const r = await api('/api/admin/signal-performance');
+    if (!r || !r.ok) { el.innerHTML = '<div style="color:var(--muted)">Niet beschikbaar.</div>'; return; }
+    const d = await r.json();
+    const rows = d.signals || [];
+    if (!rows.length) { el.innerHTML = '<div style="color:var(--muted)">Nog geen signaal-data met CLV.</div>'; return; }
+    const statusColor = s => ({
+      active: '#34d399',
+      auto_promotable: '#fbbf24',
+      logging_positive: '#93c5fd',
+      logging: 'var(--muted)',
+      mute_candidate: '#f87171',
+    })[s] || 'var(--muted)';
+    const statusLabel = s => ({
+      active: '✅ Actief',
+      auto_promotable: '🚀 Klaar voor promote',
+      logging_positive: '📈 Positief, groeit',
+      logging: '👁️ Logging',
+      mute_candidate: '🔴 Mute kandidaat',
+    })[s] || s;
+    el.innerHTML = `
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${d.totalSignals} signalen · ${d.totalBetsAnalyzed} bets met CLV</div>
+      ${rows.map(r => {
+        const col = statusColor(r.status);
+        const clvCol = r.avgClv > 0 ? '#34d399' : r.avgClv < -1 ? '#f87171' : 'var(--muted)';
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600">${r.name}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">${r.n} bets · ${r.posCLV_pct}% positief</div>
+          </div>
+          <div style="text-align:right;min-width:60px;font-weight:700;color:${clvCol}">${r.avgClv > 0 ? '+' : ''}${r.avgClv}%</div>
+          <div style="text-align:right;min-width:45px;font-weight:700">${r.weight}×</div>
+          <div style="text-align:right;min-width:140px;color:${col};font-weight:600;font-size:11px">${statusLabel(r.status)}</div>
+        </div>`;
+      }).join('')}
+      <div style="font-size:10.5px;color:var(--muted);margin-top:12px;line-height:1.5">
+        Drempels: auto-promote bij n≥${d.thresholds.SIGNAL_PROMOTE_MIN_N} + avg CLV>0 (weight → ${d.thresholds.SIGNAL_PROMOTE_WEIGHT}).<br>
+        Mute-kandidaat: n≥${d.thresholds.SIGNAL_KILL_MIN_N} + avg CLV ≤ ${d.thresholds.SIGNAL_KILL_CLV_PCT}%.
+      </div>
+    `;
+  } catch (e) { el.innerHTML = '<div style="color:#f87171">Error: ' + e.message + '</div>'; }
+}
+// Trigger load wanneer model-tab actief wordt
+const _originalGoForSigPerf = typeof go === 'function' ? go : null;
 
 // ── v2 PIPELINE HEALTH DASHBOARD ─────────────────────────────────────────────
 async function loadV2Dashboard() {

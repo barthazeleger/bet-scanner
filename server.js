@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.24';
+const APP_VERSION    = '10.7.25';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1862,6 +1862,65 @@ async function enrichWithApiSports(emit, activeSoccerKeys = null) {
   }
   emit({ log: `✅ ⚽ Scheidsrechters voetbal: ${Object.keys(afCache.referees).length} wedstrijden (${callsUsed} calls)` });
   emit({ log: `📊 Voetbal-enrichment klaar · ${callsUsed} calls (multi-sport data wordt per-league binnen elk sport-loop opgehaald)` });
+}
+
+// v10.7.25: aggregate-score helper voor 2-leg knockout ties (CL/EL/Conference,
+// domestic cups). Bij 2e leg fetchen we de 1e leg via H2H en berekenen totaal.
+// Team leading aggregate → defensiever (over% zakt, BTTS% zakt); trailing →
+// moet scoren → BTTS% omhoog, over% omhoog. Phase 2: nu signaal logging +
+// damping van form-signal omdat aggregaat-druk vorm in de schaduw zet.
+async function fetchAggregateScore(hmId, awId, roundStr, seasonYear) {
+  if (!AF_KEY || !hmId || !awId) return null;
+  try {
+    // H2H recent 5 matches — 1e leg is meestal 1-2 weken eerder, recent genoeg.
+    const rows = await afGet('v3.football.api-sports.io', '/fixtures/headtohead', {
+      h2h: `${hmId}-${awId}`, last: 5
+    });
+    if (!Array.isArray(rows) || !rows.length) return null;
+    // Vind 1e leg: zelfde season + round ENDS met "1st leg" / "1st Leg"
+    const firstLegHint = roundStr.replace(/2nd\s*leg/i, '1st Leg').replace(/second\s*leg/i, '1st Leg');
+    const firstLeg = rows.find(f => {
+      const rd = String(f.league?.round || '').toLowerCase();
+      const sameSeason = !seasonYear || f.league?.season === seasonYear;
+      return sameSeason && /1st\s*leg|first\s*leg/i.test(rd);
+    });
+    if (!firstLeg) return null;
+    const hG1 = firstLeg.goals?.home ?? 0;
+    const aG1 = firstLeg.goals?.away ?? 0;
+    const firstHome = firstLeg.teams?.home?.id;
+    const firstAway = firstLeg.teams?.away?.id;
+    // In de 2e leg zijn de teams OMGEDRAAID (home wordt away):
+    // Huidig hmId was uit in 1e leg, dus aggregate_home (total voor huidige thuis-team)
+    //   = aG1 als hmId === firstAway, anders hG1
+    let aggHome, aggAway;
+    if (hmId === firstAway) { aggHome = aG1; aggAway = hG1; }
+    else if (hmId === firstHome) { aggHome = hG1; aggAway = aG1; }
+    else return null; // team mismatch, veilige exit
+    return { aggHome, aggAway, firstLegScore: `${hG1}-${aG1}`, firstLegFxId: firstLeg.fixture?.id };
+  } catch (e) {
+    console.warn('fetchAggregateScore failed:', e.message);
+    return null;
+  }
+}
+
+function buildAggregateInfo(aggHome, aggAway) {
+  if (aggHome == null || aggAway == null) return { signals: [], note: '' };
+  const diff = aggHome - aggAway; // positief = huidige thuis team leidt aggregaat
+  const signals = [];
+  let note = '';
+  if (diff === 0) {
+    signals.push('leg2_all_square:0%');
+    note = ` | 🏆 Aggregaat gelijk (${aggHome}-${aggAway})`;
+  } else if (diff > 0) {
+    signals.push('leg2_home_leads_agg:0%');
+    if (diff >= 2) signals.push('leg2_home_leads_big:0%');
+    note = ` | 🏆 Aggregaat thuis leidt ${aggHome}-${aggAway}`;
+  } else {
+    signals.push('leg2_away_leads_agg:0%');
+    if (-diff >= 2) signals.push('leg2_away_leads_big:0%');
+    note = ` | 🏆 Aggregaat uit leidt ${aggAway}-${aggHome}`;
+  }
+  return { signals, note, aggDiff: diff };
 }
 
 // v10.7.24: rest-days helper — haalt laatste gespeelde fixture op en cached
@@ -5332,6 +5391,27 @@ async function runPrematch(emit) {
                     : null,
         };
 
+        // v10.7.25: bij 2e leg → fetch 1e leg en bereken aggregaat
+        let aggInfo = { signals: [], note: '', aggDiff: null };
+        if (knockoutInfo.leg === 2 && hmId && awId) {
+          try {
+            const agg = await fetchAggregateScore(hmId, awId, roundStr, f.league?.season);
+            if (agg) aggInfo = buildAggregateInfo(agg.aggHome, agg.aggAway);
+          } catch (e) { console.warn('Aggregate fetch failed:', e.message); }
+        }
+
+        // v10.7.25: new-season indicator — eerste 4 rondes hebben te weinig
+        // sample om form/stats betrouwbaar te interpreteren. Signaal logging +
+        // dempen van form/position adjustments tijdens deze fase.
+        const seasonRoundMatch = roundStr.match(/regular season\s*[-–]?\s*(\d+)/i);
+        const seasonRound = seasonRoundMatch ? parseInt(seasonRoundMatch[1]) : null;
+        const earlySeason = seasonRound !== null && seasonRound <= 4;
+        const seasonInfo = {
+          signals: earlySeason ? ['early_season:0%'] : [],
+          note: earlySeason ? ` | 🌱 Vroeg in seizoen (ronde ${seasonRound})` : '',
+          dampingFactor: earlySeason ? 0.6 : 1.0, // dempt form/position op 60%
+        };
+
         // ── Odds ophalen van api-football.com ─────────────────────────
         await sleep(120);
         const oddsResp = await afGet('v3.football.api-sports.io', '/odds', { fixture: fid });
@@ -5550,7 +5630,12 @@ async function runPrematch(emit) {
         }
         congestionAdj = Math.max(-0.04, congestionAdj);
 
-        const totalAdj  = formAdj + injAdj + h2hAdj + congestionAdj;
+        // v10.7.25: early-season damping — form/h2h hebben lagere predictieve
+        // kracht in ronde 1-4, dus signalen worden gedempt. Home-advantage en
+        // injuries blijven ongedempt (die gelden sowieso).
+        const totalAdjRaw = formAdj + injAdj + h2hAdj + congestionAdj;
+        const dampedFormH2h = (formAdj + h2hAdj) * seasonInfo.dampingFactor;
+        const totalAdj = earlySeason ? (dampedFormH2h + injAdj + congestionAdj) : totalAdjRaw;
         const adjHome2  = Math.min(0.88, adjHome + totalAdj);
         const adjAway2  = Math.max(0.08, adjAway - totalAdj);
 
@@ -5587,6 +5672,10 @@ async function runPrematch(emit) {
           }
           // v10.7.24: rest-days signaal
           if (restInfo.signals.length) sigs.push(...restInfo.signals);
+          // v10.7.25: aggregate-score signalen (2e leg)
+          if (aggInfo.signals.length) sigs.push(...aggInfo.signals);
+          // v10.7.25: early-season signaal (logging + damping in calc)
+          if (seasonInfo.signals.length) sigs.push(...seasonInfo.signals);
           return sigs;
         };
         const matchSignals = buildSignals();
@@ -5596,7 +5685,7 @@ async function runPrematch(emit) {
           ? ` | 🥊 ${knockoutInfo.leg ? `${knockoutInfo.leg}e leg ` : ''}${knockoutInfo.stageLabel || 'knock-out'}`
           : '';
 
-        const sharedNotes = `${posStr}${splitNote}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}${weatherNote}${poissonNote}${congestionNote}${knockoutNote}${restInfo.note}`;
+        const sharedNotes = `${posStr}${splitNote}${formNote}${injNote}${h2hNote}${refNote}${predNote}${lineupNote}${weatherNote}${poissonNote}${congestionNote}${knockoutNote}${restInfo.note}${aggInfo.note}${seasonInfo.note}`;
         const reasonH = `Consensus: ${(fp.home*100).toFixed(1)}%→${(adjHome2*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`;
         const reasonA = `Consensus: ${(fp.away*100).toFixed(1)}%→${(adjAway2*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`;
         const reasonD = `Gelijkspel: ${((fp.draw||0)*100).toFixed(1)}% | ${bD?.bookie}: ${bD?.price}${sharedNotes} | ${ko}`;
@@ -5725,12 +5814,26 @@ async function runPrematch(emit) {
             }
           }
 
+          // v10.7.25: aggregaat-effect op Over 2.5 in 2-leg ties.
+          // Research: team trailing on aggregate pusht harder → Over% stijgt.
+          // Hoe groter de deficit, hoe sterker de push (tot cap ±2 doelpunten
+          // deficit; daarna effect plateaut). Bidirectional: ALS er overhaupt
+          // een deficit is (ongeacht welke kant), Over boost.
+          let aggOUAdj = 0, aggOUNote = '';
+          if (aggInfo.aggDiff !== null && aggInfo.aggDiff !== undefined && aggInfo.aggDiff !== 0) {
+            const absDiff = Math.abs(aggInfo.aggDiff);
+            aggOUAdj = Math.min(0.04, 0.02 * absDiff); // +2% per deficit-doelpunt, cap 4%
+            overP = Math.max(0.10, Math.min(0.90, overP + aggOUAdj));
+            aggOUNote = ` | Aggregate-push Over: +${(aggOUAdj*100).toFixed(1)}%`;
+          }
+
           const overEdge  = overP * over.best.price - 1;
           const underEdge = under.best.price > 0 ? (1-overP) * under.best.price - 1 : -1;
           const ouSignals = [...matchSignals];
           if (tsNote) ouSignals.push(`team_stats:${tsNote.replace(/[^+\-\d.%]/g,'').trim()}`);
           if (weatherOUAdj !== 0) ouSignals.push(`weather_ou:${(weatherOUAdj*100).toFixed(1)}%`);
           if (Math.abs(poissonOUAdj) >= 0.005) ouSignals.push(`poisson_ou:${poissonOUAdj>0?'+':''}${(poissonOUAdj*100).toFixed(1)}%`);
+          if (aggOUAdj !== 0) ouSignals.push(`aggregate_push_ou:+${(aggOUAdj*100).toFixed(1)}%`);
           if (overEdge >= MIN_EDGE)
             mkP(`${hm} vs ${aw}`, league.name, `⚽ Over 2.5 goals`, over.best.price,
               `O/U consensus: ${(overP*100).toFixed(1)}% over | ${over.best.bookie}: ${over.best.price}${tsNote}${weatherOUNote}${poissonOUNote}${predNote} | ${ko}`,
@@ -5805,6 +5908,17 @@ async function runPrematch(emit) {
                 }
               }
 
+              // v10.7.25: aggregaat-push effect op BTTS in 2-leg ties.
+              // Research: deficit → trailer moet scoren → BTTS Ja waarschijnlijker.
+              // Maar bij BIG deficit (≥2) parkt trailer soms de bus en probeert
+              // niet eens → BTTS effect vlakker. Cap op +3%.
+              let aggBTTSAdj = 0;
+              if (aggInfo.aggDiff !== null && aggInfo.aggDiff !== undefined && aggInfo.aggDiff !== 0) {
+                const absDiff = Math.abs(aggInfo.aggDiff);
+                aggBTTSAdj = Math.min(0.03, 0.02 * Math.min(2, absDiff));
+                bttsYesP = Math.max(0.15, Math.min(0.85, bttsYesP + aggBTTSAdj));
+              }
+
               const bttsNoP = 1 - bttsYesP;
               const bttsYesEdge = bttsYesP * bestYes.price - 1;
               const bttsNoEdge  = bttsNoP * bestNo.price - 1;
@@ -5813,6 +5927,7 @@ async function runPrematch(emit) {
               if (csBoost > 0) bttsSignals.push(`btts_cleansheet:-${(csBoost*100).toFixed(1)}%`);
               if (bttWeatherAdj !== 0) bttsSignals.push(`btts_weather:${(bttWeatherAdj*100).toFixed(1)}%`);
               if (Math.abs(bttsPoissonAdj) >= 0.005) bttsSignals.push(`btts_poisson:${bttsPoissonAdj>0?'+':''}${(bttsPoissonAdj*100).toFixed(1)}%`);
+              if (aggBTTSAdj !== 0) bttsSignals.push(`aggregate_push_btts:+${(aggBTTSAdj*100).toFixed(1)}%`);
 
               if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60)
                 mkP(`${hm} vs ${aw}`, league.name, `🔥 BTTS Ja`, bestYes.price,
@@ -8723,6 +8838,64 @@ app.get('/api/changelog', requireAdmin, (req, res) => {
     res.json({ version: APP_VERSION, entries });
   } catch (e) {
     res.status(500).json({ error: (e && e.message) || 'Kan CHANGELOG niet lezen' });
+  }
+});
+
+// GET /api/admin/signal-performance — per-signal stats voor dashboard (D)
+// Returnt: name, n (bets), avgCLV, posCLV%, currentWeight, status
+// (active/muted/logging/auto_promotable).
+app.get('/api/admin/signal-performance', requireAdmin, async (req, res) => {
+  try {
+    const { data: bets, error } = await supabase.from('bets')
+      .select('signals, clv_pct').not('clv_pct', 'is', null)
+      .limit(10000);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const weights = loadSignalWeights();
+    const signalStats = {};
+    for (const b of (bets || [])) {
+      if (typeof b.clv_pct !== 'number' || isNaN(b.clv_pct)) continue;
+      let sigs;
+      try { sigs = Array.isArray(b.signals) ? b.signals : JSON.parse(b.signals || '[]'); }
+      catch { continue; }
+      if (!Array.isArray(sigs)) continue;
+      for (const s of sigs) {
+        const name = String(s || '').split(':')[0];
+        if (!name) continue;
+        if (!signalStats[name]) signalStats[name] = { n: 0, sumClv: 0, posN: 0 };
+        signalStats[name].n++;
+        signalStats[name].sumClv += b.clv_pct;
+        if (b.clv_pct > 0) signalStats[name].posN++;
+      }
+    }
+
+    const rows = Object.entries(signalStats).map(([name, s]) => {
+      const avgClv = +(s.sumClv / s.n).toFixed(2);
+      const posPct = +(s.posN / s.n * 100).toFixed(1);
+      const weight = weights[name] !== undefined ? weights[name] : 0;
+      let status = 'logging';
+      if (weight === 0 && s.n >= 50 && avgClv > 0) status = 'auto_promotable';
+      else if (weight === 0 && s.n >= 20 && avgClv > 0) status = 'logging_positive';
+      else if (weight === 0) status = 'logging';
+      else if (weight > 0) status = 'active';
+      if (s.n >= 50 && avgClv <= -3) status = 'mute_candidate';
+      return { name, n: s.n, avgClv, posCLV_pct: posPct, weight: +(weight.toFixed ? weight.toFixed(3) : weight), status };
+    }).sort((a, b) => b.n - a.n);
+
+    res.json({
+      signals: rows,
+      thresholds: {
+        SIGNAL_PROMOTE_MIN_N: 50,
+        SIGNAL_KILL_MIN_N: 50,
+        SIGNAL_KILL_CLV_PCT: -3.0,
+        SIGNAL_PROMOTE_WEIGHT: 0.5,
+      },
+      totalSignals: rows.length,
+      totalBetsAnalyzed: (bets || []).length,
+    });
+  } catch (e) {
+    console.error('signal-performance error:', e);
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
   }
 });
 
