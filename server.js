@@ -5088,7 +5088,18 @@ async function runPrematch(emit) {
   // ── Calibratie ───────────────────────────────────────────────────────────
   const calib = loadCalib();
   const cm = calib.markets;
-  emit({ log: `🧠 Calibratie: thuis×${cm.home.multiplier.toFixed(2)} uit×${cm.away.multiplier.toFixed(2)} draw×${cm.draw.multiplier.toFixed(2)} over×${cm.over.multiplier.toFixed(2)}` });
+  // v10.7.21: na rebuild-calib zijn keys sport-prefixed (football_home etc);
+  // oude unprefixed keys kunnen ontbreken. Lees met fallback + prefereer
+  // football_* als primair (meeste volume).
+  const mm = (key, fallback = 1.0) => {
+    const entry = cm[`football_${key}`] || cm[key];
+    return (entry && typeof entry.multiplier === 'number') ? entry.multiplier : fallback;
+  };
+  // Backfill missing unprefixed keys zodat downstream cm.home?.multiplier werkt
+  for (const k of ['home','away','draw','over','under','other']) {
+    if (!cm[k]) cm[k] = cm[`football_${k}`] || { n:0, w:0, profit:0, multiplier:1.0 };
+  }
+  emit({ log: `🧠 Calibratie: thuis×${mm('home').toFixed(2)} uit×${mm('away').toFixed(2)} draw×${mm('draw').toFixed(2)} over×${mm('over').toFixed(2)}` });
 
   const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
   const MIN_EDGE = 0.055;
