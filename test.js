@@ -2787,6 +2787,70 @@ test('projection (v10.8.6): timeline returnt {bankroll, unit, stake, profit}', (
   assert.strictEqual(zero[12].bankroll, 250);
 });
 
+test('safe ladder: unit-rule per niveau', () => {
+  const safeRulePct = (unit) => {
+    if (unit < 100) return 0.10;
+    if (unit < 300) return 0.05;
+    if (unit < 500) return 0.03;
+    return 0.02;
+  };
+  assert.strictEqual(safeRulePct(25), 0.10);
+  assert.strictEqual(safeRulePct(99), 0.10);
+  assert.strictEqual(safeRulePct(100), 0.05);
+  assert.strictEqual(safeRulePct(250), 0.05);
+  assert.strictEqual(safeRulePct(300), 0.03);
+  assert.strictEqual(safeRulePct(499), 0.03);
+  assert.strictEqual(safeRulePct(500), 0.02);
+  assert.strictEqual(safeRulePct(2000), 0.02);
+});
+
+test('bookie radar: thresholds NL realiteit', () => {
+  const radarLevel = (unit) =>
+    unit >= 1000 ? '🚨' :
+    unit >= 500  ? '⚠️' :
+    unit >= 200  ? '👁️' :
+    unit >= 150  ? '🟠' :
+    unit >= 50   ? '🟡' :
+    null;
+  assert.strictEqual(radarLevel(25), null, 'Onder €50: geen radar');
+  assert.strictEqual(radarLevel(75), '🟡');
+  assert.strictEqual(radarLevel(150), '🟠', '€150: vroege flag');
+  assert.strictEqual(radarLevel(200), '👁️');
+  assert.strictEqual(radarLevel(550), '⚠️');
+  assert.strictEqual(radarLevel(1500), '🚨');
+});
+
+test('regression-to-mean ROI: blend met 5% prior', () => {
+  const blend = (observed, n, prior = 0.05, fullN = 100) => {
+    const w = Math.min(n / fullN, 1);
+    return w * observed + (1 - w) * prior;
+  };
+  // 27 bets, 15.3% observed → ~7.8% effective
+  assert.ok(Math.abs(blend(0.153, 27) - 0.0779) < 0.001, `expected ~7.79%, got ${blend(0.153, 27)}`);
+  // 100 bets: pure observed (weight=1)
+  assert.strictEqual(blend(0.153, 100), 0.153);
+  // 200 bets: still pure (capped)
+  assert.strictEqual(blend(0.153, 200), 0.153);
+  // 0 bets: pure prior
+  assert.strictEqual(blend(0.30, 0), 0.05);
+  // 50 bets: 50% mix
+  assert.strictEqual(+blend(0.10, 50).toFixed(3), 0.075);
+});
+
+test('dismissed alerts expiry: oude entries verwijderd', () => {
+  const now = Date.now();
+  const cutoff = now - 30 * 86400000;
+  const raw = [
+    { key: 'old1', ts: now - 40 * 86400000 }, // expired
+    { key: 'fresh1', ts: now - 1 * 86400000 }, // fresh
+    'legacy_string', // oud format zonder ts → wordt nu-gestempeld
+  ];
+  const normalized = raw.map(x => typeof x === 'string' ? { key: x, ts: now } : x)
+    .filter(x => x && x.ts && x.ts > cutoff);
+  assert.strictEqual(normalized.length, 2, 'old1 verwijderd, fresh1 + legacy blijven');
+  assert.deepStrictEqual(normalized.map(x => x.key).sort(), ['fresh1', 'legacy_string']);
+});
+
 test('projection: €3k milestone detection', () => {
   // Met effROI 7.78% (regression-blended uit observed 15.3% × weight 0.27)
   const project = (bankroll, unitEur, betsPerMonth, avgUnits, effRoi) => {
