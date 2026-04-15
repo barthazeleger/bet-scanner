@@ -2,6 +2,18 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.11] - 2026-04-15
+
+### Fixed
+- **Modal edge matcht nu card edge bij ongewijzigde odds**: v10.8.10's damping via `origUnits / pureRec_bucket` gaf 0.5 waar werkelijke scanner-damping ~0.38 was (Luton: card 7% vs modal 9.2%). Nu gebruikt modal de **stored `modalPick.edge`** als authoritative anker en schaalt proportioneel bij odds-verandering: `dampedEdge_new = origEdge × (pureEdge_new / pureEdge_orig)`. Luton:
+  - 1.91 unchanged → modal toont 7% (= card)
+  - 1.86 → 5.8% (7 × 15.3/18.4)
+  - 1.80 → 4.4% (onder MIN_EDGE — adverse blijft gelden)
+  Fallback naar bucket-inversie als `modalPick.edge` niet aanwezig is (oudere picks).
+
+### Tests
+3 nieuwe tests voor origEdge-based damping + fallback. Totaal **254 tests, 0 failed** (was 251).
+
 ## [10.8.10] - 2026-04-15
 
 ### Fixed
