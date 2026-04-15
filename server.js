@@ -5314,6 +5314,15 @@ async function runPrematch(emit) {
   let teamStatsCalls = 0;
   await enrichWithApiSports(emit, activeSoccerKeys);
 
+  // v10.7.25: scan-telemetrie voor nieuwe signalen (zichtbaar in scan log)
+  const scanTelemetry = {
+    restDaysLookups: 0, restDaysCacheHits: 0, restDaysFails: 0,
+    restDaysTiredHome: 0, restDaysTiredAway: 0,
+    knockoutMatches: 0, knockout1stLeg: 0, knockout2ndLeg: 0,
+    aggregateFetched: 0, aggregateLeaderHome: 0, aggregateLeaderAway: 0, aggregateSquare: 0,
+    earlySeasonMatches: 0,
+  };
+
   // ── Calibratie ───────────────────────────────────────────────────────────
   const calib = loadCalib();
   const cm = calib.markets;
@@ -5365,12 +5374,18 @@ async function runPrematch(emit) {
         let restInfo = { signals: [], note: '', hmDays: null, awDays: null };
         try {
           const cfgFootball = { host: 'v3.football.api-sports.io' };
+          const hmCached = afCache.lastPlayed.football?.[hmId] !== undefined;
+          const awCached = afCache.lastPlayed.football?.[awId] !== undefined;
           const [hmLast, awLast] = await Promise.all([
             fetchLastPlayedDate('football', cfgFootball, hmId, kickoffMs),
             fetchLastPlayedDate('football', cfgFootball, awId, kickoffMs),
           ]);
+          if (hmCached) scanTelemetry.restDaysCacheHits++; else scanTelemetry.restDaysLookups++;
+          if (awCached) scanTelemetry.restDaysCacheHits++; else scanTelemetry.restDaysLookups++;
           restInfo = buildRestDaysInfo('football', kickoffMs, hmLast, awLast);
-        } catch (e) { console.warn('Rest-days (football) fetch failed:', e.message); }
+          if (restInfo.homeTired) scanTelemetry.restDaysTiredHome++;
+          if (restInfo.awayTired) scanTelemetry.restDaysTiredAway++;
+        } catch (e) { scanTelemetry.restDaysFails++; console.warn('Rest-days (football) fetch failed:', e.message); }
 
         // ── Knockout / leg-info (CL, EL, Conference, domestic cups) ───
         // v10.7.23: parse f.league.round. Voorbeelden: "Round of 16 - 1st Leg",
@@ -5393,11 +5408,22 @@ async function runPrematch(emit) {
 
         // v10.7.25: bij 2e leg → fetch 1e leg en bereken aggregaat
         let aggInfo = { signals: [], note: '', aggDiff: null };
-        if (knockoutInfo.leg === 2 && hmId && awId) {
-          try {
-            const agg = await fetchAggregateScore(hmId, awId, roundStr, f.league?.season);
-            if (agg) aggInfo = buildAggregateInfo(agg.aggHome, agg.aggAway);
-          } catch (e) { console.warn('Aggregate fetch failed:', e.message); }
+        if (knockoutInfo.isKnockout) scanTelemetry.knockoutMatches++;
+        if (knockoutInfo.leg === 1) scanTelemetry.knockout1stLeg++;
+        if (knockoutInfo.leg === 2) {
+          scanTelemetry.knockout2ndLeg++;
+          if (hmId && awId) {
+            try {
+              const agg = await fetchAggregateScore(hmId, awId, roundStr, f.league?.season);
+              if (agg) {
+                aggInfo = buildAggregateInfo(agg.aggHome, agg.aggAway);
+                scanTelemetry.aggregateFetched++;
+                if (aggInfo.aggDiff > 0) scanTelemetry.aggregateLeaderHome++;
+                else if (aggInfo.aggDiff < 0) scanTelemetry.aggregateLeaderAway++;
+                else scanTelemetry.aggregateSquare++;
+              }
+            } catch (e) { console.warn('Aggregate fetch failed:', e.message); }
+          }
         }
 
         // v10.7.25: new-season indicator — eerste 4 rondes hebben te weinig
@@ -5411,6 +5437,7 @@ async function runPrematch(emit) {
           note: earlySeason ? ` | 🌱 Vroeg in seizoen (ronde ${seasonRound})` : '',
           dampingFactor: earlySeason ? 0.6 : 1.0, // dempt form/position op 60%
         };
+        if (earlySeason) scanTelemetry.earlySeasonMatches++;
 
         // ── Odds ophalen van api-football.com ─────────────────────────
         await sleep(120);
@@ -6140,6 +6167,17 @@ async function runPrematch(emit) {
 
   const weakNote = weakCount > 0 ? ` (${weakCount} zwakke kandidaat${weakCount>1?'en':''} weggelaten)` : '';
   emit({ log: `🎯 ${finalPicks.length} voetbal pick${finalPicks.length>1?'s':''}${weakNote}` });
+
+  // v10.7.25: signal coverage telemetrie (zichtbaar in scan log + observability)
+  const tel = scanTelemetry;
+  const telLines = [
+    `📊 Signal coverage:`,
+    `  🛌 rest-days: ${tel.restDaysLookups} API calls, ${tel.restDaysCacheHits} cache hits, ${tel.restDaysFails} fails · tired flags: thuis=${tel.restDaysTiredHome} uit=${tel.restDaysTiredAway}`,
+    `  🥊 knockout: ${tel.knockoutMatches} (1e leg ${tel.knockout1stLeg}, 2e leg ${tel.knockout2ndLeg})`,
+    `  🏆 aggregaat: ${tel.aggregateFetched} fetched uit ${tel.knockout2ndLeg} 2e legs · leider thuis=${tel.aggregateLeaderHome} uit=${tel.aggregateLeaderAway} gelijk=${tel.aggregateSquare}`,
+    `  🌱 new-season: ${tel.earlySeasonMatches} wedstrijden in ronde 1-4`,
+  ];
+  emit({ log: telLines.join('\n') });
 
   lastPrematchPicks = finalPicks;
   // Telegram wordt gestuurd NA multi-sport merge in POST /api/prematch
