@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.12';
+const APP_VERSION    = '10.8.14';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -7149,6 +7149,127 @@ app.get('/api/admin/v2/data-quality', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
+// GET /api/admin/odds-drift — wanneer zijn odds gemiddeld het beste?
+// v10.8.14: aggregeert odds_snapshots per (sport, market_type, uren-voor-kickoff)
+// en toont de gemiddelde drift t.o.v. de closing line. Negatieve drift = odds
+// waren vroeger HOGER dan nu → vroege inzet was waardevoller.
+// Positieve drift = odds waren lager, later inzetten was beter.
+app.get('/api/admin/odds-drift', requireAdmin, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(30, parseInt(req.query.days) || 14));
+    const sinceIso = new Date(Date.now() - days * 86400 * 1000).toISOString();
+
+    // Stap 1: fixtures die al gestart zijn in de window (we willen close-odds)
+    const nowIso = new Date().toISOString();
+    const { data: fixtures } = await supabase.from('fixtures')
+      .select('id, sport, start_time')
+      .gte('start_time', sinceIso)
+      .lt('start_time', nowIso)
+      .limit(800);
+    if (!fixtures?.length) return res.json({ days, totalFixtures: 0, buckets: [] });
+    const fixtureMap = new Map(fixtures.map(f => [f.id, f]));
+    const fixtureIds = fixtures.map(f => f.id);
+
+    // Stap 2: snapshots voor deze fixtures, paginated om Supabase 1000-row cap te ontwijken
+    const snapshots = [];
+    const BATCH = 200;
+    for (let i = 0; i < fixtureIds.length; i += BATCH) {
+      const batch = fixtureIds.slice(i, i + BATCH);
+      const { data: snaps } = await supabase.from('odds_snapshots')
+        .select('fixture_id, captured_at, bookmaker, market_type, selection_key, line, odds')
+        .in('fixture_id', batch)
+        .limit(5000);
+      if (snaps?.length) snapshots.push(...snaps);
+      if (snapshots.length >= 20000) break; // hard cap
+    }
+    if (!snapshots.length) return res.json({ days, totalFixtures: fixtures.length, totalSnapshots: 0, buckets: [] });
+
+    // Stap 3: groeperen per (fixture, bookmaker, market_type, selection_key, line)
+    // Voor elke groep: sorteer op captured_at, laatste = close line.
+    const groups = new Map();
+    for (const s of snapshots) {
+      const key = `${s.fixture_id}|${s.bookmaker}|${s.market_type}|${s.selection_key}|${s.line || ''}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    }
+
+    // Stap 4: per groep drift per snapshot berekenen t.o.v. close
+    // Bucket: 0-2h / 2-6h / 6-12h / 12-24h / 24-48h / 48h+
+    const bucketize = (hrs) => {
+      if (hrs < 2) return '0-2h';
+      if (hrs < 6) return '2-6h';
+      if (hrs < 12) return '6-12h';
+      if (hrs < 24) return '12-24h';
+      if (hrs < 48) return '24-48h';
+      return '48h+';
+    };
+    const BUCKETS = ['0-2h', '2-6h', '6-12h', '12-24h', '24-48h', '48h+'];
+
+    // Aggregate: key = sport|market_type|bucket → { sumDrift, count, sumAbs }
+    const agg = new Map();
+
+    for (const [, snaps] of groups) {
+      if (snaps.length < 2) continue; // nodig close + vroege snapshot
+      snaps.sort((a, b) => new Date(a.captured_at) - new Date(b.captured_at));
+      const close = snaps[snaps.length - 1];
+      const closeOdds = parseFloat(close.odds);
+      if (!(closeOdds > 1)) continue;
+      const fix = fixtureMap.get(close.fixture_id);
+      if (!fix?.start_time) continue;
+      const sport = normalizeSport(fix.sport);
+      const startMs = new Date(fix.start_time).getTime();
+
+      for (let i = 0; i < snaps.length - 1; i++) {
+        const snap = snaps[i];
+        const o = parseFloat(snap.odds);
+        if (!(o > 1)) continue;
+        const hrsBeforeKick = (startMs - new Date(snap.captured_at).getTime()) / 3600000;
+        if (hrsBeforeKick <= 0) continue; // na kickoff — skip
+        const bucket = bucketize(hrsBeforeKick);
+        const drift = ((closeOdds - o) / o) * 100; // positief = odds zijn later gestegen
+        const aggKey = `${sport}|${snap.market_type}|${bucket}`;
+        if (!agg.has(aggKey)) agg.set(aggKey, { sport, market_type: snap.market_type, bucket, sumDrift: 0, sumAbs: 0, count: 0 });
+        const a = agg.get(aggKey);
+        a.sumDrift += drift;
+        a.sumAbs += Math.abs(drift);
+        a.count++;
+      }
+    }
+
+    const buckets = Array.from(agg.values())
+      .map(a => ({
+        sport: a.sport,
+        market_type: a.market_type,
+        bucket: a.bucket,
+        n: a.count,
+        avg_drift_pct: +(a.sumDrift / a.count).toFixed(3),
+        avg_abs_drift_pct: +(a.sumAbs / a.count).toFixed(3),
+      }))
+      .filter(b => b.n >= 5) // min samplegrootte
+      .sort((a, b) => a.sport.localeCompare(b.sport) || a.market_type.localeCompare(b.market_type) || BUCKETS.indexOf(a.bucket) - BUCKETS.indexOf(b.bucket));
+
+    // Insight: per sport+markt, welke bucket geeft gemiddeld de beste entry?
+    // Beste = hoogste positieve avg_drift (odds zijn sindsdien gestegen) OF grootste negatieve (toen was prijs hoger).
+    // Voor inzetter: NEGATIEF drift is beter (odds waren vroeger hoger dan close).
+    const bestEntry = {};
+    for (const b of buckets) {
+      const k = `${b.sport}|${b.market_type}`;
+      if (!bestEntry[k] || b.avg_drift_pct < bestEntry[k].avg_drift_pct) {
+        bestEntry[k] = { bucket: b.bucket, avg_drift_pct: b.avg_drift_pct, n: b.n };
+      }
+    }
+
+    res.json({
+      days, totalFixtures: fixtures.length, totalSnapshots: snapshots.length,
+      buckets, bestEntry,
+      note: 'avg_drift_pct: % verandering naar close. Negatief = odds waren vroeger HOGER (vroege inzet beter). Positief = later inzetten was beter.',
+    });
+  } catch (e) {
+    console.error('odds-drift fout:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/admin/v2/per-bookie-stats — ROI/CLV per bookmaker
 // Reviewer: 'executable edge meten op specifieke bookies'
 app.get('/api/admin/v2/per-bookie-stats', requireAdmin, async (req, res) => {
@@ -7308,6 +7429,123 @@ app.delete('/api/push/subscribe', async (req, res) => {
 });
 
 // Prematch scan · SSE streaming (inclusief live check op moment van draaien)
+// ── v10.8.13: shared multi-sport scan pipeline ──────────────────────────────
+// Extractie uit de /api/prematch route zodat zowel de handmatige trigger
+// (SSE streaming) als de cron-scheduler exact dezelfde pipeline draaien,
+// INCLUSIEF de multi-sport scans en de tg() notificatie. Voorheen deed de
+// cron alleen runPrematch() (football, geen notificatie) — verklaarde de
+// missende 14:00 push.
+async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, triggerLabel = 'manual' } = {}) {
+  try {
+    setPreferredBookies(prefs);
+    if (prefs?.length) emit({ log: `🏦 Edge-evaluatie op jouw bookies: ${prefs.join(', ')}` });
+
+    const footballPicks = await runPrematch(emit);
+
+    emit({ log: '🏀🏒⚾🏈🤾 Multi-sport scans starten...' });
+    const [nbaPicks, nhlPicks, mlbPicks, nflPicks, handballPicks] = await Promise.all([
+      runBasketball(emit).catch(err => { emit({ log: `⚠️ Basketball scan mislukt: ${err.message}` }); return []; }),
+      runHockey(emit).catch(err => { emit({ log: `⚠️ Hockey scan mislukt: ${err.message}` }); return []; }),
+      runBaseball(emit).catch(err => { emit({ log: `⚠️ Baseball scan mislukt: ${err.message}` }); return []; }),
+      runFootballUS(emit).catch(err => { emit({ log: `⚠️ NFL scan mislukt: ${err.message}` }); return []; }),
+      runHandball(emit).catch(err => { emit({ log: `⚠️ Handball scan mislukt: ${err.message}` }); return []; }),
+    ]);
+
+    let allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks, ...mlbPicks, ...nflPicks, ...handballPicks];
+
+    // Kill-switch enforcement
+    const beforeKill = allPicks.length;
+    const killedPicks = allPicks.filter(p => isMarketKilled(p.sport, p.label));
+    allPicks = allPicks.filter(p => !isMarketKilled(p.sport, p.label));
+    const killedCount = beforeKill - allPicks.length;
+    if (killedCount > 0) {
+      emit({ log: `🛑 Kill-switch: ${killedCount} pick(s) geblokkeerd op markt-CLV regels` });
+      try {
+        const sample = killedPicks.slice(0, 3).map(p => `${p.match} (${p.label})`).join('; ');
+        await supabase.from('notifications').insert({
+          type: 'kill_switch',
+          title: `🛑 ${killedCount} pick(s) geblokkeerd door kill-switch`,
+          body: `${killedCount} potentiële picks vielen weg omdat de markt structureel negatieve CLV heeft.\nVoorbeelden: ${sample}${killedPicks.length > 3 ? ` (+${killedPicks.length - 3} meer)` : ''}`,
+          read: false, user_id: null,
+        });
+      } catch { /* swallow */ }
+    }
+
+    allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
+
+    // Diversification
+    const MAX_PICKS = OPERATOR.panic_mode ? Math.min(2, OPERATOR.max_picks_per_day) : OPERATOR.max_picks_per_day;
+    const MAX_PER_MATCH = 1;
+    const MAX_PER_SPORT = OPERATOR.panic_mode ? 1 : 2;
+    if (OPERATOR.panic_mode) {
+      const beforePanic = allPicks.length;
+      allPicks = allPicks.filter(p => {
+        const key = `${normalizeSport(p.sport)}_${detectMarket(p.label)}`;
+        return (_marketSampleCache.data[key] || 0) >= 100;
+      });
+      const panicSkipped = beforePanic - allPicks.length;
+      if (panicSkipped) emit({ log: `🚨 Panic mode: ${panicSkipped} pick(s) geskipt (alleen PROVEN markten)` });
+    }
+    const seenMatches = new Map();
+    const seenSports = new Map();
+    const topPicks = [];
+    const skippedReasons = { same_match: 0, same_sport_cap: 0 };
+    for (const p of allPicks) {
+      if (topPicks.length >= MAX_PICKS) break;
+      const matchKey = (p.match || '').toLowerCase().trim();
+      const sportKey = p.sport || 'unknown';
+      if (matchKey && (seenMatches.get(matchKey) || 0) >= MAX_PER_MATCH) { skippedReasons.same_match++; continue; }
+      if ((seenSports.get(sportKey) || 0) >= MAX_PER_SPORT) { skippedReasons.same_sport_cap++; continue; }
+      topPicks.push(p);
+      if (matchKey) seenMatches.set(matchKey, (seenMatches.get(matchKey) || 0) + 1);
+      seenSports.set(sportKey, (seenSports.get(sportKey) || 0) + 1);
+    }
+    const droppedCount = allPicks.length - topPicks.length;
+
+    emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey + ${mlbPicks.length} baseball + ${nflPicks.length} NFL + ${handballPicks.length} handball = ${beforeKill} kandidaten` });
+    if (skippedReasons.same_match) emit({ log: `🎯 ${skippedReasons.same_match} pick(s) geskipt: zelfde wedstrijd al in selectie (correlatie)` });
+    if (skippedReasons.same_sport_cap) emit({ log: `🎯 ${skippedReasons.same_sport_cap} pick(s) geskipt: max ${MAX_PER_SPORT} per sport bereikt` });
+    if (droppedCount > 0) emit({ log: `🎯 ${topPicks.length}/${MAX_PICKS} picks geselecteerd (${droppedCount} weggelaten door diversification + ranking)` });
+
+    if (topPicks.length === 0) {
+      emit({ log: `✋ Geen picks vandaag — ons systeem zag te weinig value. Dat is goed: niet elke dag is een edge-dag.` });
+    } else if (topPicks.length <= 2) {
+      emit({ log: `✋ ${topPicks.length} pick(s) — kwaliteit boven volume. Strenge filters hebben hun werk gedaan.` });
+    }
+
+    const topSet = new Set(topPicks);
+    for (const p of allPicks) p.selected = topSet.has(p);
+    saveScanEntry(allPicks, 'prematch', beforeKill);
+
+    // Telegram + push notificatie
+    if (topPicks.length > 0) {
+      const sportEmoji = { football: '⚽', basketball: '🏀', hockey: '🏒', baseball: '⚾', 'american-football': '🏈', handball: '🤾' };
+      const todayLabel = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: 'long', year: 'numeric' });
+      let tgMsg = `🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n📊 ${allPicks.length} kandidaten uit 6 sporten\n✅ TOP ${topPicks.length} PICKS\n\n`;
+      topPicks.forEach((p, i) => {
+        const icon = sportEmoji[p.sport] || '🏆';
+        const star = i === 0 ? '⭐' : i === 1 ? '🔵' : '•';
+        tgMsg += `${star} ${icon} ${p.match}\n${p.league}\n📌 ${p.label}\n💰 Odds: ${p.odd} | ${p.units}\n📈 Kans: ${p.prob}%\n\n`;
+      });
+      tg(tgMsg).catch(() => {});
+    } else {
+      const todayLabel = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: 'long', year: 'numeric' });
+      tg(`🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n\n🚫 Geen picks met voldoende edge gevonden.`).catch(() => {});
+    }
+
+    const safePicks = topPicks.map(p => {
+      const hk = p.kelly || 0;
+      const score = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
+      const pick = { match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, edge: p.edge, score, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie, sport: p.sport || 'football' };
+      if (isAdmin) { pick.reason = p.reason; pick.kelly = p.kelly; pick.ep = p.ep; pick.strength = p.strength; pick.expectedEur = p.expectedEur; pick.signals = p.signals || []; }
+      return pick;
+    });
+    return { safePicks, topPicks, allPicks, beforeKill };
+  } finally {
+    setPreferredBookies(null);
+  }
+}
+
 app.post('/api/prematch', (req, res) => {
   if (!OPERATOR.master_scan_enabled) return res.status(503).json({ error: 'Scans uitgeschakeld via operator failsafe' });
   if (scanRunning) return res.status(429).json({ error: 'Scan al bezig · wacht tot de huidige scan klaar is' });
@@ -7317,12 +7555,10 @@ app.post('/api/prematch', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
-  // Non-admin: alleen voortgang tonen, geen model details
   let stepCount = 0;
   const emit = (data) => {
     if (!isAdmin && data.log) {
       stepCount++;
-      // Stuur alleen voortgangspercentage
       const pct = Math.min(95, Math.round(stepCount * 1.5));
       res.write(`data: ${JSON.stringify({ progress: pct })}\n\n`);
       return;
@@ -7330,143 +7566,27 @@ app.post('/api/prematch', (req, res) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  // Zet preferred bookies VOOR de scan, zodat edge-evaluatie alleen op jouw bookies gebeurt.
-  // bestFromArr filtert op deze lijst. Consensus/fair-prob blijft uit ALLE bookies (markt-truth).
   (async () => {
+    let prefs = null;
     try {
       const users = await loadUsers().catch(() => []);
       const me = users.find(u => u.id === req.user?.id) || users.find(u => u.role === 'admin');
-      const prefs = me?.settings?.preferredBookies;
-      setPreferredBookies(prefs);
-      if (prefs?.length) emit({ log: `🏦 Edge-evaluatie op jouw bookies: ${prefs.join(', ')}` });
+      prefs = me?.settings?.preferredBookies || null;
     } catch (e) {
       console.warn('Scan: user prefs load failed, scan loopt zonder filter:', e.message);
     }
-    return runPrematch(emit);
-  })()
-    .then(async footballPicks => {
-      // Also run basketball + hockey + baseball + NFL + handball (errors don't break the scan)
-      emit({ log: '🏀🏒⚾🏈🤾 Multi-sport scans starten...' });
-      const [nbaPicks, nhlPicks, mlbPicks, nflPicks, handballPicks] = await Promise.all([
-        runBasketball(emit).catch(err => { emit({ log: `⚠️ Basketball scan mislukt: ${err.message}` }); return []; }),
-        runHockey(emit).catch(err => { emit({ log: `⚠️ Hockey scan mislukt: ${err.message}` }); return []; }),
-        runBaseball(emit).catch(err => { emit({ log: `⚠️ Baseball scan mislukt: ${err.message}` }); return []; }),
-        runFootballUS(emit).catch(err => { emit({ log: `⚠️ NFL scan mislukt: ${err.message}` }); return []; }),
-        runHandball(emit).catch(err => { emit({ log: `⚠️ Handball scan mislukt: ${err.message}` }); return []; }),
-      ]);
-
-      let allPicks = [...footballPicks, ...nbaPicks, ...nhlPicks, ...mlbPicks, ...nflPicks, ...handballPicks];
-
-      // ── KILL-SWITCH ENFORCEMENT (v10.0.1) ─────────────────────────────
-      // Filter picks die in een geblokkeerde markt vallen vóór ranking.
-      const beforeKill = allPicks.length;
-      const killedPicks = allPicks.filter(p => isMarketKilled(p.sport, p.label));
-      allPicks = allPicks.filter(p => !isMarketKilled(p.sport, p.label));
-      const killedCount = beforeKill - allPicks.length;
-      if (killedCount > 0) {
-        emit({ log: `🛑 Kill-switch: ${killedCount} pick(s) geblokkeerd op markt-CLV regels` });
-        // Inbox notification met details
-        try {
-          const sample = killedPicks.slice(0, 3).map(p => `${p.match} (${p.label})`).join('; ');
-          await supabase.from('notifications').insert({
-            type: 'kill_switch',
-            title: `🛑 ${killedCount} pick(s) geblokkeerd door kill-switch`,
-            body: `${killedCount} potentiële picks vielen weg omdat de markt structureel negatieve CLV heeft.\nVoorbeelden: ${sample}${killedPicks.length > 3 ? ` (+${killedPicks.length - 3} meer)` : ''}`,
-            read: false, user_id: null,
-          });
-        } catch { /* swallow */ }
-      }
-
-      // Sorteer op expectedEur (hoogste eerst)
-      allPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
-
-      // ── DIVERSIFICATION (v10.0.1, panic-aware v10.2.1) ────────────────
-      // Reviewer: max 1 pick per match, max 2 per sport. Voorkomt over-exposure
-      // op één wedstrijd (correlatierisico) en concentratie in 1 sport.
-      // Panic mode: max 2 picks total + alleen PROVEN markten (≥100 settled).
-      const MAX_PICKS = OPERATOR.panic_mode ? Math.min(2, OPERATOR.max_picks_per_day) : OPERATOR.max_picks_per_day;
-      const MAX_PER_MATCH = 1;        // anti-correlatie
-      const MAX_PER_SPORT = OPERATOR.panic_mode ? 1 : 2; // panic = nog strenger
-      // Panic mode: filter alle non-PROVEN markten
-      if (OPERATOR.panic_mode) {
-        const beforePanic = allPicks.length;
-        allPicks = allPicks.filter(p => {
-          const key = `${normalizeSport(p.sport)}_${detectMarket(p.label)}`;
-          return (_marketSampleCache.data[key] || 0) >= 100;
-        });
-        const panicSkipped = beforePanic - allPicks.length;
-        if (panicSkipped) emit({ log: `🚨 Panic mode: ${panicSkipped} pick(s) geskipt (alleen PROVEN markten)` });
-      }
-      const seenMatches = new Map();  // match key → count
-      const seenSports = new Map();   // sport → count
-      const topPicks = [];
-      const skippedReasons = { same_match: 0, same_sport_cap: 0 };
-      for (const p of allPicks) {
-        if (topPicks.length >= MAX_PICKS) break;
-        const matchKey = (p.match || '').toLowerCase().trim();
-        const sportKey = p.sport || 'unknown';
-        if (matchKey && (seenMatches.get(matchKey) || 0) >= MAX_PER_MATCH) { skippedReasons.same_match++; continue; }
-        if ((seenSports.get(sportKey) || 0) >= MAX_PER_SPORT) { skippedReasons.same_sport_cap++; continue; }
-        topPicks.push(p);
-        if (matchKey) seenMatches.set(matchKey, (seenMatches.get(matchKey) || 0) + 1);
-        seenSports.set(sportKey, (seenSports.get(sportKey) || 0) + 1);
-      }
-      const droppedCount = allPicks.length - topPicks.length;
-
-      emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey + ${mlbPicks.length} baseball + ${nflPicks.length} NFL + ${handballPicks.length} handball = ${beforeKill} kandidaten` });
-      if (skippedReasons.same_match) emit({ log: `🎯 ${skippedReasons.same_match} pick(s) geskipt: zelfde wedstrijd al in selectie (correlatie)` });
-      if (skippedReasons.same_sport_cap) emit({ log: `🎯 ${skippedReasons.same_sport_cap} pick(s) geskipt: max ${MAX_PER_SPORT} per sport bereikt` });
-      if (droppedCount > 0) emit({ log: `🎯 ${topPicks.length}/${MAX_PICKS} picks geselecteerd (${droppedCount} weggelaten door diversification + ranking)` });
-
-      // Bevestigend signaal als selectie kleiner is dan max — geen alarmistische "geen edges":
-      if (topPicks.length === 0) {
-        emit({ log: `✋ Geen picks vandaag — ons systeem zag te weinig value. Dat is goed: niet elke dag is een edge-dag.` });
-      } else if (topPicks.length <= 2) {
-        emit({ log: `✋ ${topPicks.length} pick(s) — kwaliteit boven volume. Strenge filters hebben hun werk gedaan.` });
-      }
-
-      // Tag elke pick met selected=true/false zodat POTD/UI alleen uit selectie kiezen
-      // maar audit/training het volledige lijstje heeft.
-      const topSet = new Set(topPicks);
-      for (const p of allPicks) p.selected = topSet.has(p);
-      // Save ALL gerankede picks (incl. niet-geselecteerde) naar scan history voor audit
-      saveScanEntry(allPicks, 'prematch', beforeKill);
-
-      // 1 gecombineerd Telegram bericht met alle sport picks
-      if (topPicks.length > 0) {
-        const sportEmoji = { football: '⚽', basketball: '🏀', hockey: '🏒', baseball: '⚾', 'american-football': '🏈', handball: '🤾' };
-        const todayLabel = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: 'long', year: 'numeric' });
-        let tgMsg = `🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n📊 ${allPicks.length} kandidaten uit 6 sporten\n✅ TOP ${topPicks.length} PICKS\n\n`;
-        topPicks.forEach((p, i) => {
-          const icon = sportEmoji[p.sport] || '🏆';
-          const star = i === 0 ? '⭐' : i === 1 ? '🔵' : '•';
-          tgMsg += `${star} ${icon} ${p.match}\n${p.league}\n📌 ${p.label}\n💰 Odds: ${p.odd} | ${p.units}\n📈 Kans: ${p.prob}%\n\n`;
-        });
-        tg(tgMsg).catch(() => {});
-      } else {
-        const todayLabel = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: 'long', year: 'numeric' });
-        tg(`🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n\n🚫 Geen picks met voldoende edge gevonden.`).catch(() => {});
-      }
-
-      // Non-admin: filter gevoelige model data uit picks
-      const safePicks = topPicks.map(p => {
-        // Score server-side berekenen (zodat kelly niet naar de client hoeft)
-        const hk = p.kelly || 0;
-        const score = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
-        const pick = { match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, edge: p.edge, score, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie, sport: p.sport || 'football' };
-        if (isAdmin) { pick.reason = p.reason; pick.kelly = p.kelly; pick.ep = p.ep; pick.strength = p.strength; pick.expectedEur = p.expectedEur; pick.signals = p.signals || []; }
-        return pick;
-      });
-      emit({ done: true, picks: safePicks }); res.end(); scanRunning = false;
-      setPreferredBookies(null); // reset scan-wide filter
-    })
-    .catch(err  => {
-      const detail = (err && (err.message || err.toString())) || 'unknown';
-      console.error('🔴 runPrematch crashed:', detail);
-      if (err?.stack) console.error(err.stack);
-      emit({ error: 'Scan mislukt', detail });
-      res.end(); scanRunning = false; setPreferredBookies(null);
-    });
+    const { safePicks } = await runFullScan({ emit, prefs, isAdmin, triggerLabel: 'manual' });
+    emit({ done: true, picks: safePicks });
+    res.end();
+    scanRunning = false;
+  })().catch(err => {
+    const detail = (err && (err.message || err.toString())) || 'unknown';
+    console.error('🔴 runFullScan crashed:', detail);
+    if (err?.stack) console.error(err.stack);
+    emit({ error: 'Scan mislukt', detail });
+    res.end();
+    scanRunning = false;
+  });
 });
 
 // Live scan · SSE streaming
@@ -10711,14 +10831,37 @@ function scheduleScanAtHour(timeInput) {
   console.log(`📡 Scan gepland om ${hm} (over ${Math.round(delay/60000)} min)`);
   return setTimeout(async () => {
     console.log(`📡 Scan om ${label} gestart...`);
+    // v10.8.13: cron-scan draait nu de VOLLE pipeline (multi-sport +
+    // notificatie) ipv alleen football via runPrematch. Verklaart waarom
+    // je voorheen geen push/Telegram op scheduled scans kreeg.
     try {
-      await runPrematch(() => {});
-      console.log(`📡 Scan om ${label} klaar`);
+      if (scanRunning) {
+        console.log(`⚠️ Scan ${label}: al een scan bezig, skip cron-tik`);
+      } else {
+        scanRunning = true;
+        try {
+          // Laad admin prefs zodat cron dezelfde bookie-filter gebruikt als UI.
+          let prefs = null;
+          try {
+            const users = await loadUsers().catch(() => []);
+            const admin = users.find(u => u.role === 'admin');
+            prefs = admin?.settings?.preferredBookies || null;
+          } catch {}
+          await runFullScan({
+            emit: (d) => { if (d.log) console.log(`[${label}] ${d.log}`); },
+            prefs,
+            isAdmin: true,
+            triggerLabel: `cron-${label}`,
+          });
+          console.log(`📡 Scan om ${label} klaar`);
+        } finally {
+          scanRunning = false;
+        }
+      }
     } catch (e) {
       console.error(`Scan om ${label} fout:`, e.message);
       await tg(`⚠️ Scan om ${label} mislukt: ${e.message}`).catch(() => {});
     }
-    // Herplan dezelfde scan voor morgen
     scheduleScanAtHour(timeInput);
   }, delay);
 }
