@@ -399,6 +399,12 @@
       <div id="variance-analysis" style="padding:8px 0"></div>
     </div>
 
+    <!-- v10.8.0: Vooruitzichten (projections) kaart -->
+    <div class="chart-card" style="grid-column:span 2">
+      <div class="chart-title">🔮 Vooruitzichten <span style="font-size:11px;color:var(--muted);font-weight:400">— bankroll projectie o.b.v. huidige ROI</span></div>
+      <div id="projections-analysis" style="padding:8px 0"><div style="color:var(--muted);font-size:13px">Laden...</div></div>
+    </div>
+
     <!-- Timing Analyse (admin only) -->
     <div class="chart-card admin-only" style="grid-column:span 2;display:none">
       <div class="chart-title">&#9200; Timing analyse</div>
@@ -2101,6 +2107,99 @@ function clearForm() {
   document.getElementById('f-datum').value = pad(now.getDate())+'-'+pad(now.getMonth()+1)+'-'+now.getFullYear();
 }
 
+// v10.8.0: Vooruitzichten (projections) — monthly compounded bankroll
+// projectie met 3 scenarios (pessimistisch/verwacht/optimistisch).
+function renderProjections(data) {
+  const el = document.getElementById('projections-analysis');
+  if (!el) return;
+  const s = data?.stats || {};
+  const bets = data?.bets || [];
+  const settled = bets.filter(b => b.uitkomst === 'W' || b.uitkomst === 'L');
+  if (settled.length < 5) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Vooruitzichten verschijnen na 5+ settled bets (nu: ' + settled.length + ').</div>';
+    return;
+  }
+
+  const bankroll = s.bankroll || 500;
+  const roi = s.roi || 0; // fraction
+  const unitEur = userSettings?.unitEur || 25;
+  // Estimate bets/week from last 30 days
+  const dayMs = 86400000;
+  const cutoff = Date.now() - 30 * dayMs;
+  const recentSettled = settled.filter(b => {
+    const m = (b.datum || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (!m) return false;
+    const ts = Date.parse(`${m[3]}-${m[2]}-${m[1]}`);
+    return isFinite(ts) && ts >= cutoff;
+  });
+  const betsPerMonth = Math.max(4, Math.round((recentSettled.length / 30) * 30)) || settled.length;
+  const avgStake = settled.reduce((sum, b) => sum + (b.inzet || 0), 0) / settled.length;
+  const stakePct = bankroll > 0 ? avgStake / bankroll : 0.02;
+
+  // Monthly expected return per scenario: ROI × bets/month × stake-as-%-of-bankroll
+  const scenarios = [
+    { label: '🐻 Pessimistisch', factor: 0.5, col: '#f87171' },
+    { label: '🎯 Verwacht', factor: 1.0, col: '#34d399' },
+    { label: '🚀 Optimistisch', factor: 1.5, col: '#fbbf24' },
+  ];
+  const horizons = [1, 3, 6, 12]; // months
+
+  const project = (monthlyRate) => {
+    const out = [bankroll];
+    for (let m = 1; m <= 12; m++) {
+      const prev = out[m - 1];
+      const next = prev * (1 + monthlyRate);
+      out.push(+next.toFixed(2));
+    }
+    return out;
+  };
+
+  const fmt = (n) => '€' + Math.round(n).toLocaleString('nl-NL');
+
+  // Table per horizon
+  let tableHtml = `<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">
+    Aannames: ${betsPerMonth} bets/maand · gemiddelde inzet ${fmt(avgStake)} · huidige ROI ${(roi*100).toFixed(1)}%
+  </div>`;
+  tableHtml += '<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">';
+  tableHtml += `<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px 0">Scenario</th>${horizons.map(h => `<th style="text-align:right;padding:8px 6px">${h}m</th>`).join('')}</tr></thead><tbody>`;
+  for (const sc of scenarios) {
+    const effRoi = roi * sc.factor;
+    const monthlyRate = betsPerMonth * stakePct * effRoi;
+    const proj = project(monthlyRate);
+    tableHtml += `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 0;font-weight:600;color:${sc.col}">${sc.label}</td>
+      ${horizons.map(h => {
+        const val = proj[h];
+        const delta = val - bankroll;
+        const deltaCol = delta >= 0 ? '#34d399' : '#f87171';
+        return `<td style="text-align:right;padding:8px 6px">
+          <div style="font-weight:700">${fmt(val)}</div>
+          <div style="font-size:10px;color:${deltaCol}">${delta >= 0 ? '+' : ''}${fmt(delta)}</div>
+        </td>`;
+      }).join('')}
+    </tr>`;
+  }
+  tableHtml += '</tbody></table></div>';
+
+  // Unit-size recommendation na 6 maanden verwacht scenario
+  const expected6m = project(betsPerMonth * stakePct * roi)[6];
+  const recommendedUnit = Math.round(expected6m * 0.04); // 4% per unit (50 units bankroll)
+  const unitAdvice = recommendedUnit > unitEur * 1.2
+    ? `<div style="margin-top:12px;padding:10px 14px;background:rgba(52,211,153,0.1);border-left:3px solid #34d399;border-radius:6px;font-size:12px;line-height:1.6">
+        <strong>💰 Unit-size projectie:</strong> bij verwacht scenario over 6 maanden zit je op ~${fmt(expected6m)}.
+        Aanbevolen unit-size: <strong>€${recommendedUnit}</strong> (nu €${unitEur}).
+      </div>`
+    : '';
+
+  // Kanttekening
+  const caveat = `<div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.5">
+    ⚠️ Projecties zijn extrapolaties o.b.v. recente data. Variance is hoog bij kleine sample-sizes.
+    Bij negatieve ROI gaat de lijn andere kant op — deze tool assumeert je huidige rate als basis.
+  </div>`;
+
+  el.innerHTML = tableHtml + unitAdvice + caveat;
+}
+
 async function loadCorrelations() {
   const area = document.getElementById('correlations-area');
   if (!area) return;
@@ -2388,6 +2487,9 @@ async function redrawCharts(data) {
   } else {
     varEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Variance tracker verschijnt na je eerste settled bets.</div>';
   }
+
+  // v10.8.0: Projections / Vooruitzichten
+  renderProjections(data);
 
   // Signal Attribution verhuisd naar Model-tab — zie loadSignalAnalysis()
 
@@ -3266,7 +3368,11 @@ async function logModalBet() {
       wedstrijd: match,
       markt: document.getElementById('m-markt').value,
       odds, units, tip: document.getElementById('m-bookie').value || 'Bet365', uitkomst: 'Open', notities: '',
-      score: modalPick ? (() => { const hk = modalPick.kelly||0; return Math.min(10, Math.max(5, Math.round((hk-0.015)/0.135*5)+5)); })() : null
+      score: modalPick ? (() => { const hk = modalPick.kelly||0; return Math.min(10, Math.max(5, Math.round((hk-0.015)/0.135*5)+5)); })() : null,
+      // v10.7.26: stuur signals mee zodat Signal Performance dashboard data krijgt
+      signals: modalPick?.signals || [],
+      reason: modalPick?.reason || null,
+      fixtureId: modalPick?.fixtureId || null,
     })
   }).then(r => r?.json());
   if (!d) return;
@@ -4657,6 +4763,9 @@ loadScanHistory();
 // ── CHANGELOG (auto-sync uit CHANGELOG.md) ────────────────────────────────────
 // v10.7.21: vervangt hardcoded lijst. /api/changelog parseert CHANGELOG.md
 // server-side. Fallback naar legacy hardcoded lijst bij load-failure.
+// v10.7.26: changelog collapse — toon 3 recentste expanded, rest verborgen
+// achter "Toon X oudere versies" knop. Info-pagina werd te lang.
+let _changelogExpanded = false;
 async function loadChangelog() {
   const el = document.getElementById('changelog-list');
   const legacy = document.getElementById('changelog-legacy');
@@ -4666,14 +4775,17 @@ async function loadChangelog() {
     if (!r || !r.ok) throw new Error('fetch failed');
     const d = await r.json();
     if (!d.entries?.length) throw new Error('empty');
-    el.innerHTML = d.entries.map((e, idx) => {
-      const isLatest = idx === 0;
+    const SHOW_LATEST = 3;
+    const entries = d.entries;
+    const visible = _changelogExpanded ? entries : entries.slice(0, SHOW_LATEST);
+    const hiddenCount = entries.length - visible.length;
+    const renderEntry = (e, idx) => {
+      const isLatest = idx === 0 && !_changelogExpanded;
       const versionBg = isLatest ? 'var(--accent)' : 'var(--surface2)';
       const versionColor = isLatest ? '#fff' : 'var(--muted)';
       const border = isLatest ? '' : ';border:1px solid var(--border)';
       const dateStr = new Date(e.date).toLocaleDateString('nl-NL', { month: 'short', year: 'numeric' });
       const sectionsHtml = e.sections.map(sec => {
-        // Markdown → HTML lite: **bold**, `code`, newlines
         const txt = sec.text
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
@@ -4689,11 +4801,21 @@ async function loadChangelog() {
         </div>
         <div style="flex:1;min-width:0">${sectionsHtml}</div>
       </div>`;
-    }).join('');
+    };
+    const entriesHtml = visible.map(renderEntry).join('');
+    const toggleBtn = hiddenCount > 0
+      ? `<button onclick="_toggleChangelog()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;width:100%;margin-top:8px">📜 Toon ${hiddenCount} oudere versies</button>`
+      : (_changelogExpanded
+          ? `<button onclick="_toggleChangelog()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;width:100%;margin-top:8px">▲ Inklappen</button>`
+          : '');
+    el.innerHTML = entriesHtml + toggleBtn;
   } catch {
-    // Fallback: toon hardcoded legacy lijst
     if (legacy) { legacy.style.display = ''; el.style.display = 'none'; }
   }
+}
+function _toggleChangelog() {
+  _changelogExpanded = !_changelogExpanded;
+  loadChangelog();
 }
 // Laden wanneer de info-tab actief wordt of direct bij init (admin-only)
 loadChangelog();
@@ -4723,6 +4845,23 @@ async function loadApiLimit() {
   } catch {}
 }
 loadApiLimit();
+
+// v10.7.26: PWA update toast — toon kort dat app geüpdatet is na SW reload.
+(function showUpdateToast() {
+  try {
+    if (sessionStorage.getItem('ep_just_updated') !== '1') return;
+    sessionStorage.removeItem('ep_just_updated');
+    api('/api/version').then(r => r?.json()).then(d => {
+      const v = d?.version || '';
+      const toast = document.createElement('div');
+      toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:10px 18px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.25);z-index:10000;font-size:13px;font-weight:600;opacity:0;transition:opacity 0.3s';
+      toast.textContent = `✅ Geüpdatet naar v${v}`;
+      document.body.appendChild(toast);
+      requestAnimationFrame(() => { toast.style.opacity = '1'; });
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 4000);
+    }).catch(() => {});
+  } catch {}
+})();
 
 // ── BOTTOM NAV (mobiel) ───────────────────────────────────────────────────
 function goMobile(name) {

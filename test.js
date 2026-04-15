@@ -2754,6 +2754,110 @@ test('knockout parser: detecteert leg en stage uit f.league.round', () => {
   assert.deepStrictEqual(parse('Round of 32 2nd leg'), { isKnockout: true, leg: 2, stageLabel: '1/16 finale' });
 });
 
+test('projection compounding: bankroll groeit correct bij positieve monthly rate', () => {
+  // Reproduceer renderProjections project() logica
+  const project = (bankroll, monthlyRate, months) => {
+    const out = [bankroll];
+    for (let m = 1; m <= months; m++) {
+      const next = out[m - 1] * (1 + monthlyRate);
+      out.push(+next.toFixed(2));
+    }
+    return out;
+  };
+  // Bankroll 500, 5%/maand = (1.05)^12 = 1.796
+  const p = project(500, 0.05, 12);
+  assert.strictEqual(p[0], 500);
+  assert.ok(p[12] > 895 && p[12] < 900, `12m compounded ~€898, got €${p[12]}`);
+  // Negative rate: bankroll krimpt
+  const n = project(500, -0.02, 6);
+  assert.ok(n[6] < 500 && n[6] > 440, `negatieve rate krimpt bankroll, got €${n[6]}`);
+  // Zero rate: constant
+  const z = project(500, 0, 12);
+  assert.strictEqual(z[12], 500);
+});
+
+test('projection: scenarios factor werken lineair op ROI', () => {
+  const scenarios = [{ factor: 0.5 }, { factor: 1.0 }, { factor: 1.5 }];
+  const roi = 0.10, betsPerMonth = 30, stakePct = 0.025;
+  const rates = scenarios.map(s => betsPerMonth * stakePct * roi * s.factor);
+  assert.strictEqual(+rates[0].toFixed(4), 0.0375);
+  assert.strictEqual(+rates[1].toFixed(4), 0.075);
+  assert.strictEqual(+rates[2].toFixed(4), 0.1125);
+  // Pessimistic < expected < optimistic
+  assert.ok(rates[0] < rates[1] && rates[1] < rates[2]);
+});
+
+test('parseBetSignals: handelt alle schema-varianten af', () => {
+  // Reproduceer parseBetSignals logic
+  const parse = (raw) => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; }
+      catch { return []; }
+    }
+    return [];
+  };
+  // jsonb: direct array
+  assert.deepStrictEqual(parse(['a', 'b']), ['a', 'b']);
+  // text: JSON string
+  assert.deepStrictEqual(parse('["a","b"]'), ['a', 'b']);
+  // Empty string
+  assert.deepStrictEqual(parse(''), []);
+  // Null
+  assert.deepStrictEqual(parse(null), []);
+  // Undefined
+  assert.deepStrictEqual(parse(undefined), []);
+  // Invalid JSON
+  assert.deepStrictEqual(parse('not-json'), []);
+  // Empty array JSON
+  assert.deepStrictEqual(parse('[]'), []);
+  // Number (weird case)
+  assert.deepStrictEqual(parse(42), []);
+});
+
+test('humanizer extension: BTTS + Aggregate + baseball tokens', () => {
+  // Reproduceer parts parsing logic
+  const humanize = (reason) => {
+    const parts = reason.split('|').map(s => s.trim()).filter(Boolean);
+    const facts = [];
+    // BTTS
+    const btts = parts.find(p => /^BTTS\s*(Nee)?:/i.test(p));
+    if (btts) {
+      const gf = parts.find(p => /^GF:/i.test(p));
+      const gfMatch = gf && gf.match(/GF:\s*([\d.]+)\/([\d.]+)/);
+      if (gfMatch) {
+        const hmGF = parseFloat(gfMatch[1]), awGF = parseFloat(gfMatch[2]);
+        if (hmGF >= 1.7 && awGF >= 1.7) facts.push('beide teams scoren ruim');
+      }
+    }
+    // Aggregate
+    const agg = parts.find(p => /🏆|aggregaat/i.test(p));
+    if (agg) {
+      const m = agg.match(/aggregaat\s+(thuis|uit)\s+leidt\s+(\d+)-(\d+)/i);
+      if (m) {
+        const diff = parseInt(m[2]) - parseInt(m[3]);
+        if (diff >= 2) facts.push('riante voorsprong');
+        else facts.push('kleine voorsprong');
+      }
+    }
+    // RD/g baseball
+    const rd = parts.find(p => /RD\/g:/i.test(p));
+    if (rd) {
+      const m = rd.match(/RD\/g:\s*([+-]?\d+\.?\d*)\s*vs\s*([+-]?\d+\.?\d*)/);
+      if (m && Math.abs(parseFloat(m[1]) - parseFloat(m[2])) > 1) {
+        facts.push('run differential edge');
+      }
+    }
+    return facts;
+  };
+  assert.deepStrictEqual(humanize('BTTS: 65% | GF: 2.88/2.13 | wo 15 apr'), ['beide teams scoren ruim']);
+  assert.deepStrictEqual(humanize('Consensus: 40%→55% | 🏆 Aggregaat thuis leidt 3-1'), ['riante voorsprong']);
+  assert.deepStrictEqual(humanize('Vorm | RD/g:+0.5 vs -0.8 | H/A'), ['run differential edge']);
+  // Geen matching tokens
+  assert.deepStrictEqual(humanize('wat dan ook | onbekend'), []);
+});
+
 test('parseGameOdds ML: dedupe pakt HOOGSTE prijs per bookie (geen alt-lijn risico)', () => {
   // Zelfde logic als dedupeBestPrice in parseGameOdds
   const dedupeBestPrice = (arr, keyFn) => {

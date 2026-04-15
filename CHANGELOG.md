@@ -2,6 +2,67 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.0] - 2026-04-15
+
+### Added (Vooruitzichten / projections kaart op Data-pagina)
+Nieuwe "🔮 Vooruitzichten" kaart toont bankroll-projectie met compounding over 1/3/6/12 maanden. Drie scenarios (pessimistisch 0.5× ROI / verwacht 1.0× / optimistisch 1.5×). Bevat unit-size advies bij gegroeide bankroll. Aannames (bets/maand, avg inzet) expliciet getoond.
+
+### Added (Model-tab: market multipliers in tabs per sport)
+- Tab "🕑 Recent": top 5 meest-recent-gewijzigd cross-sport (o.b.v. modelLog)
+- Tabs per sport: Voetbal / Basketbal / Hockey / Baseball / NFL / Handbal
+- Fallback bij geen modelLog: sorteer op biggest `|multiplier - 1|`
+
+### Added (Changelog collapse)
+Info-pagina was gigantisch. Nu toont default laatste 3 versies expanded, oudere versies achter "Toon X oudere versies" button.
+
+### Added (PWA update toast)
+Na SW auto-update reload nu zichtbare toast "✅ Geüpdatet naar vX.Y.Z" (3 seconden). Voorheen silent reload — gebruiker wist niet dat er iets gebeurde.
+
+### Added (Humanizer voor alle markten + sporten)
+Eerder werkte alleen voor football ML. Nu ook:
+- **BTTS** (yes/no + GF pattern)
+- **Over/Under** + TeamStats adjustment
+- **Aggregate** (leader vs trailer language)
+- **Baseball**: run differential + H/A split + pitcher
+- **NBA/NHL**: back-to-back
+- **NFL**: bye week
+- **NHL**: shots differential
+- **Streak** detection
+Fallback "Modelanalyse:" opener als geen specifieke keyword matched maar wel facts.
+
+### Added (Retroactieve signal backfill)
+`POST /api/admin/backfill-signals` matcht oude bets → `pick_candidates` table via fixture_id + odds/bookie, en vult de lege `signals` kolom. DoS-cap op 500 per call. Nu heeft Signal Performance dashboard ook data voor historische bets.
+
+### Added (Signals meegestuurd bij bet-log via modal)
+Bug-fix: modal logde bets zonder signals. Nu wordt `modalPick.signals` meegestuurd zodat nieuwe bets direct in Signal Performance verschijnen.
+
+### Fixed (Tracker inzet formatting)
+Tracker toonde "€18" bij 0.75U × €25 = €18.75. JS `Number(18.00).toString()` droopt trailing zeros. Nu expliciet `.toFixed(2)` in tracker + modal.
+
+### Fixed (Aggregate leg-detection zonder expliciete suffix)
+Api-sports returnt vaak "Semi-finals" zonder "1st/2nd Leg" suffix. Oude regex faalde → `knockout: 2 (1e leg 0, 2e leg 0)` in telemetrie. Nu H2H broader candidate-matching: zelfde season + FT status + binnen 30 dagen + stage-match.
+
+### Fixed (Debug endpoint: date/status/league info)
+`/api/debug/odds` returnt nu ook `dateUTC/dateNL/status/league`. Gaf eerder verkeerde match (FT i.p.v. NS) bij team-name queries.
+
+### Changed (Race-condition mutex op rebuild-calib)
+`_calibRebuildInProgress` mutex voorkomt dat gelijktijdige calls corrupte calib-state veroorzaken. Parallel scans krijgen nog steeds 10s cache — maar rebuild zelf is nu exclusief.
+
+### Changed (Signal parsing gestandaardiseerd)
+`parseBetSignals()` helper in server.js handelt alle schema-varianten af (jsonb array, text JSON, null, undefined, invalid). Eerder waren er 5+ verschillende parse-paden die inconsistent faalden.
+
+### Changed (afCache.lastPlayed daily reset)
+Null-cache (team onbekend) bleef permanent — over multi-day scans raakte data stale. Nu dagelijkse reset via setInterval.
+
+### Changed (Version bump 10.7.x → 10.8.0)
+Minor bump gerechtvaardigd: 20+ nieuwe endpoints/features sinds v10.7.19 (rest-days signal, knockout awareness + aggregate score, new-season damping, signal performance dashboard, market tabs, projections, retro backfill, humanizer extensions, PWA updates).
+
+### Tests
+4 nieuwe regression tests: projection compounding math, scenarios factor lineariteit, parseBetSignals schema-varianten, humanizer BTTS/Aggregate/baseball tokens. Totaal **235 tests, 0 failed** (was 231).
+
+### Volgende / open
+- Info-tab databronnen + model-uitleg update (pending — nu niet actueel t.o.v. v10.8.0 features)
+
 ## [10.7.25] - 2026-04-15
 
 ### Added (aggregate-score Phase 2 — return-leg edge)

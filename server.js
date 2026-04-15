@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.25';
+const APP_VERSION    = '10.8.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1484,6 +1484,18 @@ function analyseTotal(bookmakers, outcomeName, point) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Session-caches (worden éénmaal per scan gevuld)
+// v10.8.0: centralized parser voor bets.signals kolom (jsonb of text in schema).
+// Standaardiseert alle reads zodat bug bij schema-change maar op één plek zit.
+function parseBetSignals(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; }
+    catch { return []; }
+  }
+  return [];
+}
+
 const afCache = {
   teamStats: {},   // key=sport_key, value: { teamNameLower: { form, goalsFor, goalsAgainst, winPct, teamId } }
   injuries:  {},   // key=sport_key, value: { teamNameLower: [{ player, type }] }
@@ -1491,6 +1503,9 @@ const afCache = {
   h2h:       {},   // key='id1-id2', value: { hmW, awW, dr, n, avgGoals, bttsRate }
   lastPlayed:{},   // v10.7.24: key=sport, value: { teamId: ISO date string of last completed fixture }
 };
+// v10.8.0: reset lastPlayed cache dagelijks (anders blijft null-cache voor
+// onbekende teams permanent). h2h/teamStats worden per scan gewist.
+setInterval(() => { afCache.lastPlayed = {}; }, 24 * 60 * 60 * 1000);
 
 // ── API-FOOTBALL RATE LIMIT TRACKER ─────────────────────────────────────────
 let afRateLimit = { remaining: null, limit: 7500, updatedAt: null, callsToday: 0, date: null };
@@ -8776,6 +8791,10 @@ function computeMarketMultiplier(stats, currentMultiplier = 1.0) {
   return +Math.max(0.70, Math.min(1.20, 0.70 + wr * 1.0)).toFixed(3);
 }
 
+// v10.8.0: mutex om gelijktijdige rebuild/recompute te voorkomen.
+// Race scenario: scan leest _calibCache tijdens rebuild schrijft → inconsistent.
+let _calibRebuildInProgress = false;
+
 // POST /api/admin/rebuild-calib — rebuild c.markets vanaf 0 o.b.v. alle settled
 // bets. Nodig na v10.7.20 detectMarket split: bestaande historische bets zitten
 // onder `football_other`, maar moeten nu verdeeld zijn over btts/dnb/dc/spread/
@@ -8786,6 +8805,8 @@ function computeMarketMultiplier(stats, currentMultiplier = 1.0) {
 // iteratie te voorkomen.
 // Body: { dryRun?: boolean, resetMultipliers?: boolean }
 app.post('/api/admin/rebuild-calib', requireAdmin, async (req, res) => {
+  if (_calibRebuildInProgress) return res.status(409).json({ error: 'Rebuild al lopende, probeer over 30s opnieuw' });
+  _calibRebuildInProgress = true;
   try {
     const dryRun = req.body?.dryRun === true;
     const resetMultipliers = req.body?.resetMultipliers === true;
@@ -8861,6 +8882,8 @@ app.post('/api/admin/rebuild-calib', requireAdmin, async (req, res) => {
   } catch (e) {
     console.error('rebuild-calib error:', e);
     res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  } finally {
+    _calibRebuildInProgress = false;
   }
 });
 
@@ -8895,6 +8918,85 @@ app.get('/api/changelog', requireAdmin, (req, res) => {
   }
 });
 
+// POST /api/admin/backfill-signals — retroactief signals vullen voor bets
+// die ze missen. Match via fixture_id (of findGameId fallback) naar
+// pick_candidates tabel, neem signals van best-matching candidate.
+app.post('/api/admin/backfill-signals', requireAdmin, async (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun === true;
+    // v10.8.0: DoS-cap — max 500 per call. User kan in batches draaien.
+    const MAX_CANDIDATES = Math.min(parseInt(req.body?.max || 500), 1000);
+    const { data: bets, error: betsErr } = await supabase.from('bets')
+      .select('*').limit(5000);
+    if (betsErr) return res.status(500).json({ error: betsErr.message });
+
+    // Filter bets zonder signals (of leeg)
+    const candidates = (bets || []).filter(b => {
+      if (b.signals == null) return true;
+      if (typeof b.signals === 'string') return b.signals === '' || b.signals === '[]';
+      if (Array.isArray(b.signals)) return b.signals.length === 0;
+      return false;
+    }).slice(0, MAX_CANDIDATES);
+
+    const results = { scanned: candidates.length, matched: 0, updated: 0, failed: 0, details: [], capped: candidates.length === MAX_CANDIDATES };
+
+    for (const b of candidates) {
+      try {
+        let fxId = b.fixture_id;
+        if (!fxId) {
+          // Probeer findGameId met naamlookup
+          const sport = b.sport || 'football';
+          try {
+            fxId = await findGameId(sport, b.wedstrijd);
+            if (fxId && !dryRun) {
+              await supabase.from('bets').update({ fixture_id: fxId }).eq('bet_id', b.bet_id);
+            }
+          } catch {}
+        }
+        if (!fxId) { results.failed++; results.details.push({ id: b.bet_id, wedstrijd: b.wedstrijd, reason: 'fixture niet gevonden' }); continue; }
+
+        // Zoek pick_candidates met zelfde fixture + approx odds
+        const { data: cands } = await supabase.from('pick_candidates')
+          .select('signals, bookmaker, bookmaker_odds, selection_key')
+          .eq('fixture_id', fxId);
+        if (!cands || !cands.length) { results.failed++; results.details.push({ id: b.bet_id, wedstrijd: b.wedstrijd, reason: 'geen pick_candidates' }); continue; }
+
+        const betOdds = parseFloat(b.odds) || 0;
+        const betBookie = (b.tip || '').toLowerCase();
+        // Score matches: zelfde bookie + odds binnen 3%
+        const match = cands.find(c => {
+          const oddsDiff = Math.abs(parseFloat(c.bookmaker_odds || 0) - betOdds) / Math.max(betOdds, 0.01);
+          return oddsDiff < 0.03 && (c.bookmaker || '').toLowerCase().includes(betBookie);
+        }) || cands.find(c => {
+          const oddsDiff = Math.abs(parseFloat(c.bookmaker_odds || 0) - betOdds) / Math.max(betOdds, 0.01);
+          return oddsDiff < 0.05;
+        });
+
+        if (!match || !Array.isArray(match.signals) || !match.signals.length) {
+          results.failed++;
+          results.details.push({ id: b.bet_id, wedstrijd: b.wedstrijd, reason: 'geen matchende candidate met signals' });
+          continue;
+        }
+        results.matched++;
+        if (!dryRun) {
+          await supabase.from('bets').update({ signals: match.signals }).eq('bet_id', b.bet_id);
+          results.updated++;
+        }
+        results.details.push({ id: b.bet_id, wedstrijd: b.wedstrijd, signalsCount: match.signals.length, action: dryRun ? 'would-update' : 'updated' });
+      } catch (e) {
+        results.failed++;
+        results.details.push({ id: b.bet_id, reason: (e && e.message) || String(e) || 'unknown' });
+      }
+      await new Promise(rs => setTimeout(rs, 100)); // rate-limit
+    }
+
+    res.json({ ok: true, dryRun, ...results });
+  } catch (e) {
+    console.error('backfill-signals error:', e);
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  }
+});
+
 // GET /api/admin/signal-performance — per-signal stats voor dashboard (D)
 // Returnt: name, n (bets), avgCLV, posCLV%, currentWeight, status
 // (active/muted/logging/auto_promotable).
@@ -8910,9 +9012,8 @@ app.get('/api/admin/signal-performance', requireAdmin, async (req, res) => {
     for (const b of (bets || [])) {
       if (typeof b.clv_pct !== 'number' || isNaN(b.clv_pct)) continue;
       let sigs;
-      try { sigs = Array.isArray(b.signals) ? b.signals : JSON.parse(b.signals || '[]'); }
-      catch { continue; }
-      if (!Array.isArray(sigs)) continue;
+      sigs = parseBetSignals(b.signals);
+      if (!sigs.length) continue;
       for (const s of sigs) {
         const name = String(s || '').split(':')[0];
         if (!name) continue;

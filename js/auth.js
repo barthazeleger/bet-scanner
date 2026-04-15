@@ -63,11 +63,13 @@ async function registerPushNotifications() {
         }
       });
     });
-    // Reload zodra de nieuwe SW control overneemt
+    // Reload zodra de nieuwe SW control overneemt. v10.7.26: flag in
+    // sessionStorage zodat post-reload een toast getoond kan worden.
     let reloaded = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloaded) return;
       reloaded = true;
+      try { sessionStorage.setItem('ep_just_updated', '1'); } catch {}
       window.location.reload();
     });
 
