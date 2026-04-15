@@ -3944,6 +3944,30 @@ function loadExperimentalSignals() {
   const catalog = [
     { name: 'nba_rest_days_diff', sport: '🏀 NBA', desc: 'Rest-days verschil home vs away (1/2/3/4+)', since: 'v10.4.1', activationFormula: '0.8% per dag verschil × weight' },
     { name: 'nfl_injury_diff',    sport: '🏈 NFL', desc: 'Blessure-aantal verschil away vs home (out/doubtful/questionable)', since: 'v10.4.1', activationFormula: '0.5% per blessure × weight' },
+    { name: 'mlb_injury_diff',    sport: '⚾ MLB', desc: 'Blessure-aantal verschil away vs home (MLB starters/lineup)', since: 'v10.6.x', activationFormula: '0.5% per blessure × weight' },
+    { name: 'nhl_injury_diff',    sport: '🏒 NHL', desc: 'Blessure-aantal verschil away vs home (NHL out/IR)', since: 'v10.6.x', activationFormula: '0.5% per blessure × weight' },
+    { name: 'handball_injury_diff', sport: '🤾 Handbal', desc: 'Blessure-aantal verschil away vs home', since: 'v10.6.x', activationFormula: '0.7% per blessure × weight' },
+    // v10.7.24+ rest-days (alle sporten)
+    { name: 'rest_days_home_tired', sport: '🌍 Alle sporten', desc: 'Thuis-team onder threshold (NBA/NHL <2d, NFL <4d, voetbal <3d)', since: 'v10.7.24', activationFormula: 'Auto-promote naar 0.5 bij CLV>0 over 50+ samples' },
+    { name: 'rest_days_away_tired', sport: '🌍 Alle sporten', desc: 'Uit-team onder threshold (vermoeidheid)', since: 'v10.7.24', activationFormula: 'Auto-promote naar 0.5 bij CLV>0 over 50+ samples' },
+    { name: 'rest_mismatch_home_advantage', sport: '🌍 Alle sporten', desc: 'Thuis ≥3d meer rust dan uit', since: 'v10.7.24', activationFormula: 'Auto-promote via CLV' },
+    { name: 'rest_mismatch_away_advantage', sport: '🌍 Alle sporten', desc: 'Uit ≥3d meer rust dan thuis', since: 'v10.7.24', activationFormula: 'Auto-promote via CLV' },
+    // v10.7.23 knockout
+    { name: 'knockout_1st_leg', sport: '⚽ Voetbal', desc: 'Heenwedstrijd 2-leg tie (CL/EL/cup)', since: 'v10.7.23', activationFormula: 'Auto-promote via CLV' },
+    { name: 'knockout_2nd_leg', sport: '⚽ Voetbal', desc: 'Returnwedstrijd 2-leg tie', since: 'v10.7.23', activationFormula: 'Auto-promote via CLV' },
+    { name: 'knockout_final', sport: '⚽ Voetbal', desc: 'Knockout finale', since: 'v10.7.23', activationFormula: 'Auto-promote via CLV' },
+    { name: 'knockout_semi', sport: '⚽ Voetbal', desc: 'Halve finale', since: 'v10.7.23', activationFormula: 'Auto-promote via CLV' },
+    { name: 'knockout_quarter', sport: '⚽ Voetbal', desc: 'Kwartfinale', since: 'v10.7.23', activationFormula: 'Auto-promote via CLV' },
+    // v10.7.25 aggregate (DIRECT MEEGEWOGEN op O/U + BTTS)
+    { name: 'leg2_home_leads_agg', sport: '⚽ Voetbal', desc: 'Thuis leidt aggregate (defensiever spel verwacht)', since: 'v10.7.25', activationFormula: 'Direct + auto-tune' },
+    { name: 'leg2_away_leads_agg', sport: '⚽ Voetbal', desc: 'Uit leidt aggregate', since: 'v10.7.25', activationFormula: 'Direct + auto-tune' },
+    { name: 'leg2_home_leads_big', sport: '⚽ Voetbal', desc: 'Thuis ≥2 voor (heel defensief)', since: 'v10.7.25', activationFormula: 'Direct + auto-tune' },
+    { name: 'leg2_away_leads_big', sport: '⚽ Voetbal', desc: 'Uit ≥2 voor', since: 'v10.7.25', activationFormula: 'Direct + auto-tune' },
+    { name: 'leg2_all_square', sport: '⚽ Voetbal', desc: 'Aggregate gelijk', since: 'v10.7.25', activationFormula: 'Auto-tune via CLV' },
+    { name: 'aggregate_push_ou', sport: '⚽ Voetbal', desc: 'Aggregate-deficit duwt Over% omhoog (+2-4%)', since: 'v10.7.25', activationFormula: 'Direct meegewogen, +2% per goal deficit' },
+    { name: 'aggregate_push_btts', sport: '⚽ Voetbal', desc: 'Aggregate-deficit duwt BTTS Yes omhoog (+2-3%)', since: 'v10.7.25', activationFormula: 'Direct meegewogen' },
+    // v10.7.25 new-season
+    { name: 'early_season', sport: '⚽ Voetbal', desc: 'Ronde 1-4: form/h2h gedempt op 60% (kleine sample)', since: 'v10.7.25', activationFormula: 'Direct dempt form+h2h × 0.6' },
   ];
   const sw = (inboxData?.signalWeights) || {};
   el.innerHTML = catalog.map(c => {
