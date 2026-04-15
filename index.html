@@ -3440,23 +3440,31 @@ function closeOverlay(e) { if (e.target === document.getElementById('modal')) cl
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
 
 function updatePayout() {
-  const odds   = parseFloat(document.getElementById('m-odds').value) || 0;
-  const units  = parseFloat(document.getElementById('m-units').value) || 0;
-  const stake  = +(units * (userSettings?.unitEur ?? 25)).toFixed(2);
-  const total  = +(stake * odds).toFixed(2);
-  const profit = +(total - stake).toFixed(2);
-  // v10.7.22: match tracker format — geen forced 2 decimalen bij hele getallen
-  const fmt = (n) => Number.isInteger(n) ? `€${n}` : `€${n.toFixed(2)}`;
-  document.getElementById('payout-stake').textContent  = stake  ? fmt(stake)  : '€—';
-  document.getElementById('payout-total').textContent  = total  ? fmt(total)  : '€—';
-  document.getElementById('payout-profit').textContent = profit ? (profit>0?'+':'')+fmt(profit) : '€—';
+  const odds     = parseFloat(document.getElementById('m-odds').value) || 0;
+  const fmt      = (n) => Number.isInteger(n) ? `€${n}` : `€${n.toFixed(2)}`;
+  const edgeEl   = document.getElementById('payout-edge');
+  const unitsEur = userSettings?.unitEur ?? 25;
 
-  // Edge herberekening — alleen tonen als odds AFWIJKEN van scanner
-  const edgeEl = document.getElementById('payout-edge');
-  if (!edgeEl || !modalPick) return;
+  const writePayout = (u) => {
+    const stake  = +(u * unitsEur).toFixed(2);
+    const total  = +(stake * odds).toFixed(2);
+    const profit = +(total - stake).toFixed(2);
+    document.getElementById('payout-stake').textContent  = stake  ? fmt(stake)  : '€—';
+    document.getElementById('payout-total').textContent  = total  ? fmt(total)  : '€—';
+    document.getElementById('payout-profit').textContent = profit ? (profit>0?'+':'')+fmt(profit) : '€—';
+  };
+
+  if (!modalPick || !edgeEl) {
+    writePayout(parseFloat(document.getElementById('m-units').value) || 0);
+    return;
+  }
   const origOdds = parseFloat(modalPick.odd || modalPick.odds) || 0;
   const origUnits = parseFloat(String(modalPick.units||'0.3').replace('U','')) || 0.3;
-  if (!origOdds || !odds) { edgeEl.innerHTML = ''; return; }
+  if (!origOdds || !odds) {
+    edgeEl.innerHTML = '';
+    writePayout(parseFloat(document.getElementById('m-units').value) || 0);
+    return;
+  }
 
   // v10.8.9: 4-tier line-move logic via lib/modal-advice.js
   const prob = (modalPick.prob || 0) / 100;
@@ -3470,22 +3478,34 @@ function updatePayout() {
   const diff    = advice.diff;
   const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
   const scoreVal = advice.scoreVal;
+  // v10.8.10: toon gedempte edge (scanner-proxy) als primair getal. Pure Kelly
+  // edge erachter in muted als damping < 0.95, zodat gebruiker weet dat de
+  // "effectieve" edge lager is dan wat pure Kelly zou aangeven.
+  const dampedEdge = advice.dampedEdge != null ? advice.dampedEdge : advice.edge;
+  const pureEdge = advice.edge;
+  const showBoth = advice.dampingFactor != null && advice.dampingFactor < 0.95;
+  const edgeLabel = showBoth
+    ? `Edge: ${dampedEdge.toFixed(1)}% <span style="opacity:0.55;font-size:11px">(pure ${pureEdge.toFixed(1)}%)</span>`
+    : `Edge: ${dampedEdge.toFixed(1)}%`;
 
   if (advice.severity === 'unchanged') {
-    edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center;color:var(--muted)">
+    edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center;color:var(--muted);flex-wrap:wrap">
       ✅ Odds ongewijzigd — scanner advies: <span style="color:var(--accent);font-weight:700">${advice.recUnits}U</span>
+      <span>${edgeLabel}</span>
       ${scoreVal ? `<span style="color:${scoreVal>=8?'#34d399':scoreVal>=6?'#fbbf24':'#94a3b8'};font-weight:700">${scoreVal}/10</span>` : ''}
     </div>`;
     document.getElementById('m-units').value = advice.recUnits;
+    writePayout(advice.recUnits);
     return;
   }
 
   if (advice.severity === 'adverse') {
     edgeEl.innerHTML = `<div style="color:#f87171;font-size:12px;font-weight:700;margin-top:4px;padding:8px;background:rgba(248,113,113,0.08);border-radius:6px;border:1px solid rgba(248,113,113,0.25)">
-      🚫 Odds ${origOdds} → ${odds.toFixed(2)} (${diffStr}, ${advice.diffPct.toFixed(1)}%)<br>
+      🚫 Odds ${origOdds} → ${odds.toFixed(2)} (${diffStr}, ${advice.diffPct.toFixed(1)}%) · ${edgeLabel}<br>
       <span style="font-weight:600">${advice.message}</span> — overweeg niet te plaatsen (0U)
     </div>`;
     document.getElementById('m-units').value = 0;
+    writePayout(0);
     return;
   }
 
@@ -3502,13 +3522,14 @@ function updatePayout() {
   edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;padding:6px 8px;background:${col.bg};border-left:3px solid ${col.bar};border-radius:4px">
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <span style="color:${col.bar};font-weight:700">${warnPrefix}Odds: ${origOdds} → ${odds.toFixed(2)} (${diffStr})</span>
-      <span style="color:var(--muted)">Edge: ${advice.edge.toFixed(1)}%</span>
+      <span style="color:var(--muted)">${edgeLabel}</span>
       <span style="color:var(--accent);font-weight:700">${advice.recUnits}U aanbevolen</span>
       ${scoreVal ? `<span style="color:${scoreVal>=8?'#34d399':scoreVal>=6?'#fbbf24':'#94a3b8'};font-weight:700">${scoreVal}/10</span>` : ''}
     </div>
     <div style="font-size:11px;color:var(--muted);margin-top:3px">${escHtml(advice.message)}</div>
   </div>`;
   document.getElementById('m-units').value = advice.recUnits;
+  writePayout(advice.recUnits);
 }
 
 document.getElementById('m-odds').addEventListener('input', updatePayout);
@@ -5008,17 +5029,17 @@ function restoreScan(idx) {
 
 loadScanHistory();
 
-// v10.8.9: auto-refresh scan-history.
-// Voorheen moest je hard-refreshen om een nieuwe scan te zien. Nu:
-// - bij tab-focus (visibilitychange) → refresh als >60s geleden
-// - elke 5 min terwijl tab zichtbaar is
-// Detecteert nieuwe picks op basis van scan-timestamp.
+// v10.8.9/10: auto-refresh scan-history.
+// - visibilitychange + window.focus (tab switches + window focus returns)
+// - 90s interval terwijl tab zichtbaar
+// - baseline _lastScanTs zo snel mogelijk gezet (bij eerste loadScanHistory)
+// Dedup-window: 30s zodat we niet per focus+visibility+interval dubbel vuren.
 let _lastScanTs = null;
-let _lastHistoryFetch = Date.now();
+let _lastHistoryFetch = 0;
 async function refreshScanHistory(force) {
   try {
     const ageMs = Date.now() - _lastHistoryFetch;
-    if (!force && ageMs < 60000) return;
+    if (!force && ageMs < 30000) return;
     _lastHistoryFetch = Date.now();
     const hist = await api('/api/scan-history').then(r => r?.json()) || [];
     if (!hist.length) return;
@@ -5038,17 +5059,23 @@ async function refreshScanHistory(force) {
     }
   } catch {}
 }
-// Init _lastScanTs na eerste load
-setTimeout(() => {
-  const latest = (scanHistory || []).find(h => h.type === 'prematch' && h.picks?.length);
-  if (latest) _lastScanTs = latest.ts;
-}, 2000);
+// Init _lastScanTs direct na eerste loadScanHistory() (via microtask, niet 2s)
+Promise.resolve().then(async () => {
+  for (let i = 0; i < 20; i++) { // max 10s wachten
+    if (scanHistory && scanHistory.length) {
+      const latest = scanHistory.find(h => h.type === 'prematch' && h.picks?.length);
+      if (latest) { _lastScanTs = latest.ts; return; }
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') refreshScanHistory(false);
 });
+window.addEventListener('focus', () => refreshScanHistory(false));
 setInterval(() => {
   if (document.visibilityState === 'visible') refreshScanHistory(false);
-}, 5 * 60 * 1000);
+}, 90 * 1000);
 
 // ── CHANGELOG (auto-sync uit CHANGELOG.md) ────────────────────────────────────
 // v10.7.21: vervangt hardcoded lijst. /api/changelog parseert CHANGELOG.md

@@ -3020,8 +3020,8 @@ test('modal: lichte daling (-3%) → severity=light, rec < origUnits', () => {
   assert.ok(r.recUnits > 0, 'light rec niet 0');
 });
 
-test('modal: matige daling (-5%) → severity=moderate, rec ≈ helft', () => {
-  const r = computeModalAdvice({ origOdds: 2.00, newOdds: 1.90, prob: 0.60, origUnits: 1.0 });
+test('modal: matige daling (-4%) → severity=moderate, rec ≈ helft', () => {
+  const r = computeModalAdvice({ origOdds: 2.00, newOdds: 1.92, prob: 0.60, origUnits: 1.0 });
   assert.strictEqual(r.severity, 'moderate');
   assert.ok(r.recUnits <= 0.5, `moderate rec (${r.recUnits}) moet ≤ helft van origUnits`);
 });
@@ -3033,12 +3033,27 @@ test('modal: grote daling (-7%) → severity=adverse, rec=0, message flags inval
   assert.ok(/valide|line moved/i.test(r.message), 'adverse message flagged');
 });
 
-test('modal: Padres scenario 1.91→1.80 (-5.8%) → adverse of moderate, NIET hoger dan orig', () => {
+test('modal v10.8.10: Luton/Padres -5.8% → nu ADVERSE (threshold -5%)', () => {
   const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.80, prob: 0.62, origUnits: 0.75 });
-  assert.ok(r.severity === 'moderate' || r.severity === 'adverse',
-    `expected moderate/adverse, got ${r.severity}`);
-  assert.ok(r.recUnits <= 0.75,
-    `recUnits (${r.recUnits}) NOOIT hoger dan origUnits (0.75) bij lagere odds`);
+  assert.strictEqual(r.severity, 'adverse', 'drempel -5% moet -5.8% adverse maken');
+  assert.strictEqual(r.recUnits, 0);
+});
+
+test('modal v10.8.10: damped edge = pure edge × (origUnits/pureRec)', () => {
+  // Luton: prob=0.62, origOdds=1.91, origUnits=0.75
+  // pure hk at 1.91 = 0.101 → pureRec 1.5 → damping 0.5
+  // pure edge at 1.91 = (1.91 - 1.613)/1.613 = ~18.4%
+  // damped edge = 18.4 × 0.5 = ~9.2
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.91, prob: 0.62, origUnits: 0.75 });
+  assert.ok(r.dampedEdge < r.edge, 'damped edge moet lager zijn dan pure edge');
+  assert.ok(Math.abs(r.dampingFactor - 0.5) < 0.1, `damping ≈ 0.5, got ${r.dampingFactor}`);
+});
+
+test('modal v10.8.10: damped edge schaalt mee bij nieuwe odds', () => {
+  // Bij 1.80: pure edge ~11.6, damped (×0.5) ~5.8 — rond MIN_EDGE
+  const r = computeModalAdvice({ origOdds: 1.91, newOdds: 1.80, prob: 0.62, origUnits: 0.75 });
+  assert.ok(r.dampedEdge < 7, `damped edge bij 1.80 moet rond 5-6%, got ${r.dampedEdge}`);
+  assert.ok(r.dampedEdge > 4, `damped edge bij 1.80 moet niet absurd laag, got ${r.dampedEdge}`);
 });
 
 test('modal: hogere odds (+3%) → severity=better, rec gecapt op origUnits', () => {

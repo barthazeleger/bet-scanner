@@ -2,6 +2,22 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.10] - 2026-04-15
+
+### Fixed
+- **Modal toont nu gedempte edge (scanner-proxy)**: voorheen toonde modal pure Kelly-edge (bv 18.4% bij Luton 1.91) terwijl de pick-card gedempte edge van 7% toonde. Dat was inconsistent — "als 18.4% echt was, had scanner hem hoger gerankt". Nu: `dampedEdge = edge × (origUnits/pureRec_at_origOdds)`. Luton 1.91 → 9.2% effectief, bij 1.80 → 5.8% effectief (bijna onder MIN_EDGE). Bij significante damping (<0.95) toont modal ook de pure edge erachter in muted tekst.
+- **Payout-boxen bleven leeg na advice-update**: stake/uitbetaling/winst werden berekend aan begin van `updatePayout()` terwijl units pas NA de advice-compute werden bijgesteld → boxen toonden €—. Nu `writePayout(advice.recUnits)` na elke advies-return.
+- **Auto-refresh pakte nieuwe scan niet altijd op**: interval van 5min was te lang bij actieve sessies, en baseline-init via 2s timeout kon misgaan. Nu 90s interval, extra `window.focus` listener, en microtask-gebaseerde baseline die direct klaar is zodra `scanHistory` gevuld is.
+
+### Changed
+- **Adverse threshold verlaagd van -6% naar -5%**: 5.8% line-move (Luton/Padres) was eerder nog "moderate" (0.3U gehalveerd). Voelde te lief — gebruiker wil 1.91→1.80 als ongeldige pick flaggen. Nu:
+  - Licht: -2 tot -3.5% (1 bucket lager)
+  - Matig: -3.5 tot -5% (gehalveerd)
+  - **Adverse: >-5% (0U, pick niet valide)**
+
+### Tests
+2 nieuwe tests voor dampedEdge + threshold update bestaande tests. Totaal **251 tests, 0 failed** (was 249).
+
 ## [10.8.9] - 2026-04-15
 
 ### Fixed
