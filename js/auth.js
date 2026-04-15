@@ -48,6 +48,29 @@ async function registerPushNotifications() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
     const reg = await navigator.serviceWorker.register('/sw.js');
+
+    // v10.7.21: force SW update check op elke page-load zodat nieuwe deploys
+    // zonder her-installatie doorkomen. Als er een nieuwe SW in waiting staat,
+    // activeer hem en reload.
+    reg.update().catch(() => {});
+    reg.addEventListener('updatefound', () => {
+      const newSw = reg.installing;
+      if (!newSw) return;
+      newSw.addEventListener('statechange', () => {
+        if (newSw.state === 'installed' && navigator.serviceWorker.controller) {
+          // Nieuwe SW klaar, force activate en reload
+          newSw.postMessage({ type: 'SKIP_WAITING' });
+        }
+      });
+    });
+    // Reload zodra de nieuwe SW control overneemt
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return;
+      reloaded = true;
+      window.location.reload();
+    });
+
     const existing = await reg.pushManager.getSubscription();
     if (existing) return; // al geregistreerd
     // Haal VAPID key op

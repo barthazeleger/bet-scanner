@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.19';
+const APP_VERSION    = '10.7.21';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -7229,6 +7229,12 @@ async function findGameIdVerbose(sport, matchName, anchorDate = null, windowDays
 }
 
 // Haal odds op voor elke sport en match elke markt
+// ── fetchCurrentOdds ───────────────────────────────────────────────────────
+// Haalt de slotlijn (of huidige odds) op voor EXACT de markt waar de bet in staat.
+// Pure resolver (resolveOddFromBookie) zit in lib/clv-match.js zodat tests het
+// zonder API kunnen draaien.
+const { resolveOddFromBookie } = require('./lib/clv-match');
+
 async function fetchCurrentOdds(sport, gameId, markt, bookmaker, opts = {}) {
   if (!gameId) return null;
   const cfg = getSportApiConfig(sport);
@@ -7242,111 +7248,7 @@ async function fetchCurrentOdds(sport, gameId, markt, bookmaker, opts = {}) {
   }
   if (!bk) return null;
 
-  const m = markt.toLowerCase();
-  let val = null;
-
-  // Over/Under (alle sporten: goals, punten, runs)
-  const overMatch = m.match(/over\s*(\d+\.?\d*)/);
-  const underMatch = m.match(/under\s*(\d+\.?\d*)/);
-  if (overMatch || underMatch) {
-    const ou = bk.bets?.find(b => b.id === 5 || (b.name||'').toLowerCase().includes('over'));
-    if (ou) {
-      const isOver = !!overMatch;
-      const line = (overMatch || underMatch)[1];
-      val = ou.values?.find(v => v.value === `${isOver ? 'Over' : 'Under'} ${line}`);
-    }
-  }
-  // 3-weg 60-min markt (hockey/handbal regulation): zoek bet met 3 Home/Draw/Away values
-  else if (m.includes('60-min') || m.includes('60 min') || m.includes('🕐')) {
-    const isDraw = m.includes('gelijkspel') || m.includes('draw');
-    const isHome = !isDraw && (m.includes('🏠') || !m.includes('✈️'));
-    const target = isDraw ? 'Draw' : isHome ? 'Home' : 'Away';
-    for (const bet of (bk.bets || [])) {
-      const v3 = (bet.values || []).filter(x => ['Home','Draw','Away'].includes(String(x.value ?? '').trim()));
-      if (v3.length === 3 && bet.id !== 1) {
-        val = v3.find(x => String(x.value ?? '').trim() === target);
-        if (val) break;
-      }
-    }
-  }
-  // Moneyline / Match Winner
-  else if (m.includes('wint') || m.includes('winner') || m.includes('moneyline') || m.includes('🏠') || m.includes('✈️')) {
-    const mw = bk.bets?.find(b => b.id === 1 || (b.name||'').toLowerCase().includes('winner') || (b.name||'').toLowerCase().includes('money'));
-    if (mw) {
-      const isHome = m.includes('🏠') || !m.includes('✈️');
-      val = mw.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
-    }
-  }
-  // BTTS (voetbal + handball)
-  else if (m.includes('btts') || m.includes('beide')) {
-    const btts = bk.bets?.find(b => b.id === 8 || (b.name||'').toLowerCase().includes('both'));
-    if (btts) {
-      const isNo = m.includes('nee') || m.includes('no') || m.includes('🛡️');
-      val = btts.values?.find(v => v.value === (isNo ? 'No' : 'Yes'));
-    }
-  }
-  // Spread / Handicap / Run Line / Puck Line
-  else if (m.includes('spread') || m.includes('handicap') || m.includes('line') || m.includes('puck')) {
-    const sp = bk.bets?.find(b => (b.name||'').toLowerCase().includes('spread') || (b.name||'').toLowerCase().includes('handicap') || (b.name||'').toLowerCase().includes('line'));
-    if (sp) {
-      const lineMatch = m.match(/([+-]?\d+\.?\d*)/);
-      if (lineMatch) val = sp.values?.find(v => v.value?.includes(lineMatch[1]));
-    }
-  }
-  // Gelijkspel / Draw
-  else if (m.includes('gelijkspel') || m.includes('draw')) {
-    const mw = bk.bets?.find(b => b.id === 1);
-    if (mw) val = mw.values?.find(v => v.value === 'Draw');
-  }
-  // DNB
-  else if (m.includes('draw no bet') || m.includes('dnb')) {
-    const dnb = bk.bets?.find(b => b.id === 12 || (b.name||'').toLowerCase().includes('draw no bet'));
-    if (dnb) {
-      const isHome = m.includes('🏠') || !m.includes('✈️');
-      val = dnb.values?.find(v => v.value === (isHome ? 'Home' : 'Away'));
-    }
-  }
-  // NRFI / YRFI (baseball)
-  else if (m.includes('nrfi') || m.includes('yrfi') || m.includes('no run first') || m.includes('no run 1st') || m.includes('yes run first') || m.includes('yes run 1st')) {
-    const nrfi = bk.bets?.find(b => (b.name||'').toLowerCase().includes('1st inning') || (b.name||'').toLowerCase().includes('nrfi'));
-    if (nrfi) {
-      const isNRFI = m.includes('nrfi') || m.includes('no run');
-      val = nrfi.values?.find(v => v.value === (isNRFI ? 'No' : 'Yes')) || nrfi.values?.[0];
-    }
-  }
-  // 1st Half / 1st Period Over/Under
-  else if ((m.includes('1h ') || m.includes('1st half') || m.includes('p1 ') || m.includes('1st period')) && (m.includes('over') || m.includes('under'))) {
-    const isOver = m.includes('over');
-    const lineMatch = m.match(/(?:over|under)\s*(\d+\.?\d*)/i);
-    const halfBet = bk.bets?.find(b => {
-      const bn = (b.name||'').toLowerCase();
-      return (bn.includes('1st half') || bn.includes('first half') || bn.includes('1st period') || bn.includes('first period')) && (bn.includes('over') || bn.includes('total'));
-    });
-    if (halfBet && lineMatch) {
-      val = halfBet.values?.find(v => v.value === `${isOver ? 'Over' : 'Under'} ${lineMatch[1]}`);
-    }
-  }
-  // 1st Half / 1st Period Spread
-  else if ((m.includes('1h ') || m.includes('1st half') || m.includes('p1 ') || m.includes('1st period')) && (m.includes('spread') || m.match(/[+-]\d/))) {
-    const halfSpBet = bk.bets?.find(b => {
-      const bn = (b.name||'').toLowerCase();
-      return (bn.includes('1st half') || bn.includes('first half') || bn.includes('1st period') || bn.includes('first period')) && (bn.includes('spread') || bn.includes('handicap'));
-    });
-    if (halfSpBet) {
-      const lineMatch = m.match(/([+-]?\d+\.?\d*)/);
-      if (lineMatch) val = halfSpBet.values?.find(v => v.value?.includes(lineMatch[1]));
-    }
-  }
-  // Odd/Even total
-  else if (m.includes('odd total') || m.includes('even total') || m.includes('odd/even') || m.includes('🎲')) {
-    const oeBet = bk.bets?.find(b => (b.name||'').toLowerCase().includes('odd') && (b.name||'').toLowerCase().includes('even'));
-    if (oeBet) {
-      const isOdd = m.includes('odd');
-      val = oeBet.values?.find(v => v.value?.toLowerCase() === (isOdd ? 'odd' : 'even'));
-    }
-  }
-
-  return val ? parseFloat(val.odd) || null : null;
+  return resolveOddFromBookie(bk, markt);
 }
 
 async function schedulePreKickoffCheck(bet) {
@@ -7395,7 +7297,8 @@ async function schedulePreKickoffCheck(bet) {
       let currentOdds = null;
       try {
         const fxId = bet.fixtureId || await findGameId(betSport, matchName);
-        currentOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip);
+        // strictBookie:true → geen stille fallback naar Bet365 bij mismatch
+        currentOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip, { strictBookie: true });
       } catch {}
 
       // Beoordeling
@@ -7469,7 +7372,7 @@ async function scheduleCLVCheck(bet) {
       const betSport = bet.sport || 'football';
       const fxId = bet.fixtureId || await findGameId(betSport, matchName);
       const closingOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip, { strictBookie: true });
-      const usedBookie = bet.tip || 'Bet365';
+      const usedBookie = bet.tip || 'onbekend';
 
       if (!closingOdds) {
         // 1x retry over 5 min als eerste poging faalt
@@ -7725,6 +7628,95 @@ app.post('/api/clv/backfill', requireAdmin, async (req, res) => {
     }
 
     res.json({ scanned: candidates.length, filled, failed, details,
+               rateLimit: { remaining: afRateLimit.remaining, limit: afRateLimit.limit,
+                            callsToday: afRateLimit.callsToday, perSport: sportRateLimits } });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  }
+});
+
+// POST /api/clv/recompute  — FORCE hercomputeer CLV voor alle (settled) bets.
+// Nodig na fix in fetchCurrentOdds: bestaande clv_pct kunnen verkeerd zijn door
+// slechte market-matching (bv. O/U die Corners of Alt-lijn matchte, ML die DNB
+// greep, etc.). Endpoint negeert bestaande clv_pct, en overschrijft alleen als
+// het echte verschil ≥ 0.5%-punt is (kleinere wijzigingen zijn meet-ruis).
+// Body: { all?: boolean, dryRun?: boolean, minDeltaPct?: number }
+app.post('/api/clv/recompute', requireAdmin, async (req, res) => {
+  try {
+    const all = req.body?.all === true;
+    const dryRun = req.body?.dryRun === true;
+    const minDelta = typeof req.body?.minDeltaPct === 'number' ? Math.abs(req.body.minDeltaPct) : 0.5;
+    const userId = (!all && req.user?.id) ? req.user.id : null;
+
+    // Alle settled bets (W/L) — die hebben closing odds en zijn beoordeelbaar.
+    let q = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
+    if (userId) q = q.eq('user_id', userId);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+
+    const details = [];
+    let updated = 0, skipped = 0, failed = 0;
+    for (const r of (data || [])) {
+      const id = r.bet_id;
+      const wedstrijd = r.wedstrijd || '';
+      const sport = r.sport || 'football';
+      const markt = r.markt || '';
+      const loggedOdds = parseFloat(r.odds);
+      const oldClv = (typeof r.clv_pct === 'number') ? r.clv_pct : null;
+      try {
+        let fxId = r.fixture_id;
+        if (!fxId) {
+          let anchorDate = null;
+          const dm = (r.datum || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
+          if (dm) anchorDate = `${dm[3]}-${dm[2]}-${dm[1]}`;
+          const verbose = await findGameIdVerbose(sport, wedstrijd, anchorDate, [-3, -2, -1, 0, 1]);
+          fxId = verbose.fxId;
+          if (fxId && !dryRun) {
+            try { await supabase.from('bets').update({ fixture_id: fxId }).eq('bet_id', id); } catch {}
+          }
+        }
+        if (!fxId) { failed++; details.push({ id, wedstrijd, reason: 'fixture niet gevonden' }); await new Promise(rs => setTimeout(rs, 150)); continue; }
+        const closingOdds = await fetchCurrentOdds(sport, fxId, markt, r.tip, { strictBookie: true });
+        if (!closingOdds || !loggedOdds) {
+          failed++;
+          details.push({ id, wedstrijd, sport, fxId, bookie: r.tip, reason: `closing odds niet beschikbaar voor "${r.tip}"` });
+          await new Promise(rs => setTimeout(rs, 150));
+          continue;
+        }
+        const newClv = +((loggedOdds - closingOdds) / closingOdds * 100).toFixed(2);
+        const delta = oldClv === null ? Infinity : Math.abs(newClv - oldClv);
+        if (delta < minDelta) {
+          skipped++;
+          details.push({ id, wedstrijd, oldClv, newClv, delta: +delta.toFixed(2), action: 'skip-small-delta' });
+          await new Promise(rs => setTimeout(rs, 150));
+          continue;
+        }
+        if (!dryRun) {
+          await supabase.from('bets').update({ clv_odds: closingOdds, clv_pct: newClv }).eq('bet_id', id);
+        }
+        updated++;
+        details.push({ id, wedstrijd, markt, bookie: r.tip, oldClv, newClv, delta: oldClv === null ? null : +delta.toFixed(2), action: dryRun ? 'would-update' : 'updated' });
+      } catch (e) {
+        failed++;
+        details.push({ id, wedstrijd, reason: (e && e.message) || 'error' });
+      }
+      await new Promise(rs => setTimeout(rs, 150));
+    }
+
+    // Na recompute: CLV-driven tuning opnieuw draaien op de nieuwe clv_pct.
+    // Kill-switch, signal-weights en Kelly-stepup baseren zich op clv_pct.
+    // Als die waarden incorrect waren, waren de tuning-beslissingen dat ook.
+    const tuning = { killSwitch: null, signalTune: null, kellyStepup: null };
+    if (!dryRun && updated > 0) {
+      try { await refreshKillSwitch(); tuning.killSwitch = { ok: true, activeKilled: KILL_SWITCH.set.size }; }
+      catch (e) { tuning.killSwitch = { ok: false, error: e.message }; }
+      try { tuning.signalTune = await autoTuneSignalsByClv(); }
+      catch (e) { tuning.signalTune = { ok: false, error: e.message }; }
+      try { tuning.kellyStepup = await evaluateKellyAutoStepup(); }
+      catch (e) { tuning.kellyStepup = { ok: false, error: e.message }; }
+    }
+
+    res.json({ scanned: (data || []).length, updated, skipped, failed, dryRun, minDelta, details, tuning,
                rateLimit: { remaining: afRateLimit.remaining, limit: afRateLimit.limit,
                             callsToday: afRateLimit.callsToday, perSport: sportRateLimits } });
   } catch (e) {
@@ -8328,6 +8320,104 @@ app.get('/api/version', (req, res) => {
 });
 
 // Model activity feed · alle automatische wijzigingen
+// POST /api/admin/rebuild-calib — rebuild c.markets vanaf 0 o.b.v. alle settled
+// bets. Nodig na v10.7.20 detectMarket split: bestaande historische bets zitten
+// onder `football_other`, maar moeten nu verdeeld zijn over btts/dnb/dc/spread/
+// nrfi/team_total etc. Telt ook hockey/baseball op die eerder stil bleven
+// omdat ze in `_other` verdronken.
+// Body: { dryRun?: boolean }
+app.post('/api/admin/rebuild-calib', requireAdmin, async (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun === true;
+    // Alle admin settled bets (model trainen alleen op admin data).
+    const users = _usersCache || [];
+    const adminIds = users.filter(u => u.role === 'admin').map(u => u.id);
+    let q = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
+    if (adminIds.length) q = q.in('user_id', adminIds);
+    const { data: bets, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Nieuwe markets-map opbouwen.
+    const newMarkets = {};
+    let totalSettled = 0, totalWins = 0, totalProfit = 0;
+    for (const b of (bets || [])) {
+      if (!['W','L'].includes(b.uitkomst)) continue;
+      const key = `${normalizeSport(b.sport)}_${detectMarket(b.markt || '')}`;
+      const won = b.uitkomst === 'W';
+      const pnl = parseFloat(b.wl) || 0;
+      if (!newMarkets[key]) newMarkets[key] = { n: 0, w: 0, profit: 0, multiplier: 1.0 };
+      const mk = newMarkets[key];
+      mk.n++; if (won) mk.w++; mk.profit += pnl;
+      totalSettled++; if (won) totalWins++; totalProfit += pnl;
+    }
+    // Multiplier opnieuw afleiden volgens bestaande formule.
+    for (const mk of Object.values(newMarkets)) {
+      if (mk.n >= 8) {
+        const wr = mk.w / mk.n;
+        const profitPerBet = mk.profit / mk.n;
+        if (profitPerBet < -3 && wr < 0.40) mk.multiplier = 0.70;
+        else if (profitPerBet > 3 && wr > 0.55) mk.multiplier = Math.min(1.30, 1.10);
+        else mk.multiplier = +Math.max(0.70, Math.min(1.20, 0.70 + wr * 1.0)).toFixed(3);
+      }
+    }
+
+    // Per-sport aggregate vanuit de nieuwe markets (voor UI)
+    const perSportMap = {};
+    for (const [k, mk] of Object.entries(newMarkets)) {
+      const sp = k.split('_')[0] || 'football';
+      if (!perSportMap[sp]) perSportMap[sp] = { n: 0, w: 0, profit: 0 };
+      perSportMap[sp].n += mk.n; perSportMap[sp].w += mk.w; perSportMap[sp].profit += mk.profit;
+    }
+
+    const oldC = loadCalib();
+    const before = Object.fromEntries(Object.entries(oldC.markets || {}).map(([k, v]) => [k, v.n]));
+    const after = Object.fromEntries(Object.entries(newMarkets).map(([k, v]) => [k, v.n]));
+    const diff = {};
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const k of keys) diff[k] = { before: before[k] || 0, after: after[k] || 0 };
+
+    if (!dryRun) {
+      const next = { ...oldC, markets: newMarkets, totalSettled, totalWins, totalProfit, modelLastUpdated: new Date().toISOString() };
+      await saveCalib(next);
+    }
+    res.json({ ok: true, dryRun, totalSettled, totalWins, totalProfit,
+      perSport: perSportMap, marketDiff: diff, newMarketKeys: Object.keys(newMarkets).sort() });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  }
+});
+
+// GET /api/changelog — Parse CHANGELOG.md → JSON. Admin-only voor nu (user-
+// facing versie kan later onder eigen endpoint met gefilterde entries).
+app.get('/api/changelog', requireAdmin, (req, res) => {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'CHANGELOG.md'), 'utf8');
+    const entries = [];
+    // Split op "## [x.y.z] - date" secties
+    const blocks = raw.split(/\n(?=## \[)/);
+    for (const block of blocks) {
+      const hdr = block.match(/^## \[([^\]]+)\]\s*-\s*(\d{4}-\d{2}-\d{2})/);
+      if (!hdr) continue;
+      const version = hdr[1], date = hdr[2];
+      // Binnen het block: ### Section headers
+      const body = block.slice(hdr[0].length).trim();
+      const sections = [];
+      const parts = body.split(/\n(?=### )/);
+      for (const p of parts) {
+        const sh = p.match(/^### ([^\n]+)/);
+        if (!sh) continue;
+        const title = sh[1].trim();
+        const text = p.slice(sh[0].length).trim();
+        sections.push({ title, text });
+      }
+      entries.push({ version, date, sections });
+    }
+    res.json({ version: APP_VERSION, entries });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'Kan CHANGELOG niet lezen' });
+  }
+});
+
 app.get('/api/model-feed', requireAdmin, (req, res) => {
   const c = loadCalib();
   const sw = loadSignalWeights();
@@ -9979,17 +10069,18 @@ function scheduleDailyScan() {
 }
 const _globalScanTimers = []; // fallback-handles als geen admin-user bekend is
 
-// ── DAGELIJKSE UITSLAG CHECK (09:03 AM) ──────────────────────────────────────
+// ── DAGELIJKSE UITSLAG CHECK (10:00 Amsterdam) ───────────────────────────────
+// v10.7.21: verschoven van 06:00 → 10:00 ivm late US/MLB wedstrijden die
+// pas in de nacht eindigen. 06:00 miste vaak nog de nachtelijke uitslagen.
+// Ook: overzicht bevat nu settled bets van LAATSTE 24H, niet alleen huidige
+// open bets. Voorheen zag je vaak maar 1 wedstrijd (de enige nog open).
 function scheduleDailyResultsCheck() {
   const now    = new Date();
-  // 06:00 Amsterdam-tijd → bereken UTC offset
   const amsNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
   const offsetMs = amsNow.getTime() - now.getTime();
   const target = new Date(now);
-  // Zet target op 06:00 Amsterdam = 06:00 - offset in UTC
   const amsTarget = new Date(now);
-  amsTarget.setHours(6, 0, 0, 0);
-  // Corrigeer naar UTC: als Amsterdam +2h is, dan UTC = 04:00
+  amsTarget.setHours(10, 0, 0, 0); // 10:00 Amsterdam
   target.setTime(amsTarget.getTime() - offsetMs);
   if (target <= now) target.setDate(target.getDate() + 1);
   const delay = target - now;
@@ -10000,21 +10091,47 @@ function scheduleDailyResultsCheck() {
     console.log('⏰ Dagelijkse uitslag check gestart...');
     try {
       const { checked, updated, results } = await checkOpenBetResults();
-      const { stats } = await readBets();
+      const { bets, stats } = await readBets();
+
+      // Overzicht ook settled bets van afgelopen 24h meenemen (niet alleen
+      // wat nu nog open was). Hierdoor zie je de volledige nacht + gister.
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const recent = (bets || []).filter(b => {
+        if (!['W','L'].includes(b.uitkomst)) return false;
+        // Parse datum (DD-MM-YYYY) + tijd (HH:MM)
+        const dm = (b.datum || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        if (!dm) return false;
+        const iso = `${dm[3]}-${dm[2]}-${dm[1]}T${b.tijd || '12:00'}:00`;
+        const ms = Date.parse(iso);
+        return isFinite(ms) && ms >= cutoff;
+      });
+      const recentById = new Set(results.map(r => r.id));
+      const recentExtra = recent.filter(b => !recentById.has(b.id));
+
       const lines = [`📋 DAGELIJKSE CHECK · ${new Date().toLocaleDateString('nl-NL', { weekday:'long', day:'numeric', month:'long' })}`];
-      lines.push(`${checked} open bet${checked !== 1 ? 's' : ''} gecontroleerd | ${updated} auto-bijgewerkt\n`);
+      lines.push(`${checked} open bet${checked !== 1 ? 's' : ''} gecontroleerd | ${updated} auto-bijgewerkt`);
+      lines.push(`📊 Laatste 24h: ${recent.length} settled bets (inclusief reeds vastgelegde)\n`);
+
+      // Eerst: vers gecheckt in deze run
       for (const r of results) {
         const ico = r.uitkomst === 'W' ? '✅' : r.uitkomst === 'L' ? '❌' : '⚠️';
         lines.push(`${ico} ${r.wedstrijd}\n   ${r.markt} | ${r.score} → ${r.uitkomst || 'handmatig'}`);
       }
-      if (!results.length) lines.push('Geen afgeronde wedstrijden gevonden voor open bets.');
+      // Daarna: al eerder settled in de laatste 24h
+      for (const b of recentExtra) {
+        const ico = b.uitkomst === 'W' ? '✅' : '❌';
+        const scoreStr = b.score || '';
+        lines.push(`${ico} ${b.wedstrijd}\n   ${b.markt} | ${scoreStr} → ${b.uitkomst}`);
+      }
+      if (!results.length && !recentExtra.length) lines.push('Geen afgeronde wedstrijden in laatste 24h.');
+
       lines.push(`\n💰 Bankroll: €${stats.bankroll} | ROI: ${(stats.roi*100).toFixed(1)}%`);
       await tg(lines.join('\n')).catch(() => {});
 
-      // Push notificatie met dagelijks overzicht
-      const wCount = results.filter(r => r.uitkomst === 'W').length;
-      const lCount = results.filter(r => r.uitkomst === 'L').length;
-      const pushBody = results.length
+      // Push notificatie met dagelijks overzicht (volledige 24h)
+      const wCount = recent.filter(r => r.uitkomst === 'W').length;
+      const lCount = recent.filter(r => r.uitkomst === 'L').length;
+      const pushBody = recent.length
         ? `${wCount}W / ${lCount}L · Bankroll: €${stats.bankroll} · ROI: ${(stats.roi*100).toFixed(1)}%`
         : `Geen afgeronde wedstrijden · Bankroll: €${stats.bankroll}`;
       await sendPushToAll({

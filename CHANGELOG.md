@@ -2,6 +2,97 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.21] - 2026-04-15
+
+### Added (humanized pick-reasoning in analyse-tab)
+Nieuwe `humanizePickReason()` parseert de technische reason-string (Consensus, Form, Injuries, Referee, Weather, Stakes) naar 1-2 natuurlijke zinnen die bovenin de analyse-uitklap staan. Technische details blijven eronder voor de power-user. Geeft een leesbare onderbouwing per pick zonder signals/weights/model-details weg te geven.
+
+### Added (auto-sync CHANGELOG.md → in-app)
+`GET /api/changelog` parseert `CHANGELOG.md` server-side en levert JSON (version/date/sections). In-app Versiegeschiedenis kaart rendert dit dynamisch (admin-only voor nu). Fallback naar hardcoded lijst bij load-failure. Eén source of truth.
+
+### Fixed (PWA auto-update zonder reinstall)
+Service worker luistert nu naar `SKIP_WAITING` message. Client roept `reg.update()` aan op elke page-load; nieuwe SW activeert zichzelf en triggert een `controllerchange` → auto-reload. Geen delete/reinstall meer nodig voor nieuwe deploys.
+
+### Changed (PWA theme = system default)
+Default theme volgt `prefers-color-scheme`. Gebruiker kan expliciet overriden via de dark-toggle; die keuze wint totdat localStorage wordt gewist. Live-update bij system theme change als er geen override staat.
+
+### Changed (daily results check 06:00 → 10:00 Ams)
+Verschoven ivm late US/MLB wedstrijden die pas diep in de nacht eindigen — 06:00 miste die regelmatig. Dagoverzicht bevat nu ook alle settled bets van de laatste 24h, niet alleen de nog-open bets die nu net afgesloten zijn. Voorheen zag je vaak maar 1 wedstrijd; nu volledige nacht + vorige dag.
+
+### Fixed (notif sticky bug)
+`toggleNotif()` wachtte niet op mark-read. Race condition liet 1 notif sticky staan na her-open. Nu `await` op mark-read voordat loadNotifications draait.
+
+### Changed (API usage meter = football-specifiek)
+Home meter toonde totaal-over-alle-sport-hosts. Nu expliciet football-host usage (= verreweg de grootste verbruiker door fixtures, injuries, refs, weather, predictions, standings, stats). Dat is de echte bottleneck.
+
+### Added (CLV-knop feedback bij lege lijst)
+`clvBackfill()` gaf vroeger gewoon "0 ingevuld" bij lege candidate-lijst. Nu expliciet: "Geen bets met lege CLV gevonden — gebruik Hercomputeer in admin-tab als je bestaande waarden wil herzien". Ook console-log van failures bij non-zero kandidaten.
+
+### Changed (`football_other` vangbak opgesplitst)
+`detectMarket()` classificeerde BTTS, DNB, Double Chance, Spread/Run Line/Puck Line, NRFI/YRFI, Team Totals en Odd/Even allemaal onder `other`. Effect: kill-switch en markt-multipliers konden geen aparte beslissing nemen per markttype. Ook: hockey/baseball markten verdwenen hier massaal in één `hockey_other` / `baseball_other` bucket.
+
+Nu eigen bucket per type:
+- `btts_yes`, `btts_no`
+- `dnb_home`, `dnb_away`
+- `dc_1x`, `dc_x2`, `dc_12`
+- `spread_home`, `spread_away` (incl. Run Line / Puck Line / Handicap)
+- `nrfi`, `yrfi`
+- `team_total_over`, `team_total_under`, `team_total`
+- `odd`, `even`
+- Bestaande: `home`, `away`, `draw`, `home60`, `away60`, `draw60`, `over`, `under`
+
+### Added (rebuild-calib endpoint)
+`POST /api/admin/rebuild-calib` herbouwt `c.markets` vanaf 0 door alle admin settled bets opnieuw te classificeren met de nieuwe `detectMarket`. Body `{ dryRun:true }` laat de diff zien zonder te schrijven. Nodig om historische `football_other` op te splitsen naar de nieuwe buckets.
+
+### Added (UI bucket-labels)
+`renderInboxMarkets` (Model tab) kent alle nieuwe bucket-keys en toont per markt: BTTS Ja/Nee, DNB home/away, Dubbele 1X/X2/12, Spread/Handicap home/away, Team Over/Under, NRFI/YRFI, Odd/Even, 60-min varianten.
+
+### Volg-upstappen voor user
+1. Deploy.
+2. `POST /api/admin/rebuild-calib` met `{dryRun:true}` → zie de diff (welke `_other` bets waar heen gaan).
+3. Daarna `{dryRun:false}` → schrijft nieuwe calibratie. Kill-switch / markt-multipliers werken nu per specifieke markt.
+
+### Tests
+7 nieuwe `detectMarket` regression tests (BTTS, DNB, DC, Spread, NRFI/YRFI, Team Totals, onbekend-blijft-other). Totaal 215 tests, 0 failed.
+
+## [10.7.20] - 2026-04-15
+
+### Fixed (CLV market matching — root cause foute CLV%)
+De oude `fetchCurrentOdds` matchte markten veel te los met `.includes('over')`, `.includes('winner')`, `.includes('spread')` etc. Gevolgen gezien op 2026-04-14:
+
+- **Wigan ML @ 1.83 Unibet**: slotlijn kwam binnen als 1.83 → CLV 0% ❌. Werkelijke Unibet Home slot was 1.57 → **echte CLV +16.6%** ✅. Oude code pakte vermoedelijk een Alt/1st-half Winner ipv hoofdmarkt.
+- **Chesterfield Over 2.5 @ 1.90 Bet365**: slotlijn kwam binnen als 1.95 → CLV -2.56% ❌. Bet365 Match Goals Over 2.5 sloot op 1.83 → **echte CLV +3.83%** ✅. Waarschijnlijk Corners O/U 2.5 of Alt Total 2.5 gepakt.
+- **DNB bets** werden misgeclassificeerd als ML omdat de `🏠/✈️` emoji al door de ML-tak gevangen werd vóór de DNB-tak bereikt werd.
+
+**Fix** (`lib/clv-match.js` — nieuwe pure resolver, testbaar zonder API):
+1. O/U: vereist nu dat bet BEIDE `Over <line>` én `Under <line>` heeft, en filtert non-main via regex (`/alt|corner|card|team total|1st|period|...etc/`).
+2. ML: exacte naam-match (`Match Winner`, `Home/Away`, `Winner`, etc.) ipv `.includes('winner')`. Accepteert ook `"1"/"2"` value-conventie.
+3. DNB/Draw/BTTS checks **vóór** ML (emoji-vangnet bug).
+4. Spread/Run Line/Puck Line filtert non-main (alt, corners, halftime, team totals).
+5. `bet.id` niet meer hard-coded (varieert per sport) — name match is leading.
+
+### Fixed (pre-kickoff odds notif — verkeerde bookie)
+`schedulePreKickoffCheck` riep `fetchCurrentOdds` zonder `strictBookie:true`. Bij bookie-mismatch viel ie stil terug op Bet365 of eerste bookie → "odds stabiel" werd vergeleken met compleet andere book. Nu strictBookie overal.
+
+### Fixed (CLV notif bookie display)
+`usedBookie = bet.tip || 'Bet365'` toonde "Bet365" default als bookie ontbrak. Nu 'onbekend'.
+
+### Added (retro CLV recompute endpoint)
+`POST /api/clv/recompute` forceert hercomputatie voor ALLE settled bets. Body:
+- `all: true` (admin: ook andere users)
+- `dryRun: true` (geen writes, alleen rapport)
+- `minDeltaPct: 0.5` (skip updates <0.5%-punt verschil — meet-ruis).
+
+Na recompute draait automatisch: `refreshKillSwitch`, `autoTuneSignalsByClv`, `evaluateKellyAutoStepup` op de gecorrigeerde CLV-data. Zo werken kill-switch, signal-weights en Kelly-stepup op correcte cijfers. CLV-milestones + ROI-stats in tracker updaten automatisch op nieuwe clv_pct.
+
+### Added (13 CLV regression tests)
+`test.js` nu 208 tests. Dekt alle gefixte cases: Alt-market fallback, Corners O/U 2.5 fallback, DNB-emoji bug, BTTS, NRFI, Run Line main-lijn, 1st Half scheiding, 60-min 3-way hockey, `bet.id` onafhankelijkheid, "1"/"2" value-conventie, en null-return bij onbekende markten.
+
+### Volg-upstappen voor user
+1. Deploy (auto via push).
+2. Eerst `POST /api/clv/recompute` met `{dryRun:true}` (admin) → zie verschilrapport.
+3. Daarna `{dryRun:false}` → schrijft nieuwe clv_pct + draait tuning.
+
 ## [10.7.14] - 2026-04-14
 
 ### Fixed (paired-devig pairing conventie)

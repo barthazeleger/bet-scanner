@@ -642,24 +642,55 @@ test('JWT secret is required (env check pattern)', () => {
 console.log('\n  Market Detection:');
 
 test('detectMarket identifies home correctly', () => {
-  // Copy of detectMarket from server.js
-  function detectMarket(markt) {
-    const m = markt.toLowerCase();
-    if (m.includes('wint') || m.includes('winner') || m.includes('home') || m.includes('thuis')) {
-      if (m.includes('✈️') || m.includes('away') || m.includes('uit') || m.match(/→.*away/)) return 'away';
-      return 'home';
-    }
-    if (m.includes('gelijkspel') || m.includes('draw') || m.includes('x2') || m.includes('1x')) return 'draw';
-    if (m.includes('over') || m.includes('>')) return 'over';
-    if (m.includes('under') || m.includes('<')) return 'under';
-    return 'other';
-  }
+  // Gebruikt echte detectMarket uit lib/model-math.js (niet een lokale kopie).
   assert.strictEqual(detectMarket('Ajax wint'), 'home');
   assert.strictEqual(detectMarket('✈️ PSV wint'), 'away');
   assert.strictEqual(detectMarket('Gelijkspel'), 'draw');
   assert.strictEqual(detectMarket('Over 2.5 goals'), 'over');
   assert.strictEqual(detectMarket('Under 2.5 goals'), 'under');
-  assert.strictEqual(detectMarket('BTTS Ja'), 'other');
+});
+
+// v10.7.20: split "other" bucket in BTTS/DNB/DC/Spread/NRFI/TeamTotal
+test('detectMarket: BTTS split (yes/no)', () => {
+  assert.strictEqual(detectMarket('BTTS Ja'), 'btts_yes');
+  assert.strictEqual(detectMarket('BTTS Yes'), 'btts_yes');
+  assert.strictEqual(detectMarket('BTTS Nee'), 'btts_no');
+  assert.strictEqual(detectMarket('🛡️ BTTS No'), 'btts_no');
+});
+
+test('detectMarket: DNB home/away split', () => {
+  assert.strictEqual(detectMarket('🏠 DNB Wigan'), 'dnb_home');
+  assert.strictEqual(detectMarket('✈️ DNB Rotherham'), 'dnb_away');
+});
+
+test('detectMarket: Double Chance buckets', () => {
+  assert.strictEqual(detectMarket('Dubbele kans 1X'), 'dc_1x');
+  assert.strictEqual(detectMarket('Double Chance X2'), 'dc_x2');
+  // niet "1X2" (3-way ML); wel "1X"
+  assert.notStrictEqual(detectMarket('1X2 Home'), 'dc_1x');
+});
+
+test('detectMarket: Spread/Run Line/Puck Line', () => {
+  assert.strictEqual(detectMarket('🏠 Dodgers -1.5 Run Line'), 'spread_home');
+  assert.strictEqual(detectMarket('✈️ Vegas +1.5 Puck Line'), 'spread_away');
+  assert.strictEqual(detectMarket('Ajax -1 Handicap'), 'spread_home');
+});
+
+test('detectMarket: NRFI/YRFI baseball', () => {
+  assert.strictEqual(detectMarket('NRFI'), 'nrfi');
+  assert.strictEqual(detectMarket('No Run First Inning'), 'nrfi');
+  assert.strictEqual(detectMarket('YRFI'), 'yrfi');
+  assert.strictEqual(detectMarket('Yes Run First Inning'), 'yrfi');
+});
+
+test('detectMarket: Team totals', () => {
+  assert.strictEqual(detectMarket('Home team total over 1.5'), 'team_total_over');
+  assert.strictEqual(detectMarket('Away team total under 2.5'), 'team_total_under');
+});
+
+test('detectMarket: onbekende markt blijft "other" (geen regressie)', () => {
+  assert.strictEqual(detectMarket('Exotic Prop XYZ'), 'other');
+  assert.strictEqual(detectMarket(''), 'other');
 });
 
 test('EP bucket weights have valid defaults', () => {
@@ -2345,6 +2376,128 @@ test('fairProb als function: per-point devigged consensus werkt', () => {
   // -1.5 edge = 0.47*2.17-1 = 0.020 (boven minEdge 0.01)
   // -2.5 edge = 0.30*3.50-1 = 0.050 (hoger, zou moeten winnen)
   assert.strictEqual(result.point, -2.5, 'beste edge across point-groups wint');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CLV · resolveOddFromBookie (market-matching) regression tests
+// ═══════════════════════════════════════════════════════════════════════════════
+// Waarom: v10.7.20 fix. Oude fetchCurrentOdds matchte markten te los met
+// .includes('over'/'winner'/etc.), en hitte zo Alt/Corners/Team totals of
+// catchte DNB als ML via emoji. Dit veroorzaakte foute CLV% (o.a. Wigan 0%
+// waar echte waarde +16.6% was, en Chesterfield -2.56% waar echte waarde
+// +3.8% was). Deze tests lock de strict matching.
+const { resolveOddFromBookie } = require('./lib/clv-match');
+
+test('CLV: Match Winner strict match — geen Alt Winner fallback', () => {
+  const bk = { name: 'Unibet', bets: [
+    { id: 99, name: 'Alt Winner 1st Half', values: [{ value: 'Home', odd: '3.10' }, { value: 'Away', odd: '4.00' }] },
+    { id: 1,  name: 'Match Winner',        values: [{ value: 'Home', odd: '1.58' }, { value: 'Draw', odd: '3.80' }, { value: 'Away', odd: '5.60' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, '🏠 Wigan wint');
+  assert.strictEqual(odd, 1.58, 'moet Match Winner Home 1.58 pakken, niet Alt 3.10');
+});
+
+test('CLV: O/U 2.5 main goals — geen Corners O/U 2.5 fallback', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 200, name: 'Corners Over/Under',      values: [{ value: 'Over 2.5',  odd: '1.95' }, { value: 'Under 2.5', odd: '1.90' }] },
+    { id: 5,   name: 'Goals Over/Under',        values: [{ value: 'Over 2.5',  odd: '1.83' }, { value: 'Under 2.5', odd: '1.97' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, 'Over 2.5');
+  assert.strictEqual(odd, 1.83, 'moet Goals Over 2.5 pakken (1.83), niet Corners (1.95)');
+});
+
+test('CLV: O/U skip alt-lines ook met dezelfde line-waarde', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 201, name: 'Alt Total Goals', values: [{ value: 'Over 2.5', odd: '2.05' }, { value: 'Under 2.5', odd: '1.80' }] },
+    { id: 5,   name: 'Over/Under',      values: [{ value: 'Over 2.5', odd: '1.83' }, { value: 'Under 2.5', odd: '1.97' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, 'Over 2.5');
+  assert.strictEqual(odd, 1.83, 'main Over/Under wint van Alt Total');
+});
+
+test('CLV: DNB check loopt VOOR ML (emoji-vangnet bug fix)', () => {
+  const bk = { name: 'Unibet', bets: [
+    { id: 1,  name: 'Match Winner', values: [{ value: 'Home', odd: '2.10' }, { value: 'Draw', odd: '3.40' }, { value: 'Away', odd: '3.60' }] },
+    { id: 12, name: 'Draw No Bet',  values: [{ value: 'Home', odd: '1.85' }, { value: 'Away', odd: '2.95' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, '🏠 DNB Wigan');
+  assert.strictEqual(odd, 1.85, 'DNB Home 1.85, niet ML Home 2.10');
+});
+
+test('CLV: BTTS Yes vs No detectie', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 8, name: 'Both Teams To Score', values: [{ value: 'Yes', odd: '1.75' }, { value: 'No', odd: '2.05' }] },
+  ]};
+  assert.strictEqual(resolveOddFromBookie(bk, 'BTTS Yes'), 1.75);
+  assert.strictEqual(resolveOddFromBookie(bk, 'BTTS Nee'), 2.05);
+});
+
+test('CLV: NRFI baseball market', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 50, name: '1st Inning Run',  values: [{ value: 'Yes', odd: '2.10' }, { value: 'No', odd: '1.70' }] },
+  ]};
+  assert.strictEqual(resolveOddFromBookie(bk, 'NRFI'), 1.70, 'NRFI → No 1.70');
+  assert.strictEqual(resolveOddFromBookie(bk, 'YRFI'), 2.10, 'YRFI → Yes 2.10');
+});
+
+test('CLV: Run Line spread baseball strict main-lijn', () => {
+  const bk = { name: 'Unibet', bets: [
+    { id: 60, name: 'Alt Run Line',   values: [{ value: 'Home -2.5', odd: '4.50' }, { value: 'Home -1.5', odd: '2.80' }] },
+    { id: 61, name: 'Run Line',       values: [{ value: 'Home -1.5', odd: '2.17' }, { value: 'Away +1.5', odd: '1.68' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, 'Braves -1.5 handicap');
+  assert.strictEqual(odd, 2.17, 'main Run Line 2.17 (niet Alt 2.80)');
+});
+
+test('CLV: 1st Half O/U blijft half-markt, raakt main niet', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 5,   name: 'Goals Over/Under',     values: [{ value: 'Over 2.5', odd: '1.83' }, { value: 'Under 2.5', odd: '1.97' }] },
+    { id: 100, name: '1st Half Over/Under',  values: [{ value: 'Over 0.5', odd: '1.55' }, { value: 'Under 0.5', odd: '2.40' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, '1st half Over 0.5');
+  assert.strictEqual(odd, 1.55, '1H O/U matches halfBet niet main');
+});
+
+test('CLV: 60-min 3-way hockey (regulation)', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 1,   name: 'Winner',           values: [{ value: 'Home', odd: '1.70' }, { value: 'Away', odd: '2.20' }] },
+    { id: 150, name: '3Way Result 60m',   values: [{ value: 'Home', odd: '2.05' }, { value: 'Draw', odd: '3.90' }, { value: 'Away', odd: '2.60' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, '🏠 Vegas wint 🕐 60-min');
+  assert.strictEqual(odd, 2.05, '60-min home uit 3-way bet, niet 2-way Winner');
+});
+
+test('CLV: draws zonder "no bet" in markt matchen Match Winner Draw', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 1,  name: 'Match Winner', values: [{ value: 'Home', odd: '1.90' }, { value: 'Draw', odd: '3.50' }, { value: 'Away', odd: '4.20' }] },
+    { id: 12, name: 'Draw No Bet',  values: [{ value: 'Home', odd: '1.55' }, { value: 'Away', odd: '2.80' }] },
+  ]};
+  assert.strictEqual(resolveOddFromBookie(bk, 'Gelijkspel'), 3.50, 'Draw → Match Winner Draw');
+});
+
+test('CLV: INVARIANT — bet.id nummering niet relied upon (name match)', () => {
+  // baseball api-sports gebruikt andere bet.id; name-match moet blijven werken
+  const bk = { name: 'Unibet', bets: [
+    { id: 777, name: 'Match Winner', values: [{ value: 'Home', odd: '1.95' }, { value: 'Away', odd: '1.90' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, '✈️ Dodgers wint');
+  assert.strictEqual(odd, 1.90, 'name-based match werkt ongeacht bet.id nummer');
+});
+
+test('CLV: ML "1"/"2" value-conventie ook geaccepteerd', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 1, name: 'Match Odds', values: [{ value: '1', odd: '1.80' }, { value: 'X', odd: '3.40' }, { value: '2', odd: '4.10' }] },
+  ]};
+  assert.strictEqual(resolveOddFromBookie(bk, '🏠 Wint'), 1.80);
+  assert.strictEqual(resolveOddFromBookie(bk, '✈️ Wint'), 4.10);
+});
+
+test('CLV: onbekende markt → null (geen silent fallback)', () => {
+  const bk = { name: 'Bet365', bets: [
+    { id: 1, name: 'Match Winner', values: [{ value: 'Home', odd: '1.80' }] },
+  ]};
+  const odd = resolveOddFromBookie(bk, 'Exotic Market XYZ');
+  assert.strictEqual(odd, null, 'onbekende markt returnt null');
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
