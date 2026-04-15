@@ -3232,7 +3232,14 @@ function doSearch() {
           <div style="font-size:10.5px;color:var(--muted)">kans</div>
         </div>
       </div>
-      ${p.reason ? `<div class="reason-box">📊 ${p.reason}</div>` : ''}`;
+      ${p.reason ? (() => {
+        const narrative = escHtml(humanizePickReason(p) || '');
+        const safeReason = escHtml(p.reason);
+        return `<div class="reason-box">
+          ${narrative ? `<div style="font-style:italic;margin-bottom:6px;color:var(--text)">${narrative}</div>` : ''}
+          <div style="font-size:11px;color:var(--muted)">📊 ${safeReason}</div>
+        </div>`;
+      })() : ''}`;
     out.appendChild(div);
   });
 }
