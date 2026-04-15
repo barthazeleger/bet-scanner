@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.6';
+const APP_VERSION    = '10.8.7';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -10860,6 +10860,52 @@ async function evaluateActionableTodos() {
       });
     }
   } catch {}
+
+  // v10.8.7: actionable alerts — unit-increase + bookie-spreid bij groeiende bankroll
+  try {
+    const users = _usersCache || [];
+    const admin = users.find(u => u.role === 'admin');
+    if (admin) {
+      const ue = admin.settings?.unitEur || UNIT_EUR;
+      const { stats } = await readBets(admin.id);
+      const bankroll = stats?.bankroll || START_BANKROLL;
+      // Recommended unit per safe-ladder rule
+      const safeRule = ue < 100 ? 0.10 : ue < 300 ? 0.05 : ue < 500 ? 0.03 : 0.02;
+      const recommendedUnit = Math.max(1, Math.round(bankroll * safeRule));
+
+      // Unit-increase alert: als bankroll groei zo'n unit-bump rechtvaardigt
+      if (recommendedUnit > ue * 1.25 && bankroll >= 300) {
+        todos.push({
+          type: 'unit_increase',
+          title: `💰 Tijd om unit te verhogen: €${ue} → €${recommendedUnit}`,
+          body: `Bankroll groeide naar €${bankroll.toFixed(0)}. Volgens de ${(safeRule*100).toFixed(0)}%-regel (${ue<100?'aggressief':'safe ladder'}) is de aanbevolen unit-size nu €${recommendedUnit}.\n\nGa naar Settings en pas unitEur aan.`,
+        });
+      }
+
+      // Bookie-diversify alert: bij unit > €200 gebruik 2+ bookies
+      if (ue >= 200 || recommendedUnit >= 200) {
+        const prefBookies = (admin.settings?.preferredBookies || []).length;
+        if (prefBookies < 2) {
+          todos.push({
+            type: 'bookie_diversify',
+            title: `🛡️ Spreid over meerdere bookies (unit €${ue})`,
+            body: `Bij unit-size ≥€200 worden NL-bookies (Bet365/Unibet) snel verdacht. Single-bookie betting → limit binnen weken.\n\nMaak account bij minstens 2-3 bookies (Bet365, Unibet, BingoalNL) en zet ze als preferred in Settings. Roteer bets om onder de radar te blijven.`,
+          });
+        }
+      }
+
+      // Bookie-radar warning bij hoge unit
+      if (ue >= 500) {
+        todos.push({
+          type: 'cashout_advice',
+          title: `⚠️ Hoge unit (€${ue}) — overweeg cashout strategie`,
+          body: `Op €${ue}/unit ben je in "limit-zone" bij Bet365/Unibet (limit binnen dagen-weken op sharp markten). Strategieën:\n\n1. Spreid over 3+ bookies en houd elke account onder €300/bet\n2. Cash €${Math.round(bankroll * 0.30)} eraf bij elke 30% bankroll-groei (jouw eigen €3k-rule)\n3. Mix in Bet Builder picks om "recreational" te lijken\n4. Vermijd alleen sharp markten (Asian totals, lower-division corners)`,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('Actionable alerts evaluation failed:', e.message);
+  }
 
   // Insert als nog niet bestaat
   for (const todo of todos) {

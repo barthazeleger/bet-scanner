@@ -487,6 +487,7 @@
     </div>
     <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
       <button class="btn btn-ghost btn-sm inbox-filter active" data-filter="all" onclick="filterInbox('all',this)">Alles</button>
+      <button class="btn btn-ghost btn-sm inbox-filter" data-filter="action" onclick="filterInbox('action',this)" style="border:1px solid var(--accent);color:var(--accent);font-weight:700">🚨 Acties</button>
       <button class="btn btn-ghost btn-sm inbox-filter" data-filter="insight" onclick="filterInbox('insight',this)">💡 Inzichten</button>
       <button class="btn btn-ghost btn-sm inbox-filter" data-filter="recommendation" onclick="filterInbox('recommendation',this)">🎯 Advies</button>
       <button class="btn btn-ghost btn-sm inbox-filter" data-filter="milestone" onclick="filterInbox('milestone',this)">🏆 Milestones</button>
@@ -2149,19 +2150,30 @@ function renderProjections(data) {
   ];
   const horizons = [1, 3, 6, 12]; // months
 
-  // v10.8.2/.6: maand-review model. User herziet elke maand zijn unit:
-  // nieuwe unit = round(bankroll × 0.10). Stake = nieuwe_unit × avgUnits.
-  // Returns full timeline: [{month, bankroll, unit, stake, profit}]
-  const project = (effRoi) => {
-    const timeline = [{ month: 0, bankroll, unit: unitEur, stake: unitEur * assum.avgUnits, profit: 0 }];
+  // v10.8.2/.6/.7: maand-review model met optionele "safe ladder".
+  // - mode='aggressive': 10% rule (gevaarlijk bij hoge units)
+  // - mode='safe': variabele rule per unit-niveau:
+  //     unit < €100 → 10% rule (onder bookie radar)
+  //     €100-300   → 5%  (mainstream safe)
+  //     €300-500   → 3%
+  //     >€500       → 2%  (professioneel, lange-termijn)
+  const safeRulePct = (unit) => {
+    if (unit < 100) return 0.10;
+    if (unit < 300) return 0.05;
+    if (unit < 500) return 0.03;
+    return 0.02;
+  };
+  const project = (effRoi, mode = 'aggressive') => {
+    const timeline = [{ month: 0, bankroll, unit: unitEur, stake: unitEur * assum.avgUnits, profit: 0, rule: 0.10 }];
     let curBank = bankroll;
     let curUnit = unitEur;
     for (let m = 1; m <= 12; m++) {
       const stakePerBet = curUnit * assum.avgUnits;
       const monthProfit = betsPerMonth * stakePerBet * effRoi;
       curBank = +(curBank + monthProfit).toFixed(2);
-      const newUnit = Math.max(1, Math.round(curBank * 0.10));
-      timeline.push({ month: m, bankroll: curBank, unit: newUnit, stake: stakePerBet, profit: +monthProfit.toFixed(2) });
+      const rule = mode === 'safe' ? safeRulePct(curUnit) : 0.10;
+      const newUnit = Math.max(1, Math.round(curBank * rule));
+      timeline.push({ month: m, bankroll: curBank, unit: newUnit, stake: stakePerBet, profit: +monthProfit.toFixed(2), rule });
       curUnit = newUnit;
     }
     return timeline;
@@ -2170,15 +2182,24 @@ function renderProjections(data) {
   const fmt = (n) => '€' + Math.round(n).toLocaleString('nl-NL');
 
   // v10.8.1: per scenario — maandelijkse winst (eerste maand) + bankroll projectie
-  // v10.8.6: Pre-compute timelines per scenario (returns objects met bank/unit/profit per maand)
-  const timelines = scenarios.map(sc => ({ ...sc, timeline: project(sc.roiUsed) }));
+  // v10.8.6: Pre-compute timelines per scenario
+  // v10.8.7: + 'safe ladder' mode (variabele unit-rule)
+  const projMode = window._projMode || 'aggressive';
+  const timelines = scenarios.map(sc => ({ ...sc, timeline: project(sc.roiUsed, projMode) }));
 
   // Sectie 1: header met aannames
   const roiNote = totalSettled < REGRESSION_FULL_N
     ? ` · verwacht ROI <strong>${(roi*100).toFixed(1)}%</strong> (geblend met 5% prior, n=${totalSettled})`
     : ` · ROI <strong>${(roi*100).toFixed(1)}%</strong>`;
+  const modeLabel = projMode === 'safe'
+    ? 'safe ladder (10%→5%→3%→2% naarmate unit groeit)'
+    : '10%-rule (aggressief, blijft 10% van bankroll)';
   let html = `<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">
-    Aannames: <strong>${assum.betsPerDay}</strong> bets/dag (${betsPerMonth}/maand) · gemiddelde inzet <strong>${assum.avgUnits}U = ${fmt(avgStake)}</strong>${roiNote} · unit ge-reviewed maandelijks naar 10% van bankroll
+    Aannames: <strong>${assum.betsPerDay}</strong> bets/dag (${betsPerMonth}/maand) · gemiddelde inzet <strong>${assum.avgUnits}U = ${fmt(avgStake)}</strong>${roiNote} · unit-rule: <strong>${modeLabel}</strong>
+  </div>
+  <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+    <button onclick="_setProjMode('aggressive')" style="background:${projMode==='aggressive'?'var(--accent)':'var(--surface2)'};color:${projMode==='aggressive'?'#fff':'var(--text)'};border:1px solid var(--border);border-radius:14px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">⚡ Aggressief (10%)</button>
+    <button onclick="_setProjMode('safe')" style="background:${projMode==='safe'?'var(--accent)':'var(--surface2)'};color:${projMode==='safe'?'#fff':'var(--text)'};border:1px solid var(--border);border-radius:14px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">🛡️ Safe ladder</button>
   </div>`;
 
   // Sectie 2: maand-1 winst per scenario (3 cards)
@@ -2233,15 +2254,24 @@ function renderProjections(data) {
     <th style="text-align:right;padding:6px 4px">Maandwinst</th>
     <th style="text-align:right;padding:6px 4px">Cum. winst</th>
   </tr></thead><tbody>`;
+  // Bookie-radar levels (NL realiteit voor sharps op recreational accounts)
+  const radarLevel = (unit) =>
+    unit >= 1000 ? { icon: '🚨', label: 'Limit binnen dagen', col: '#dc2626' } :
+    unit >= 500  ? { icon: '⚠️',  label: 'Limit waarschijnlijk', col: '#ea580c' } :
+    unit >= 200  ? { icon: '👁️',  label: 'Algoritme kijkt mee', col: '#f59e0b' } :
+    unit >= 50   ? { icon: '🟡',  label: 'Op radar bij winning', col: '#eab308' } :
+    null;
   for (let m = 1; m <= 12; m++) {
     const row = activeSc.timeline[m];
     const cumProfit = row.bankroll - bankroll;
     const profitCol = row.profit >= 0 ? '#34d399' : '#f87171';
     const hits3k = row.profit >= 3000;
+    const radar = radarLevel(row.unit);
+    const radarHtml = radar ? `<span title="${radar.label}" style="color:${radar.col};margin-left:4px">${radar.icon}</span>` : '';
     html += `<tr style="border-bottom:1px solid var(--border);${hits3k?'background:rgba(52,211,153,0.08)':''}">
       <td style="padding:6px 0;font-weight:600">M${m}</td>
       <td style="text-align:right;padding:6px 4px;font-weight:700">${fmt(row.bankroll)}</td>
-      <td style="text-align:right;padding:6px 4px">€${row.unit}</td>
+      <td style="text-align:right;padding:6px 4px">€${row.unit}${radarHtml}</td>
       <td style="text-align:right;padding:6px 4px;color:var(--muted)">${fmt(row.stake)}</td>
       <td style="text-align:right;padding:6px 4px;font-weight:700;color:${profitCol}">${row.profit >= 0 ? '+' : ''}${fmt(row.profit)}</td>
       <td style="text-align:right;padding:6px 4px;color:var(--muted)">${cumProfit >= 0 ? '+' : ''}${fmt(cumProfit)}</td>
@@ -2257,6 +2287,12 @@ function renderProjections(data) {
       🎯 <strong>€3.000/maand bereikt in maand ${m3kIdx}</strong> · bankroll ${fmt(r.bankroll)} · unit €${r.unit}
     </div>`;
   }
+
+  // Bookie-radar legend
+  html += `<div style="margin-top:10px;font-size:10.5px;color:var(--muted);line-height:1.6">
+    <strong>Bookie-radar (NL):</strong> 🟡 €50+ op radar · 👁️ €200+ algoritme kijkt · ⚠️ €500+ limit waarschijnlijk · 🚨 €1000+ snel limit.
+    Boven €300 unit: spreid over Bet365, Unibet, BingoalNL.
+  </div>`;
 
   let tableHtml = html;
 
@@ -2282,6 +2318,11 @@ function renderProjections(data) {
 // v10.8.6: tab-switch handler voor projections maand-pad
 function _setProjTab(label) {
   window._projTab = label;
+  if (betData) renderProjections(betData);
+}
+// v10.8.7: aggressive vs safe-ladder mode
+function _setProjMode(mode) {
+  window._projMode = mode;
   if (betData) renderProjections(betData);
 }
 
@@ -4156,6 +4197,8 @@ function renderInboxFeed(log) {
   // Map oude types naar nieuwe categorieën voor filtering
   const typeCategory = t => {
     if (t === 'milestone') return 'milestone';
+    // v10.8.7: action_required = belangrijke meldingen waar user iets moet doen
+    if (t === 'action_required' || t === 'unit_increase' || t === 'bookie_diversify' || t === 'cashout_advice') return 'action';
     if (t === 'insight' || t === 'timing_insight' || t === 'clv_insight' || t === 'performance') return 'insight';
     if (t === 'recommendation' || t === 'upgrade_advice' || t === 'strategy') return 'recommendation';
     if (t === 'system' || t === 'sheets_slow' || t === 'api_warning') return 'system';
