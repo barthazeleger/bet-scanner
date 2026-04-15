@@ -2,6 +2,21 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.15] - 2026-04-15
+
+### Fixed
+- **Notificatie-badge "1" bleef hangen ondanks dat model-log gezien was**: `modelLogSeen` werd alleen geset vanuit `loadNotifications()` — openen van Info/Model-tab (`loadModelLog()`) updatete de seen-ts niet. Nu wordt de seen-ts geset op de meest recente model-update zodra `loadModelLog()` de items rendert, gevolgd door een directe `loadNotifications()` refresh.
+- **Analyzer respecteerde `preferredBookies` niet**: `/api/analyze` haalde picks uit `lastPrematchPicks` + scan history zonder user-bookie filter. Je kreeg dus een pick terug op William Hill terwijl je alleen Bet365/Unibet had. Nu filtert de endpoint eerst op user's bookies; als er alleen picks bestaan buiten je set geeft hij een expliciete waarschuwing + de pick-lijst aan welke bookies ze wel hadden.
+
+### Added
+- **Pure edge naast damped edge op pick card**: bij signaal-damping (bv. baseball moneyline ×0.28) leek "59% kans + 1.88 odds → edge +6.2%" raar, want pure EV-edge zou +11.9% zijn. Card toont nu "Edge +6,2% (pure 11,9%)" met tooltip die de damping uitlegt. Modal deed dit al (v10.8.11), card trok gelijk.
+- **Experimental signals tonen aantal gelogde bets + WR%**: naast ACTIEF/LOGGED-ONLY-badge zie je "N bets · WR X%" per signal, gekleurd op sample size (grijs <10 · geel 10-50 · groen ≥50). Data komt uit `/api/signal-analysis` (settled bets met signal-tracking).
+- **Odds drift scope toggle**: "Mijn bets" (default) filtert naar fixtures waar je zelf op hebt gelogd — voorheen toonde de view ook baseball games die je nooit aanraakte. "Alle fixtures" knop blijft beschikbaar voor brede data (meer samples per bucket). Endpoint accepteert `?scope=mine|all`.
+- **Cron heartbeat + scheduler-status**: elke cron-tik schrijft nu een `cron_tick` notificatie naar Supabase zodat je achteraf kan zien of de scheduler überhaupt vuurde. Nieuwe endpoint `/api/admin/scheduler-status` toont admin's geconfigureerde scan-tijden + volgende fire-time per slot + aantal actieve timers. Bedoeld om te onderscheiden tussen "scheduler stilstand" en "scan draaide maar tg()/push faalde" — relevant voor ontbrekende 21:00 notificaties.
+
+### Changed
+- Startup logt nu admin's scan-tijden + `scanEnabled` state zodat je in Render logs direct ziet welke tijden gepland staan.
+
 ## [10.8.14] - 2026-04-15
 
 ### Added

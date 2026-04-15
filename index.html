@@ -407,7 +407,13 @@
 
     <!-- v10.8.14: Odds drift / beste inzettijden (admin only) -->
     <div class="chart-card admin-only" style="grid-column:span 2;display:none">
-      <div class="chart-title">📉 Odds drift <span style="font-size:11px;color:var(--muted);font-weight:400">— wanneer was de prijs gemiddeld het beste?</span></div>
+      <div class="chart-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <span>📉 Odds drift <span style="font-size:11px;color:var(--muted);font-weight:400">— wanneer was de prijs gemiddeld het beste?</span></span>
+        <div style="display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:11px">
+          <button id="odds-drift-scope-mine" onclick="setOddsDriftScope('mine')" style="background:var(--accent);color:#fff;border:none;padding:4px 10px;cursor:pointer;font-weight:600">Mijn bets</button>
+          <button id="odds-drift-scope-all" onclick="setOddsDriftScope('all')" style="background:transparent;color:var(--muted);border:none;padding:4px 10px;cursor:pointer;font-weight:600">Alle fixtures</button>
+        </div>
+      </div>
       <div id="odds-drift-analysis" style="padding:8px 0"><div style="color:var(--muted);font-size:13px">Laden...</div></div>
     </div>
 
@@ -1455,16 +1461,28 @@ function renderPicks(el, picks) {
       : '';
 
     const edgeVal  = p.edge != null ? p.edge : null;
+    // v10.8.15: naast damped edge ook pure edge tonen wanneer ze meer dan 1%
+    // verschillen. Voorheen leek 59% kans + 1.88 odds = "edge +6.2%" raar
+    // (pure edge zou 11.9% zijn). De damping is bewust (per-sport strength
+    // multiplier, bv. baseball ×0.28), maar zonder pure edge verliest user
+    // de rauwe EV-intuïtie. Modal toonde dit al — card nu ook.
+    const pureEdgeVal = (edgeVal != null && p.prob != null && p.odd)
+      ? Math.round(((p.prob / 100) * p.odd - 1) * 100 * 10) / 10
+      : null;
+    const showPureEdge = pureEdgeVal != null && Math.abs(pureEdgeVal - edgeVal) > 1.0;
     // v10.7.22: escape narrative + raw reason om XSS te voorkomen. p.reason
     // komt weliswaar uit server-side gegenereerde string, maar als teamnamen
     // of referee-namen uit api-sports HTML-achtige tekens bevatten konden die
     // ongeëscaped in innerHTML landen.
     const narrative = p.reason ? escHtml(humanizePickReason(p) || '') : '';
     const safeReason = p.reason ? escHtml(p.reason) : '';
+    const edgeHtml = edgeVal != null
+      ? `<span style="color:var(--yellow);font-weight:600" title="${showPureEdge?`Gekalibreerde edge ${edgeVal}% — pure EV-edge (prob × odds − 1) is ${pureEdgeVal}%. Damping beschermt tegen onvolwassen markten.`:`Edge t.o.v. markt`}">Edge +${edgeVal}%${showPureEdge?` <span style="opacity:.55;font-weight:400">(pure ${pureEdgeVal}%)</span>`:''}</span>`
+      : '';
     const reasonHtml = p.reason
       ? `<div class="pick-reason" id="reason-${i}" style="display:none;font-size:11.5px;color:var(--text);margin-top:8px;line-height:1.6;border-top:1px solid var(--border);padding-top:8px">
            ${narrative ? `<div style="font-size:12px;color:var(--text);margin-bottom:8px;font-style:italic">${narrative}</div>` : ''}
-           <div style="font-size:10.5px;color:var(--muted)">${edgeVal!=null?`<span style="color:var(--yellow);font-weight:600">Edge +${edgeVal}%</span> · `:''}${safeReason}</div>
+           <div style="font-size:10.5px;color:var(--muted)">${edgeHtml ? edgeHtml + ' · ' : ''}${safeReason}</div>
          </div>
          <button class="reason-toggle" onclick="toggleReason(${i})" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--muted);padding:4px 0 0 0">▼ analyse</button>`
       : '';
@@ -2161,14 +2179,29 @@ function clearForm() {
 // v10.8.14: Odds drift / beste inzettijden — haalt /api/admin/odds-drift.
 // Toont per sport een tabel met avg drift per uur-vóór-kickoff bucket.
 // Negatieve drift = odds waren vroeger HOGER dan close (vroege entry beter).
+// v10.8.15: scope toggle — 'mine' (gelogd) default, 'all' voor brede data.
+let _oddsDriftScope = 'mine';
+function setOddsDriftScope(scope) {
+  _oddsDriftScope = scope === 'all' ? 'all' : 'mine';
+  const btnMine = document.getElementById('odds-drift-scope-mine');
+  const btnAll  = document.getElementById('odds-drift-scope-all');
+  if (btnMine && btnAll) {
+    const active = 'background:var(--accent);color:#fff;border:none;padding:4px 10px;cursor:pointer;font-weight:600';
+    const idle   = 'background:transparent;color:var(--muted);border:none;padding:4px 10px;cursor:pointer;font-weight:600';
+    btnMine.style.cssText = _oddsDriftScope === 'mine' ? active : idle;
+    btnAll.style.cssText  = _oddsDriftScope === 'all'  ? active : idle;
+  }
+  loadOddsDrift();
+}
 async function loadOddsDrift() {
   const el = document.getElementById('odds-drift-analysis');
   if (!el) return;
   try {
-    const r = await api('/api/admin/odds-drift?days=14').then(r => r?.json());
+    const r = await api(`/api/admin/odds-drift?days=14&scope=${_oddsDriftScope}`).then(r => r?.json());
     if (!r || r.error) { el.innerHTML = '<div style="color:var(--muted);font-size:13px">Niet beschikbaar.</div>'; return; }
     if (!r.buckets?.length) {
-      el.innerHTML = `<div style="color:var(--muted);font-size:13px">Geen odds-drift data (nog) in laatste ${r.days} dagen. Odds polling draait elke 90 min; data accumuleert naarmate fixtures settlen.</div>`;
+      const emptyNote = r.note || `Geen odds-drift data (nog) in laatste ${r.days} dagen. Odds polling draait elke 90 min; data accumuleert naarmate fixtures settlen.`;
+      el.innerHTML = `<div style="color:var(--muted);font-size:13px">${escHtml(emptyNote)}</div>`;
       return;
     }
 
@@ -2185,8 +2218,9 @@ async function loadOddsDrift() {
     const driftColor = (v) => v == null ? 'var(--muted)' : v < -1 ? '#34d399' : v > 1 ? '#f87171' : 'var(--muted)';
     const driftLabel = (v, n) => v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%<br><span style="font-size:10px;opacity:0.6">n=${n}</span>`;
 
+    const scopeLabel = r.scope === 'all' ? 'alle fixtures' : 'alleen jouw gelogde bets';
     let html = `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-      Window: ${r.days} dagen · ${r.totalFixtures} fixtures · ${r.totalSnapshots} snapshots.<br>
+      Window: ${r.days} dagen · ${r.totalFixtures} fixtures (${scopeLabel}) · ${r.totalSnapshots} snapshots.<br>
       <span style="color:#34d399">groen</span> = odds waren vroeger hoger (vroege entry beter) · <span style="color:#f87171">rood</span> = later beter.
     </div>
     <div style="overflow-x:auto">
@@ -3845,6 +3879,16 @@ async function loadModelLog() {
     }
     const hasNew = d.modelLog.some(e => new Date(e.date).getTime() > seenTs);
     badge.style.display = hasNew ? 'inline-block' : 'none';
+    // v10.8.15: mark model updates as seen zodra user ze zichtbaar heeft in de
+    // Info/Model-tab. Voorheen updatete alleen loadNotifications() de seen-ts,
+    // waardoor de 🔔-badge een "1" bleef tonen ondanks dat de update al in het
+    // Info-tab log zichtbaar was. Refresh daarna ook loadNotifications zodat de
+    // badge direct leegt.
+    if (hasNew) {
+      const latestTs = Math.max(...d.modelLog.map(e => new Date(e.date).getTime() || 0));
+      localStorage.setItem('modelLogSeen', String(latestTs));
+      if (typeof loadNotifications === 'function') loadNotifications();
+    }
 
     body.innerHTML = d.modelLog.map(e => {
       const hasMult = typeof e.oldMult === 'number' && typeof e.newMult === 'number';
@@ -4188,9 +4232,18 @@ async function loadModelTab() {
   loadSignalPerformance();
 }
 
-function loadExperimentalSignals() {
+async function loadExperimentalSignals() {
   const el = document.getElementById('experimental-signals');
   if (!el) return;
+  // v10.8.15: naast state en weight ook aantal gelogde bets per signal tonen.
+  // Bron: /api/signal-analysis (settled bets). Experimentele signals met 0
+  // settled bets krijgen "nog geen data"; signals met data krijgen "n bets ·
+  // WR%". Dit geeft intuïtief zicht op welke signals al volwassen zijn.
+  let sigCounts = {};
+  try {
+    const r = await api('/api/signal-analysis').then(x => x?.json());
+    for (const s of (r?.signals || [])) sigCounts[s.name] = { n: s.betsCount, hr: Math.round((s.hitRate || 0) * 100) };
+  } catch {}
   // Catalog van experimentele signalen — uitbreiden bij nieuwe scaffolding.
   const catalog = [
     { name: 'nba_rest_days_diff', sport: '🏀 NBA', desc: 'Rest-days verschil home vs away (1/2/3/4+)', since: 'v10.4.1', activationFormula: '0.8% per dag verschil × weight' },
@@ -4226,12 +4279,18 @@ function loadExperimentalSignals() {
     const activated = typeof w === 'number' && w > 0;
     const dotCol = activated ? 'var(--green)' : 'var(--muted)';
     const stateLabel = activated ? `ACTIEF · weight ${w.toFixed(2)}` : 'LOGGED-ONLY · weight 0';
+    const sc = sigCounts[c.name];
+    const countLabel = sc
+      ? `${sc.n} bet${sc.n === 1 ? '' : 's'} · WR ${sc.hr}%`
+      : 'nog geen data';
+    const countCol = sc ? (sc.n >= 50 ? 'var(--green)' : sc.n >= 10 ? 'var(--yellow)' : 'var(--muted)') : 'var(--muted)';
     return `<div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);align-items:flex-start">
       <span style="font-size:18px;flex-shrink:0">${c.sport.split(' ')[0]}</span>
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap">
           <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px;font-weight:600">${c.name}</code>
           <span style="font-size:11px;color:var(--muted)">${c.sport} · ${c.since}</span>
+          <span style="font-size:10.5px;font-weight:600;color:${countCol};background:rgba(255,255,255,0.04);padding:1px 6px;border-radius:4px" title="Aantal afgewikkelde bets waar dit signaal in voorkwam, en win-rate">${countLabel}</span>
         </div>
         <div style="font-size:12px;color:var(--text);margin-bottom:3px">${c.desc}</div>
         <div style="font-size:11px;color:var(--muted)">Formule bij activatie: ${c.activationFormula}</div>
