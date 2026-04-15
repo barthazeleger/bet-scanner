@@ -2122,8 +2122,17 @@ function renderProjections(data) {
   }
 
   const bankroll = s.bankroll || 500;
-  const roi = s.roi || 0; // fraction
+  const observedRoi = s.roi || 0; // fraction
+  const totalSettled = settled.length;
   const unitEur = userSettings?.unitEur || 25;
+  // v10.8.5: regression-to-mean op ROI om kleine-sample bias te dempen.
+  // Sharp bettors halen ~5-7% long-term, 10% is world-class. 15%+ over 27
+  // bets is bijna zeker run-good. We blenden observed met prior=5%.
+  // Weight = min(N/100, 1): pas bij 100+ bets vol vertrouwen op observed.
+  const PRIOR_ROI = 0.05;
+  const REGRESSION_FULL_N = 100;
+  const weight = Math.min(totalSettled / REGRESSION_FULL_N, 1);
+  const roi = weight * observedRoi + (1 - weight) * PRIOR_ROI;
   // v10.8.1: aannames verwerken. Default: 3 bets/dag (=90/maand) + 0.75U avg.
   // v10.8.2: BELANGRIJKE fix — projectie is LINEAIR met fixed unit-size, NIET
   // compounded. Bij vaste 0.75U=€18.75 ongeacht bankroll-groei, is profit
@@ -2166,8 +2175,11 @@ function renderProjections(data) {
   const monthlyProfit = (factor) => betsPerMonth * avgStake * roi * factor;
 
   // Sectie 1: maandelijkse winst verwacht (eerste maand bij huidige unit)
+  const roiNote = totalSettled < REGRESSION_FULL_N
+    ? ` · effectieve ROI <strong>${(roi*100).toFixed(1)}%</strong> (geblend met 5% prior wegens kleine sample n=${totalSettled})`
+    : ` · ROI <strong>${(roi*100).toFixed(1)}%</strong>`;
   let monthlyHtml = `<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">
-    Aannames: <strong>${assum.betsPerDay}</strong> bets/dag (${betsPerMonth}/maand) · gemiddelde inzet <strong>${assum.avgUnits}U = ${fmt(avgStake)}</strong> · huidige ROI ${(roi*100).toFixed(1)}% · unit ge-reviewed maandelijks naar 10% van bankroll
+    Aannames: <strong>${assum.betsPerDay}</strong> bets/dag (${betsPerMonth}/maand) · gemiddelde inzet <strong>${assum.avgUnits}U = ${fmt(avgStake)}</strong>${roiNote} · unit ge-reviewed maandelijks naar 10% van bankroll
   </div>`;
   monthlyHtml += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">';
   for (const sc of scenarios) {
