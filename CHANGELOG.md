@@ -2,6 +2,42 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.8] - 2026-04-15
+
+### Fixed (code review v10.8.0-7 findings)
+- **Notification dedup**: was alleen op `type` → unit_increase met verschillende doelwitten werd silent gesuppressed. Nu dedup op `type+title+30d-window` → user krijgt geüpdate alert als doelwit verandert.
+- **Backfill-signals mutex**: `_backfillSignalsInProgress` voorkomt concurrent calls die race conditions / dubbele writes opleveren.
+- **€3k milestone off-by-one**: findIndex met `i > 0` filter zodat baseline (M0) niet als milestone telt.
+- **localStorage dismiss expiry**: dismissed model-alerts hadden onbounded growth + cap=500 zou silent oude verwijderen. Nu `{key, ts}` format met **30-dag auto-cleanup** + cap=1000. Migratie van legacy flat-array format.
+- **XSS escape op _setProjTab label**: voorheen alleen single-quote escape, nu ook double-quote.
+- **Bookie-radar threshold €150** toegevoegd tussen €50 en €200 (Bet365 NL begint hier al te kijken).
+
+### Added (Vooruitzichten + Acties — v10.8.6/.7)
+- **Maand-voor-maand timeline tabel** met clickable scenario tabs (Pess/Verwacht/Opt). Toont per maand: bankroll | unit | stake/bet | maandwinst | cum. winst.
+- **€3k milestone marker**: highlight in groen + banner zodra eerste maand €3k+ winst bereikt.
+- **Bookie-radar markers** in unit-kolom: 🟡 €50+ · 🟠 €150+ · 👁️ €200+ · ⚠️ €500+ · 🚨 €1000+
+- **Toggle Aggressief (10%) ↔ Safe ladder** mode. Safe ladder past unit-rule aan per niveau:
+  - <€100 → 10% rule (onder bookie radar)
+  - €100-300 → 5% (mainstream safe)
+  - €300-500 → 3%
+  - >€500 → 2% (professioneel)
+- **Inbox filter "🚨 Acties"** voor actionable alerts (highlighted met accent border).
+- **evaluateActionableTodos uitgebreid** met:
+  - `unit_increase` — bij groeiende bankroll volgens safe-ladder rule
+  - `bookie_diversify` — vanaf unit €200: spreid over 2-3 bookies
+  - `cashout_advice` — vanaf unit €500: €3k-rule cashout strategie
+
+### Changed (regression-to-mean ROI in projections — v10.8.5)
+Sharp bettors halen long-term 5-7%, world-class 10%. 15%+ over <100 bets is bijna zeker run-good. Projection blendt nu observed met 5% prior:
+```
+weight = min(N/100, 1)
+effROI = weight × observed + (1-weight) × 0.05
+```
+Bij 27 bets met 15.3% observed → effective 7.79%. Disclaimer in UI: "geblend met 5% prior wegens kleine sample n=X".
+
+### Tests
+4 nieuwe regression tests: safe-ladder thresholds, bookie-radar levels, regression-to-mean blend math, dismissed-alerts expiry. Totaal **240 tests, 0 failed** (was 235).
+
 ## [10.8.0] - 2026-04-15
 
 ### Added (Vooruitzichten / projections kaart op Data-pagina)

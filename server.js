@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.7';
+const APP_VERSION    = '10.8.8';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -8924,7 +8924,11 @@ app.get('/api/changelog', requireAdmin, (req, res) => {
 // POST /api/admin/backfill-signals — retroactief signals vullen voor bets
 // die ze missen. Match via fixture_id (of findGameId fallback) naar
 // pick_candidates tabel, neem signals van best-matching candidate.
+// v10.8.8: mutex om concurrent backfill calls te voorkomen
+let _backfillSignalsInProgress = false;
 app.post('/api/admin/backfill-signals', requireAdmin, async (req, res) => {
+  if (_backfillSignalsInProgress) return res.status(409).json({ error: 'Backfill al lopende, probeer over een minuut opnieuw' });
+  _backfillSignalsInProgress = true;
   try {
     const dryRun = req.body?.dryRun === true;
     // v10.8.0: DoS-cap — max 500 per call. User kan in batches draaien.
@@ -8997,6 +9001,8 @@ app.post('/api/admin/backfill-signals', requireAdmin, async (req, res) => {
   } catch (e) {
     console.error('backfill-signals error:', e);
     res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  } finally {
+    _backfillSignalsInProgress = false;
   }
 });
 
@@ -10907,11 +10913,15 @@ async function evaluateActionableTodos() {
     console.warn('Actionable alerts evaluation failed:', e.message);
   }
 
-  // Insert als nog niet bestaat
+  // v10.8.8: dedup op type+title (niet alleen type) zodat unit_increase met
+  // verschillende doelwit (€25→€38 vs €25→€100) NIET hetzelfde wordt geacht.
+  // Plus: skip insert als zelfde alert <30 dagen oud is om spam te voorkomen.
   for (const todo of todos) {
     try {
+      const since = new Date(Date.now() - 30 * 86400000).toISOString();
       const { data } = await supabase.from('notifications')
-        .select('id').eq('type', todo.type).limit(1);
+        .select('id, created_at').eq('type', todo.type).eq('title', todo.title)
+        .gte('created_at', since).limit(1);
       if (!data || !data.length) {
         await supabase.from('notifications').insert({
           type: todo.type,
@@ -10920,7 +10930,7 @@ async function evaluateActionableTodos() {
           read: false,
           user_id: null,
         });
-        console.log(`📋 Todo aangemaakt: ${todo.type}`);
+        console.log(`📋 Todo aangemaakt: ${todo.type} · ${todo.title}`);
       }
     } catch (e) { console.error('Todo insert fout:', e.message); }
   }

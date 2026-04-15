@@ -2240,7 +2240,8 @@ function renderProjections(data) {
   const activeTab = window._projTab || timelines[1].label;
   for (const sc of timelines) {
     const active = sc.label === activeTab;
-    html += `<button onclick="_setProjTab('${sc.label.replace(/'/g, "\\'")}')" style="background:${active?sc.col:'var(--surface2)'};color:${active?'#fff':'var(--text)'};border:1px solid var(--border);border-radius:14px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">${sc.label}</button>`;
+    const safeLabel = sc.label.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    html += `<button onclick="_setProjTab('${safeLabel}')" style="background:${active?sc.col:'var(--surface2)'};color:${active?'#fff':'var(--text)'};border:1px solid var(--border);border-radius:14px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">${sc.label}</button>`;
   }
   html += '</div>';
 
@@ -2255,10 +2256,13 @@ function renderProjections(data) {
     <th style="text-align:right;padding:6px 4px">Cum. winst</th>
   </tr></thead><tbody>`;
   // Bookie-radar levels (NL realiteit voor sharps op recreational accounts)
+  // v10.8.8: extra €150 threshold tussen €50 en €200 (ervaring: Bet365 NL
+  // begint hier al te kijken bij sharps).
   const radarLevel = (unit) =>
     unit >= 1000 ? { icon: '🚨', label: 'Limit binnen dagen', col: '#dc2626' } :
     unit >= 500  ? { icon: '⚠️',  label: 'Limit waarschijnlijk', col: '#ea580c' } :
     unit >= 200  ? { icon: '👁️',  label: 'Algoritme kijkt mee', col: '#f59e0b' } :
+    unit >= 150  ? { icon: '🟠',  label: 'Vroege flag mogelijk', col: '#fb923c' } :
     unit >= 50   ? { icon: '🟡',  label: 'Op radar bij winning', col: '#eab308' } :
     null;
   for (let m = 1; m <= 12; m++) {
@@ -2279,8 +2283,8 @@ function renderProjections(data) {
   }
   html += '</tbody></table></div>';
 
-  // €3k milestone
-  const m3kIdx = activeSc.timeline.findIndex(r => r.profit >= 3000);
+  // €3k milestone (skip baseline M0)
+  const m3kIdx = activeSc.timeline.findIndex((r, i) => i > 0 && r.profit >= 3000);
   if (m3kIdx > 0) {
     const r = activeSc.timeline[m3kIdx];
     html += `<div style="margin-top:8px;padding:8px 12px;background:rgba(52,211,153,0.1);border-left:3px solid #34d399;border-radius:6px;font-size:12px">
@@ -3565,26 +3569,41 @@ async function clearAllNotifs(e) {
   if (!confirm('Alle notificaties wissen?')) return;
   try {
     await api('/api/inbox-notifications', { method: 'DELETE' });
-    // v10.8.1: ook model-alerts dismiss (ze blijven in Model-tab)
+    // v10.8.1/.8: ook model-alerts dismiss met expiry-aware storage
     const allAlerts = notifAlerts || [];
-    const allKeys = allAlerts.map(a => a.date || a.id || a.msg).filter(Boolean);
-    const existing = JSON.parse(localStorage.getItem('dismissedModelAlerts') || '[]');
-    const merged = Array.from(new Set([...existing, ...allKeys])).slice(-500); // cap 500
-    localStorage.setItem('dismissedModelAlerts', JSON.stringify(merged));
+    const now = Date.now();
+    const newEntries = allAlerts.map(a => ({ key: a.date || a.id || a.msg, ts: now })).filter(x => x.key);
+    const existing = _readDismissedAlerts();
+    const seen = new Set(existing.map(x => x.key));
+    for (const e of newEntries) if (!seen.has(e.key)) existing.push(e);
+    _writeDismissedAlerts(existing);
     loadNotifications();
   } catch {}
 }
 
-// v10.8.1: dismiss single model alert (stored in localStorage, filtered in render)
+// v10.8.1/.8: dismiss single model alert. Stored als {key, ts} entries.
+// Auto-cleanup van >30d oude entries voorkomt unbounded growth.
+function _readDismissedAlerts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dismissedModelAlerts') || '[]');
+    // Migrate oude flat-array format naar {key, ts}
+    const now = Date.now();
+    const cutoff = now - 30 * 86400000;
+    const normalized = raw.map(x => typeof x === 'string' ? { key: x, ts: now } : x)
+      .filter(x => x && x.ts && x.ts > cutoff);
+    return normalized;
+  } catch { return []; }
+}
+function _writeDismissedAlerts(arr) {
+  try { localStorage.setItem('dismissedModelAlerts', JSON.stringify(arr.slice(-1000))); } catch {}
+}
 function dismissModelAlert(key, e) {
   if (e) { e.stopPropagation(); e.preventDefault(); }
   if (!key) return;
-  try {
-    const existing = JSON.parse(localStorage.getItem('dismissedModelAlerts') || '[]');
-    if (!existing.includes(key)) existing.push(key);
-    localStorage.setItem('dismissedModelAlerts', JSON.stringify(existing.slice(-500)));
-    loadNotifications();
-  } catch {}
+  const existing = _readDismissedAlerts();
+  if (!existing.find(x => x.key === key)) existing.push({ key, ts: Date.now() });
+  _writeDismissedAlerts(existing);
+  loadNotifications();
 }
 
 async function loadNotifications() {
@@ -3596,11 +3615,8 @@ async function loadNotifications() {
     ]);
 
     // Calibration alerts (old source)
-    // v10.8.1: filter dismissed model updates (localStorage).
-    // Ze blijven zichtbaar in Model-tab inbox (modelLog), hier weg.
-    const dismissedRaw = localStorage.getItem('dismissedModelAlerts') || '[]';
-    let dismissedSet = new Set();
-    try { dismissedSet = new Set(JSON.parse(dismissedRaw)); } catch {}
+    // v10.8.1/.8: filter dismissed model updates (localStorage met expiry).
+    const dismissedSet = new Set(_readDismissedAlerts().map(x => x.key));
     const allAlerts = calibResp?.alerts || [];
     notifAlerts = allAlerts.filter(a => !dismissedSet.has(a.date || a.id || a.msg));
     const seenTs = parseInt(localStorage.getItem('modelLogSeen') || '0');
