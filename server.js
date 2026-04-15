@@ -7036,7 +7036,13 @@ app.post('/api/prematch', (req, res) => {
       emit({ done: true, picks: safePicks }); res.end(); scanRunning = false;
       setPreferredBookies(null); // reset scan-wide filter
     })
-    .catch(err  => { emit({ error: 'Scan mislukt' }); res.end(); scanRunning = false; setPreferredBookies(null); });
+    .catch(err  => {
+      const detail = (err && (err.message || err.toString())) || 'unknown';
+      console.error('🔴 runPrematch crashed:', detail);
+      if (err?.stack) console.error(err.stack);
+      emit({ error: 'Scan mislukt', detail });
+      res.end(); scanRunning = false; setPreferredBookies(null);
+    });
 });
 
 // Live scan · SSE streaming
