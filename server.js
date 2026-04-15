@@ -153,7 +153,7 @@ const BOOTSTRAP_MIN_TOTAL_BETS = 100;
 //   100+ → base MIN_EDGE (proven market)
 function adaptiveMinEdge(sport, marktLabel, baseMinEdge) {
   if (Date.now() - _marketSampleCache.at > MARKET_SAMPLE_TTL_MS) {
-    refreshMarketSampleCounts().catch(() => {});
+    refreshMarketSampleCounts().catch(e => console.warn('Market samples refresh failed:', e.message));
   }
   const totalSettled = Object.values(_marketSampleCache.data).reduce((a, b) => a + b, 0);
   // Bootstrap: nog te weinig globale data om strict per-markt te gaan
@@ -630,7 +630,9 @@ async function loadSignalWeightsAsync() {
       _signalWeightsCache = data.weights;
       return _signalWeightsCache;
     }
-  } catch {}
+  } catch (e) {
+    console.warn('loadSignalWeightsAsync failed, using cached/default:', e.message);
+  }
   return loadSignalWeights();
 }
 
@@ -1720,7 +1722,9 @@ async function preFetchFootballFixtures(emit, today, tomorrow, dateFrom, dateTo)
       _footballFixturesCache[league.key] = filtered;
       if (filtered.length > 0) active.add(league.key);
       await sleep(60);
-    } catch {}
+    } catch (e) {
+      console.warn(`Pre-fetch fixtures failed voor ${league.key}:`, e.message);
+    }
   }
   emit({ log: `✅ Pre-fetch klaar: ${active.size}/${AF_FOOTBALL_LEAGUES.length} competities actief (${calls} calls)` });
   return active;
@@ -1797,7 +1801,9 @@ async function enrichWithApiSports(emit, activeSoccerKeys = null) {
       }
       afCache.teamStats[sportKey] = statsMap;
       await sleep(120); // respect rate limit
-    } catch {}
+    } catch (e) {
+      console.warn(`Standings fetch failed voor ${sportKey}:`, e.message);
+    }
   }
   emit({ log: `✅ ⚽ Standings voetbal: ${Object.keys(afCache.teamStats).length} competities geladen (${callsUsed} calls${skippedInactive ? `, ${skippedInactive} inactief geskipt` : ''})` });
 
@@ -1821,7 +1827,9 @@ async function enrichWithApiSports(emit, activeSoccerKeys = null) {
       }
       afCache.injuries[sportKey] = injMap;
       await sleep(120);
-    } catch {}
+    } catch (e) {
+      console.warn(`Injuries fetch failed voor ${sportKey}:`, e.message);
+    }
   }
   const injCount = Object.values(afCache.injuries).reduce((s,v) => s + Object.keys(v).length, 0);
   emit({ log: `✅ ⚽ Blessures voetbal: ${injCount} teams met geblesseerde spelers (${callsUsed} calls)` });
@@ -1847,7 +1855,9 @@ async function enrichWithApiSports(emit, activeSoccerKeys = null) {
         }
       }
       await sleep(120);
-    } catch {}
+    } catch (e) {
+      console.warn(`Referees fetch failed voor ${sportKey}:`, e.message);
+    }
   }
   emit({ log: `✅ ⚽ Scheidsrechters voetbal: ${Object.keys(afCache.referees).length} wedstrijden (${callsUsed} calls)` });
   emit({ log: `📊 Voetbal-enrichment klaar · ${callsUsed} calls (multi-sport data wordt per-league binnen elk sport-loop opgehaald)` });
@@ -5852,7 +5862,9 @@ async function runPrematch(emit) {
     } else if (cs.totalSettled >= 30 && roi2 > 0.10) {
       await tg(`🚀 ROI ${(roi2*100).toFixed(1)}% over ${cs.totalSettled} bets.\nOverweeg All Sports upgrade ($99/mnd) voor meer markten.`).catch(()=>{});
     }
-  } catch {}
+  } catch (e) {
+    console.warn('Unit uplevel / ROI-milestone Telegram notification failed:', e.message);
+  }
 
 
   // ── Wekelijkse portfolio-analyse (elke zondag of elke 7e scan) ───────────
@@ -6689,7 +6701,9 @@ app.get('/api/admin/v2/why-this-pick', requireAdmin, async (req, res) => {
           .sort((a, b) => Math.abs(b.magnitude_pct) - Math.abs(a.magnitude_pct))
           .slice(0, 5);
       }
-    } catch {}
+    } catch (e) {
+      console.warn('why-this-pick: signal parsing failed:', e.message);
+    }
 
     res.json({
       bet: { id: bet.bet_id, wedstrijd: bet.wedstrijd, markt: bet.markt, odds: bet.odds, uitkomst: bet.uitkomst, clv_pct: bet.clv_pct },
@@ -6958,7 +6972,9 @@ app.post('/api/prematch', (req, res) => {
       const prefs = me?.settings?.preferredBookies;
       setPreferredBookies(prefs);
       if (prefs?.length) emit({ log: `🏦 Edge-evaluatie op jouw bookies: ${prefs.join(', ')}` });
-    } catch {}
+    } catch (e) {
+      console.warn('Scan: user prefs load failed, scan loopt zonder filter:', e.message);
+    }
     return runPrematch(emit);
   })()
     .then(async footballPicks => {
@@ -7346,7 +7362,9 @@ async function schedulePreKickoffCheck(bet) {
         const fxId = bet.fixtureId || await findGameId(betSport, matchName);
         // strictBookie:true → geen stille fallback naar Bet365 bij mismatch
         currentOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip, { strictBookie: true });
-      } catch {}
+      } catch (e) {
+        console.warn(`Pre-kickoff odds fetch failed voor "${matchName}":`, e.message);
+      }
 
       // Beoordeling
       const time30 = new Date(kickoffMs).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone:'Europe/Amsterdam' });
@@ -8107,7 +8125,9 @@ app.post('/api/analyze', async (req, res) => {
           if (entry.picks) allPicks.push(...entry.picks);
         }
       }
-    } catch {}
+    } catch (e) {
+      console.warn('Scan history load failed:', e.message);
+    }
 
     // Find matching picks
     const matches = allPicks.filter(p => {
@@ -8233,7 +8253,9 @@ app.post('/api/analyze', async (req, res) => {
           return res.json({ error: 'Wedstrijd is al bezig. Pre-match analyse niet mogelijk.' });
         }
       }
-    } catch {}
+    } catch (e) {
+      console.warn('Analyze: live-status check failed:', e.message);
+    }
 
     // SECURITY: model-internals (reason, signals, kelly, ep) alleen voor admin.
     const isAdmin = req.user?.role === 'admin';
@@ -8283,7 +8305,9 @@ app.get('/api/admin/supabase-usage', requireAdmin, async (req, res) => {
     try {
       const { data } = await supabase.rpc('pg_database_size_bytes');
       if (typeof data === 'number') dbBytes = data;
-    } catch {}
+    } catch (e) {
+      console.warn('supabase-usage: pg_database_size_bytes RPC failed, using row-count fallback:', e.message);
+    }
     // Fallback: schat op basis van optelling van belangrijke tabellen (row counts × gemiddelde)
     const tables = [
       'bets', 'fixtures', 'odds_snapshots', 'feature_snapshots',
@@ -10020,7 +10044,9 @@ async function checkUnitSizeChange() {
     try {
       await tg(`💰 Unit baseline: €${UNIT_EUR} vanaf ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
       console.log(`💰 Unit baseline gelogd: €${UNIT_EUR}`);
-    } catch {}
+    } catch (tgErr) {
+      console.warn('Unit baseline Telegram send failed:', tgErr.message);
+    }
   }
 }
 
