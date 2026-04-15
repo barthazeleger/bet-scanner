@@ -24,7 +24,7 @@
   <div class="brand">
     <div class="brand-icon"><img src="/img/icon-app.png" alt="EdgePickr"></div>
     <div>
-      <div class="brand-name">EdgePickr</div>
+      <div class="brand-name">EdgePickr <span id="brand-version" style="font-size:10px;font-weight:500;color:var(--muted);margin-left:4px;vertical-align:middle"></span></div>
       <div class="brand-sub">Outsmart the bookmaker</div>
     </div>
   </div>
@@ -2109,6 +2109,7 @@ function clearForm() {
 
 // v10.8.0: Vooruitzichten (projections) — monthly compounded bankroll
 // projectie met 3 scenarios (pessimistisch/verwacht/optimistisch).
+// v10.8.1: configurable via window.projAssumptions — default 3 bets/dag + 0.75U
 function renderProjections(data) {
   const el = document.getElementById('projections-analysis');
   if (!el) return;
@@ -2123,17 +2124,11 @@ function renderProjections(data) {
   const bankroll = s.bankroll || 500;
   const roi = s.roi || 0; // fraction
   const unitEur = userSettings?.unitEur || 25;
-  // Estimate bets/week from last 30 days
-  const dayMs = 86400000;
-  const cutoff = Date.now() - 30 * dayMs;
-  const recentSettled = settled.filter(b => {
-    const m = (b.datum || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
-    if (!m) return false;
-    const ts = Date.parse(`${m[3]}-${m[2]}-${m[1]}`);
-    return isFinite(ts) && ts >= cutoff;
-  });
-  const betsPerMonth = Math.max(4, Math.round((recentSettled.length / 30) * 30)) || settled.length;
-  const avgStake = settled.reduce((sum, b) => sum + (b.inzet || 0), 0) / settled.length;
+  // v10.8.1: aannames verwerken. Default: 3 bets/dag (=90/maand) + 0.75U avg.
+  // User kan overschrijven via window.projAssumptions in console voor wat-als.
+  const assum = window.projAssumptions || { betsPerDay: 3, avgUnits: 0.75 };
+  const betsPerMonth = assum.betsPerDay * 30;
+  const avgStake = assum.avgUnits * unitEur;
   const stakePct = bankroll > 0 ? avgStake / bankroll : 0.02;
 
   // Monthly expected return per scenario: ROI × bets/month × stake-as-%-of-bankroll
@@ -2156,10 +2151,27 @@ function renderProjections(data) {
 
   const fmt = (n) => '€' + Math.round(n).toLocaleString('nl-NL');
 
-  // Table per horizon
-  let tableHtml = `<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">
-    Aannames: ${betsPerMonth} bets/maand · gemiddelde inzet ${fmt(avgStake)} · huidige ROI ${(roi*100).toFixed(1)}%
+  // v10.8.1: per scenario — maandelijkse winst (eerste maand) + bankroll projectie
+  const monthlyProfit = (factor) => betsPerMonth * avgStake * roi * factor;
+
+  // Sectie 1: maandelijkse winst verwacht
+  let monthlyHtml = `<div style="margin-bottom:12px;font-size:12px;color:var(--muted)">
+    Aannames: <strong>${assum.betsPerDay}</strong> bets/dag (${betsPerMonth}/maand) · gemiddelde inzet <strong>${assum.avgUnits}U = ${fmt(avgStake)}</strong> · huidige ROI ${(roi*100).toFixed(1)}%
   </div>`;
+  monthlyHtml += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">';
+  for (const sc of scenarios) {
+    const profit = monthlyProfit(sc.factor);
+    monthlyHtml += `<div style="background:var(--surface2);padding:10px;border-radius:8px;text-align:center;border-top:3px solid ${sc.col}">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">${sc.label}</div>
+      <div style="font-size:18px;font-weight:800;margin-top:4px;color:${sc.col}">${profit >= 0 ? '+' : ''}${fmt(profit)}</div>
+      <div style="font-size:10.5px;color:var(--muted);margin-top:2px">per maand verwacht</div>
+    </div>`;
+  }
+  monthlyHtml += '</div>';
+
+  // Table per horizon (cumulatief bankroll met compounding)
+  let tableHtml = monthlyHtml;
+  tableHtml += '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">📈 Bankroll projectie (met compounding)</div>';
   tableHtml += '<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">';
   tableHtml += `<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px 0">Scenario</th>${horizons.map(h => `<th style="text-align:right;padding:8px 6px">${h}m</th>`).join('')}</tr></thead><tbody>`;
   for (const sc of scenarios) {
@@ -3432,6 +3444,24 @@ async function clearAllNotifs(e) {
   if (!confirm('Alle notificaties wissen?')) return;
   try {
     await api('/api/inbox-notifications', { method: 'DELETE' });
+    // v10.8.1: ook model-alerts dismiss (ze blijven in Model-tab)
+    const allAlerts = notifAlerts || [];
+    const allKeys = allAlerts.map(a => a.date || a.id || a.msg).filter(Boolean);
+    const existing = JSON.parse(localStorage.getItem('dismissedModelAlerts') || '[]');
+    const merged = Array.from(new Set([...existing, ...allKeys])).slice(-500); // cap 500
+    localStorage.setItem('dismissedModelAlerts', JSON.stringify(merged));
+    loadNotifications();
+  } catch {}
+}
+
+// v10.8.1: dismiss single model alert (stored in localStorage, filtered in render)
+function dismissModelAlert(key, e) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  if (!key) return;
+  try {
+    const existing = JSON.parse(localStorage.getItem('dismissedModelAlerts') || '[]');
+    if (!existing.includes(key)) existing.push(key);
+    localStorage.setItem('dismissedModelAlerts', JSON.stringify(existing.slice(-500)));
     loadNotifications();
   } catch {}
 }
@@ -3445,7 +3475,13 @@ async function loadNotifications() {
     ]);
 
     // Calibration alerts (old source)
-    notifAlerts = calibResp?.alerts || [];
+    // v10.8.1: filter dismissed model updates (localStorage).
+    // Ze blijven zichtbaar in Model-tab inbox (modelLog), hier weg.
+    const dismissedRaw = localStorage.getItem('dismissedModelAlerts') || '[]';
+    let dismissedSet = new Set();
+    try { dismissedSet = new Set(JSON.parse(dismissedRaw)); } catch {}
+    const allAlerts = calibResp?.alerts || [];
+    notifAlerts = allAlerts.filter(a => !dismissedSet.has(a.date || a.id || a.msg));
     const seenTs = parseInt(localStorage.getItem('modelLogSeen') || '0');
     const unseenModel = notifAlerts.filter(a => a.modelUpdate && new Date(a.date).getTime() > seenTs);
     const urgentCount = notifAlerts.filter(a => a.type === 'error' || a.type === 'warn').length;
@@ -3490,14 +3526,17 @@ async function loadNotifications() {
       if (inboxNotifs.length) html += `<div style="padding:6px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-top:1px solid var(--border)">${t('notif_model_alerts')}</div>`;
       html += notifAlerts.map(a => {
         const isNew = a.modelUpdate && new Date(a.date).getTime() > seenTs;
-        const dateStr = a.date ? `<span style="font-size:10px;color:var(--muted);display:block;margin-top:2px">${new Date(a.date).toLocaleDateString('nl-NL')}</span>` : '';
-        return `<div class="notif-item ${a.type}" style="${isNew ? 'border-left:3px solid var(--accent)' : ''}">
+        const dateStr = a.date ? `<span style="font-size:10px;color:var(--muted);display:block;margin-top:2px">${new Date(a.date).toLocaleString('nl-NL', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})}</span>` : '';
+        const dismissKey = a.date || a.id || a.msg || '';
+        const safeDismissKey = String(dismissKey).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        return `<div class="notif-item ${a.type}" style="${isNew ? 'border-left:3px solid var(--accent)' : ''};display:flex;align-items:flex-start;gap:10px;position:relative">
           <span style="font-size:16px;line-height:1.3;flex-shrink:0">${a.icon}</span>
-          <div>
+          <div style="flex:1;min-width:0;padding-right:22px">
             <div>${isNew ? '<strong>' : ''}${escHtml(a.msg||'')}${isNew ? '</strong>' : ''}</div>
             ${dateStr}
             ${a.link ? `<a href="${a.link}" target="_blank" class="notif-link">${t('notif_more_info')}</a>` : ''}
           </div>
+          <button onclick="dismissModelAlert('${safeDismissKey}',event)" title="Verbergen uit dropdown (blijft in Model-tab)" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;padding:2px 6px;line-height:1;border-radius:4px">✕</button>
         </div>`;
       }).join('');
     }
@@ -3966,8 +4005,13 @@ async function loadAppVersion() {
     if (!d) return;
     const vs = document.getElementById('app-version-str');
     if (vs) vs.textContent = `versie ${d.version}`;
+    // v10.8.1: ook brand-header krijgt versie badge
+    const bv = document.getElementById('brand-version');
+    if (bv) bv.textContent = `v${d.version}`;
   } catch {}
 }
+// Trigger version load bij init zodat brand-header direct versie toont
+loadAppVersion();
 
 function renderInboxPerSport(list) {
   const el = document.getElementById('inbox-per-sport');
@@ -4039,9 +4083,10 @@ function renderInboxFeed(log) {
     return `<div style="display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--border);${isMilestone ? 'background:rgba(99,102,241,.04);margin:0 -16px;padding-left:16px;padding-right:16px;border-radius:8px' : ''}">
       <div style="font-size:20px;flex-shrink:0;width:28px;text-align:center">${icon}</div>
       <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
           <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--accent)">${label}</span>
           <span style="font-size:11px;color:var(--muted)">${ago}</span>
+          ${e.date ? `<span style="font-size:10.5px;color:var(--muted)" title="${new Date(e.date).toLocaleString('nl-NL')}">· ${new Date(e.date).toLocaleDateString('nl-NL', {day:'2-digit', month:'short'})} ${new Date(e.date).toLocaleTimeString('nl-NL', {hour:'2-digit', minute:'2-digit'})}</span>` : ''}
         </div>
         <div style="line-height:1.6;color:var(--text)">${escHtml(e.note || '—')}</div>
         ${e.oldMult != null ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">${e.oldMult} → ${e.newMult} ${e.winRate != null ? `· ${e.winRate}% win rate` : ''} ${e.n ? `· ${e.n} bets` : ''}</div>` : ''}
