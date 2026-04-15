@@ -1410,11 +1410,16 @@ function renderPicks(el, picks) {
       : '';
 
     const edgeVal  = p.edge != null ? p.edge : null;
-    const narrative = p.reason ? humanizePickReason(p) : '';
+    // v10.7.22: escape narrative + raw reason om XSS te voorkomen. p.reason
+    // komt weliswaar uit server-side gegenereerde string, maar als teamnamen
+    // of referee-namen uit api-sports HTML-achtige tekens bevatten konden die
+    // ongeëscaped in innerHTML landen.
+    const narrative = p.reason ? escHtml(humanizePickReason(p) || '') : '';
+    const safeReason = p.reason ? escHtml(p.reason) : '';
     const reasonHtml = p.reason
       ? `<div class="pick-reason" id="reason-${i}" style="display:none;font-size:11.5px;color:var(--text);margin-top:8px;line-height:1.6;border-top:1px solid var(--border);padding-top:8px">
            ${narrative ? `<div style="font-size:12px;color:var(--text);margin-bottom:8px;font-style:italic">${narrative}</div>` : ''}
-           <div style="font-size:10.5px;color:var(--muted)">${edgeVal!=null?`<span style="color:var(--yellow);font-weight:600">Edge +${edgeVal}%</span> · `:''}${p.reason}</div>
+           <div style="font-size:10.5px;color:var(--muted)">${edgeVal!=null?`<span style="color:var(--yellow);font-weight:600">Edge +${edgeVal}%</span> · `:''}${safeReason}</div>
          </div>
          <button class="reason-toggle" onclick="toggleReason(${i})" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--muted);padding:4px 0 0 0">▼ analyse</button>`
       : '';
@@ -2814,9 +2819,17 @@ function renderAnalysisResult(el, d) {
   html += '<span style="font-size:12px;font-weight:700;color:' + edgeCol + '">Edge ' + (d.edge > 0 ? '+' : '') + (d.edge || 0) + '%</span>';
   html += '</div>';
 
-  // Reason (admin only)
+  // Reason + humanized narrative (v10.7.22: analyzer krijgt dezelfde
+  // humanizePickReason als pick-card. Narrative bovenaan, raw reason
+  // als detail eronder.)
   if (d.reason) {
-    html += '<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:8px;line-height:1.6;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px">' + escHtml(d.reason) + '</div>';
+    const narrative = escHtml(humanizePickReason(d) || '');
+    html += '<div style="margin-top:8px;line-height:1.6;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px">';
+    if (narrative) {
+      html += '<div style="font-size:12px;color:var(--text);margin-bottom:6px;font-style:italic">' + narrative + '</div>';
+    }
+    html += '<div style="font-size:11px;color:rgba(255,255,255,0.5)">' + escHtml(d.reason) + '</div>';
+    html += '</div>';
   }
   if (d.signals && d.signals.length) {
     html += '<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:4px">Signals: ' + d.signals.map(s => escHtml(s)).join(', ') + '</div>';
@@ -2982,11 +2995,17 @@ function openModal(idx, labelHint) {
   }
   document.getElementById('m-datum').value = pad(datumDate.getDate())+'-'+pad(datumDate.getMonth()+1)+'-'+datumDate.getFullYear();
   document.getElementById('m-tijd').value  = modalPick.kickoff || '';
-  // Sport uit pick data
+  // Sport uit pick data. v10.7.22: directe mapping naar de Dutch option
+  // labels ipv via i18n — de <option> tags staan hardcoded in Dutch dus
+  // i18n-lookup voor sport_hockey/nfl/handball zou misskipten (geen NL key).
   const sportSel = document.getElementById('m-sport');
-  const sportNameMap = { football: t('sport_football'), basketball: t('sport_basketball'), hockey: t('sport_hockey'), baseball: t('sport_baseball'), 'american-football': t('sport_nfl'), handball: t('sport_handball'), tennis: 'Tennis' };
-  const sportLabel = sportNameMap[modalPick.sport] || t('sport_football');
-  for (const opt of sportSel.options) { if (opt.value === sportLabel) { opt.selected = true; break; } }
+  const sportOptionMap = {
+    football: 'Voetbal', basketball: 'Basketball', hockey: 'IJshockey',
+    baseball: 'Honkbal', 'american-football': 'American Football',
+    handball: 'Handball', tennis: 'Tennis',
+  };
+  const sportLabel = sportOptionMap[modalPick.sport] || 'Voetbal';
+  sportSel.value = sportLabel; // .value zet ook .selected en triggert UI-update
   // Bookmaker uit pick data
   const bkSel = document.getElementById('m-bookie');
   const bkName = (modalPick.bookie || 'Bet365').toLowerCase();
@@ -3005,9 +3024,11 @@ function updatePayout() {
   const stake  = +(units * (userSettings?.unitEur ?? 25)).toFixed(2);
   const total  = +(stake * odds).toFixed(2);
   const profit = +(total - stake).toFixed(2);
-  document.getElementById('payout-stake').textContent  = stake  ? `€${stake.toFixed(2)}`  : '€—';
-  document.getElementById('payout-total').textContent  = total  ? `€${total.toFixed(2)}`  : '€—';
-  document.getElementById('payout-profit').textContent = profit ? `+€${profit.toFixed(2)}` : '€—';
+  // v10.7.22: match tracker format — geen forced 2 decimalen bij hele getallen
+  const fmt = (n) => Number.isInteger(n) ? `€${n}` : `€${n.toFixed(2)}`;
+  document.getElementById('payout-stake').textContent  = stake  ? fmt(stake)  : '€—';
+  document.getElementById('payout-total').textContent  = total  ? fmt(total)  : '€—';
+  document.getElementById('payout-profit').textContent = profit ? (profit>0?'+':'')+fmt(profit) : '€—';
 
   // Edge herberekening — alleen tonen als odds AFWIJKEN van scanner
   const edgeEl = document.getElementById('payout-edge');
@@ -3036,22 +3057,33 @@ function updatePayout() {
   const edge = ((odds - fairOdds) / fairOdds * 100);
   const kelly = Math.max(0, (prob * (odds - 1) - (1 - prob)) / (odds - 1));
   const hk = kelly * 0.5;
-  let recUnits = hk < 0.015 ? 0 : hk < 0.03 ? 0.3 : hk < 0.05 ? 0.5 : hk < 0.07 ? 0.75 : hk < 0.10 ? 1.0 : 2.0;
-  // Cap: nooit hoger dan scanner advies (modal mist model-dampings)
-  recUnits = Math.min(recUnits, origUnits);
+  // v10.7.22: fijner getrapte unit-bands voor beter gedrag bij odds-daling.
+  let recUnits = hk < 0.015 ? 0
+               : hk < 0.025 ? 0.2
+               : hk < 0.035 ? 0.3
+               : hk < 0.045 ? 0.4
+               : hk < 0.055 ? 0.5
+               : hk < 0.070 ? 0.75
+               : hk < 0.090 ? 1.0
+               : hk < 0.120 ? 1.5
+               : 2.0;
+  // Cap: bij hogere odds (betere prijs) cappen op origUnits om niet over te
+  // recommenderen (scanner heeft model-dampings die we hier missen).
+  // Bij LAGERE odds NIET cappen — dan moet de recommendation juist dalen.
+  if (diff > 0) recUnits = Math.min(recUnits, origUnits);
   const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
   const diffCol = diff >= 0 ? '#34d399' : '#f87171';
 
   // Score: gebruik originele scanner score als basis, pas aan bij lagere edge
   const origScore = modalPick.score || (modalPick.kelly ? Math.min(10, Math.max(5, Math.round((modalPick.kelly - 0.015) / 0.135 * 5) + 5)) : 7);
+  const freshScore = hk > 0 ? Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5)) : 5;
 
   if (recUnits === 0) {
     edgeEl.innerHTML = `<div style="color:#f87171;font-size:12px;font-weight:600;margin-top:4px">⚠️ Odds ${odds.toFixed(2)} (${diffStr}) — edge onvoldoende, overweeg niet te plaatsen</div>`;
     document.getElementById('m-units').value = 0;
   } else {
-    // Score: lagere odds dan scanner = zelfde of lager, hogere odds = zelfde of hoger
-    const scoreVal = diff <= 0 ? Math.min(origScore, Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5)))
-                               : Math.max(origScore, Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5)));
+    // Score: lagere odds dan scanner = daalt (gebruik freshScore); hogere odds = max(orig, fresh)
+    const scoreVal = diff <= 0 ? Math.min(origScore, freshScore) : Math.max(origScore, freshScore);
     edgeEl.innerHTML = `<div style="font-size:12px;margin-top:4px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <span style="color:${diffCol};font-weight:700">Odds: ${origOdds} → ${odds.toFixed(2)} (${diffStr})</span>
       <span style="color:var(--muted)">Edge: ${edge.toFixed(1)}%</span>
@@ -3690,7 +3722,15 @@ function renderInboxPerSport(list) {
   const el = document.getElementById('inbox-per-sport');
   if (!el) return;
   if (!list || !list.length) { el.innerHTML = '<div style="color:var(--muted)">Nog geen settled bets.</div>'; return; }
-  const sNames = { football:t('sport_football_full'), basketball:t('sport_basketball_full'), hockey:t('sport_hockey_full'), baseball:t('sport_baseball_full'), 'american-football':t('sport_nfl_full'), handball:t('sport_handball_full') };
+  // v10.7.22: hardcoded fallback omdat niet alle sport_*_full keys in lang.js
+  // staan; voorheen toonde UI letterlijk "sport_hockey_full" voor hockey.
+  const sFallback = { football:'Voetbal', basketball:'Basketball', hockey:'IJshockey', baseball:'Honkbal', 'american-football':'American Football', handball:'Handbal' };
+  const sNames = {};
+  for (const k of Object.keys(sFallback)) {
+    const key = `sport_${k === 'american-football' ? 'nfl' : k}_full`;
+    const v = t(key);
+    sNames[k] = (v && v !== key) ? v : sFallback[k];
+  }
   el.innerHTML = list.map(s => {
     const profCol = s.profit >= 0 ? '#34d399' : '#f87171';
     const wrCol = s.winrate >= 55 ? '#34d399' : s.winrate <= 40 ? '#f87171' : 'var(--muted)';

@@ -2,6 +2,44 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.7.22] - 2026-04-15
+
+### Security / Fixed (code-review bevindingen)
+- **XSS fix**: `humanizePickReason()` output en raw `p.reason` nu ge-escaped vóór innerHTML. Voorheen konden teamnamen/refs met HTML-tekens ongefilterd in de DOM landen.
+- **minDeltaPct validatie** (`/api/clv/recompute`): NaN/Infinity/negatief/>100 verworpen. Voorkomt silent no-ops (Infinity) of resource exhaustion (NaN).
+- **DoS-cap**: `/api/clv/recompute` en `/api/admin/rebuild-calib` limieten nu op 10k bets per call. Response bevat `capped:true` als cap bereikt.
+
+### Fixed (CLV resolver robustness)
+- `findByNames()` skipt nu bets met lege values zodat eerste naam-match niet stille null retourneert als een andere entry wél data heeft. Regression test toegevoegd.
+- Null-safe op bk, markt, values (tests voor alle edge cases).
+
+### Fixed (rebuild-calib gedragsverbeteringen)
+- **Behoudt multiplier als prior**: voorheen reset elke rebuild de multiplier naar 1.0 en verloor je opgebouwde tuning (50+ bets werk weg). Nu gebruikt ie de huidige waarde als prior, past de shared `computeMarketMultiplier` formule toe. Optionele `{resetMultipliers:true}` body om forceren.
+- **Rebuild `leagues` aggregate**: voorheen stale na split. Nu opnieuw opgebouwd uit settled bets.
+- **Gedeelde formule** (`computeMarketMultiplier`): één bron van waarheid voor `updateCalibration` én rebuild. Voorheen divergeerden ze (rebuild hardcoded 0.70/1.10, incremental graduated).
+- **Post-rebuild refresh**: `refreshMarketSampleCounts()` wordt automatisch getriggerd zodat scan meteen met nieuwe counts werkt.
+
+### Fixed (scan crashes + silent catches)
+- **Scan-crash na rebuild-calib** (`cm.home.multiplier` TypeError): legacy scan-code las ongeprefixte keys die na rebuild niet meer bestonden. Nu backfill van ongeprefixte keys via `mm()` helper.
+- **Surface real scan errors**: `runPrematch .catch` toonde generic "Scan mislukt" en slikte stack trace. Nu logs volledige stack + emits detail.
+- **Drawdown protection fail-safe**: catch returnde 1.0 (volle stakes) bij crash. Nu 0.6 (voorzichtiger) + console.error.
+- **loadCalibAsync**, **Kelly stepup notification**, **CLV backfill fixture_id updates**, **keep-alive ping**, **enrichment data writes**: alle stille catches nu minstens `console.error/warn` met context.
+
+### Fixed (UI/UX)
+- **Bet-edit modal: sport auto-fill**: voorheen viel hockey/nfl/handball via ontbrekende i18n keys terug op "Voetbal". Nu hardcoded map naar option labels + `sportSel.value` (ipv iterate options).
+- **Bet-edit modal: units bij odds-daling**: bij lagere odds capt de recommender niet meer op origUnits. Fijner getrapte bands (0.2 / 0.3 / 0.4 / 0.5 / 0.75 / 1.0 / 1.5 / 2.0). Score gebruikt nu `freshScore` bij odds-daling.
+- **Inzet formatting**: modal toont nu hele getallen zonder `.00` — match de tracker. Alleen decimalen als echt nodig.
+- **Per-sport labels in Model tab**: fallback naar hardcoded Dutch namen bij ontbrekende `sport_*_full` i18n keys (voorheen toonde UI letterlijk "sport_hockey_full").
+
+### Added (analyzer tab krijgt humanized narrative)
+`renderAnalysisResult` toont nu de zelfde natuurlijke analyse-tekst als pick-card in scan-tab. Raw reason blijft onderaan als detail.
+
+### Removed (dead code)
+- `lib/calibration.js` — 434 regels parallel-implementatie die nergens geïmporteerd werd. Bevatte stale `detectMarket()` met 6 buckets (pre-v10.7.21). Verwijdering voorkomt toekomstige divergentie als iemand het per ongeluk importeert.
+
+### Tests
+9 nieuwe regression tests: CLV resolver null-safety (3), detectMarket nieuwe buckets (2), multiplier-formule (1), minDeltaPct validatie (1), XSS escape (1), modal recUnits bij odds-daling (1). Totaal **224 tests, 0 failed** (was 215).
+
 ## [10.7.21] - 2026-04-15
 
 ### Added (humanized pick-reasoning in analyse-tab)

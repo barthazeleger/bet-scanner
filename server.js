@@ -346,7 +346,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.7.21';
+const APP_VERSION    = '10.7.22';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -465,7 +465,9 @@ async function loadCalibAsync() {
       _calibCacheAt = Date.now();
       return _calibCache;
     }
-  } catch {}
+  } catch (e) {
+    console.warn('loadCalibAsync failed, using stale cache/file:', e.message);
+  }
   return loadCalib();
 }
 
@@ -726,7 +728,9 @@ async function evaluateKellyAutoStepup() {
       body: `Bewezen edge over ${recentBets.length} bets (CLV ${avgClv.toFixed(2)}%, ROI ${roi.toFixed(2)}%). Cap: ${KELLY_FRACTION_MAX}.`,
       read: false, user_id: null,
     });
-  } catch {}
+  } catch (e) {
+    console.error('Kelly stepup notification insert failed:', e.message);
+  }
   return { stepped: true, from: cur, to: next, avgClv, roi };
 }
 
@@ -1341,7 +1345,12 @@ function getDrawdownMultiplier() {
         }
       }
     }
-  } catch {}
+  } catch (e) {
+    // v10.7.22: fail-safe default 0.6 bij crash ipv 1.0 — als drawdown-logic
+    // stuk is zijn we liever voorzichtiger dan minder.
+    console.error('Drawdown protection crash, fail-safe naar 0.6:', e.message);
+    return 0.6;
+  }
   return 1.0;
 }
 
@@ -7603,7 +7612,8 @@ app.post('/api/clv/backfill', requireAdmin, async (req, res) => {
           verbose = await findGameIdVerbose(sport, wedstrijd, anchorDate, [-3, -2, -1, 0, 1]);
           fxId = verbose.fxId;
           if (fxId) {
-            try { await supabase.from('bets').update({ fixture_id: fxId }).eq('bet_id', id); } catch {}
+            try { await supabase.from('bets').update({ fixture_id: fxId }).eq('bet_id', id); }
+            catch (e) { console.error(`Backfill: fixture_id update failed voor bet ${id}:`, e.message); }
           }
         }
         if (!fxId) {
@@ -7662,11 +7672,19 @@ app.post('/api/clv/recompute', requireAdmin, async (req, res) => {
   try {
     const all = req.body?.all === true;
     const dryRun = req.body?.dryRun === true;
-    const minDelta = typeof req.body?.minDeltaPct === 'number' ? Math.abs(req.body.minDeltaPct) : 0.5;
+    // v10.7.22: validate minDeltaPct against NaN/Infinity. Zonder isFinite zou
+    // minDeltaPct=Infinity alle bets skippen (stille no-op) of NaN → bij delta<NaN
+    // altijd false → alle bets processed (resource exhaustion).
+    const rawDelta = req.body?.minDeltaPct;
+    const minDelta = (typeof rawDelta === 'number' && isFinite(rawDelta) && rawDelta >= 0 && rawDelta <= 100)
+      ? Math.abs(rawDelta)
+      : 0.5;
+    const QUERY_CEILING = 10000;
     const userId = (!all && req.user?.id) ? req.user.id : null;
 
     // Alle settled bets (W/L) — die hebben closing odds en zijn beoordeelbaar.
-    let q = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
+    // Cap op 10k om DoS te voorkomen (elke bet doet ~1 api-sports call = 150ms).
+    let q = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']).limit(QUERY_CEILING);
     if (userId) q = q.eq('user_id', userId);
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
@@ -7689,7 +7707,8 @@ app.post('/api/clv/recompute', requireAdmin, async (req, res) => {
           const verbose = await findGameIdVerbose(sport, wedstrijd, anchorDate, [-3, -2, -1, 0, 1]);
           fxId = verbose.fxId;
           if (fxId && !dryRun) {
-            try { await supabase.from('bets').update({ fixture_id: fxId }).eq('bet_id', id); } catch {}
+            try { await supabase.from('bets').update({ fixture_id: fxId }).eq('bet_id', id); }
+            catch (e) { console.error(`Recompute: fixture_id update failed voor bet ${id}:`, e.message); }
           }
         }
         if (!fxId) { failed++; details.push({ id, wedstrijd, reason: 'fixture niet gevonden' }); await new Promise(rs => setTimeout(rs, 150)); continue; }
@@ -8337,45 +8356,73 @@ app.get('/api/version', (req, res) => {
 });
 
 // Model activity feed · alle automatische wijzigingen
+// Shared multiplier-formule voor rebuild én incremental updateCalibration.
+// Voorheen divergeerden beide; rebuild gebruikte hardcoded 0.70/1.10 ipv
+// huidige multiplier als prior. Resultaat: na rebuild verloor je alle
+// eerder opgebouwde tuning. Nu één bron van waarheid.
+function computeMarketMultiplier(stats, currentMultiplier = 1.0) {
+  if (!stats || stats.n < 8) return currentMultiplier;
+  const wr = stats.w / stats.n;
+  const profitPerBet = stats.profit / stats.n;
+  if (profitPerBet < -3 && wr < 0.40) return Math.max(0.55, currentMultiplier - 0.05);
+  if (profitPerBet >  3 && wr > 0.55) return Math.min(1.30, currentMultiplier + 0.03);
+  return +Math.max(0.70, Math.min(1.20, 0.70 + wr * 1.0)).toFixed(3);
+}
+
 // POST /api/admin/rebuild-calib — rebuild c.markets vanaf 0 o.b.v. alle settled
 // bets. Nodig na v10.7.20 detectMarket split: bestaande historische bets zitten
 // onder `football_other`, maar moeten nu verdeeld zijn over btts/dnb/dc/spread/
 // nrfi/team_total etc. Telt ook hockey/baseball op die eerder stil bleven
 // omdat ze in `_other` verdronken.
-// Body: { dryRun?: boolean }
+// v10.7.22: preserve oude multiplier als prior (geen reset naar 1.0), rebuild
+// ook `leagues`, cap query op 10k bets (DoS-guard), .limit() om eindeloze
+// iteratie te voorkomen.
+// Body: { dryRun?: boolean, resetMultipliers?: boolean }
 app.post('/api/admin/rebuild-calib', requireAdmin, async (req, res) => {
   try {
     const dryRun = req.body?.dryRun === true;
+    const resetMultipliers = req.body?.resetMultipliers === true;
+    const QUERY_CEILING = 10000;
+
     // Alle admin settled bets (model trainen alleen op admin data).
     const users = _usersCache || [];
     const adminIds = users.filter(u => u.role === 'admin').map(u => u.id);
-    let q = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
+    let q = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']).limit(QUERY_CEILING);
     if (adminIds.length) q = q.in('user_id', adminIds);
     const { data: bets, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
 
-    // Nieuwe markets-map opbouwen.
+    const oldC = loadCalib();
+    const oldMarkets = oldC.markets || {};
+
+    // Nieuwe markets-map opbouwen — behoud oude multiplier als prior zodat
+    // eerder opgebouwde tuning niet verloren gaat.
     const newMarkets = {};
+    const newLeagues = {};
     let totalSettled = 0, totalWins = 0, totalProfit = 0;
     for (const b of (bets || [])) {
       if (!['W','L'].includes(b.uitkomst)) continue;
       const key = `${normalizeSport(b.sport)}_${detectMarket(b.markt || '')}`;
       const won = b.uitkomst === 'W';
       const pnl = parseFloat(b.wl) || 0;
-      if (!newMarkets[key]) newMarkets[key] = { n: 0, w: 0, profit: 0, multiplier: 1.0 };
+      if (!newMarkets[key]) {
+        const priorMult = (!resetMultipliers && oldMarkets[key]?.multiplier) || 1.0;
+        newMarkets[key] = { n: 0, w: 0, profit: 0, multiplier: priorMult };
+      }
       const mk = newMarkets[key];
       mk.n++; if (won) mk.w++; mk.profit += pnl;
       totalSettled++; if (won) totalWins++; totalProfit += pnl;
+
+      // Rebuild leagues aggregate
+      const lg = b.league || 'Unknown';
+      if (!newLeagues[lg]) newLeagues[lg] = { n: 0, w: 0, profit: 0 };
+      newLeagues[lg].n++; if (won) newLeagues[lg].w++; newLeagues[lg].profit += pnl;
     }
-    // Multiplier opnieuw afleiden volgens bestaande formule.
+
+    // Multiplier opnieuw afleiden met shared formule + prior.
     for (const mk of Object.values(newMarkets)) {
-      if (mk.n >= 8) {
-        const wr = mk.w / mk.n;
-        const profitPerBet = mk.profit / mk.n;
-        if (profitPerBet < -3 && wr < 0.40) mk.multiplier = 0.70;
-        else if (profitPerBet > 3 && wr > 0.55) mk.multiplier = Math.min(1.30, 1.10);
-        else mk.multiplier = +Math.max(0.70, Math.min(1.20, 0.70 + wr * 1.0)).toFixed(3);
-      }
+      const prior = mk.multiplier; // prior = oude multiplier (of 1.0 bij reset)
+      mk.multiplier = computeMarketMultiplier(mk, prior);
     }
 
     // Per-sport aggregate vanuit de nieuwe markets (voor UI)
@@ -8386,20 +8433,26 @@ app.post('/api/admin/rebuild-calib', requireAdmin, async (req, res) => {
       perSportMap[sp].n += mk.n; perSportMap[sp].w += mk.w; perSportMap[sp].profit += mk.profit;
     }
 
-    const oldC = loadCalib();
-    const before = Object.fromEntries(Object.entries(oldC.markets || {}).map(([k, v]) => [k, v.n]));
+    const before = Object.fromEntries(Object.entries(oldMarkets).map(([k, v]) => [k, v.n]));
     const after = Object.fromEntries(Object.entries(newMarkets).map(([k, v]) => [k, v.n]));
     const diff = {};
     const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
     for (const k of keys) diff[k] = { before: before[k] || 0, after: after[k] || 0 };
 
     if (!dryRun) {
-      const next = { ...oldC, markets: newMarkets, totalSettled, totalWins, totalProfit, modelLastUpdated: new Date().toISOString() };
+      const next = { ...oldC, markets: newMarkets, leagues: newLeagues,
+                     totalSettled, totalWins, totalProfit,
+                     modelLastUpdated: new Date().toISOString() };
       await saveCalib(next);
+      // Refresh market sample cache zodat scan meteen met nieuwe counts werkt
+      refreshMarketSampleCounts().catch(e => console.error('refreshMarketSampleCounts na rebuild:', e.message));
     }
-    res.json({ ok: true, dryRun, totalSettled, totalWins, totalProfit,
-      perSport: perSportMap, marketDiff: diff, newMarketKeys: Object.keys(newMarkets).sort() });
+    res.json({ ok: true, dryRun, resetMultipliers, totalSettled, totalWins, totalProfit,
+      perSport: perSportMap, marketDiff: diff, newMarketKeys: Object.keys(newMarkets).sort(),
+      leaguesCount: Object.keys(newLeagues).length,
+      capped: (bets?.length || 0) >= QUERY_CEILING });
   } catch (e) {
+    console.error('rebuild-calib error:', e);
     res.status(500).json({ error: (e && e.message) || 'Interne fout' });
   }
 });
@@ -10022,7 +10075,7 @@ app.listen(PORT, () => {
   if (process.env.RENDER_EXTERNAL_HOSTNAME) {
     const url = `https://${process.env.RENDER_EXTERNAL_HOSTNAME}/api/status`;
     console.log(`🔁 Keep-alive actief → ${url}`);
-    setInterval(() => fetch(url).catch(() => {}), 14 * 60 * 1000);
+    setInterval(() => fetch(url).catch(e => console.warn('Keep-alive ping failed:', e.message)), 14 * 60 * 1000);
   }
 });
 

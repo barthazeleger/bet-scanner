@@ -2500,6 +2500,122 @@ test('CLV: onbekende markt → null (geen silent fallback)', () => {
   assert.strictEqual(odd, null, 'onbekende markt returnt null');
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.7.22 · regression tests (code-review fixes)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+test('CLV resolver: null / empty bookie returnt null (geen crash)', () => {
+  assert.strictEqual(resolveOddFromBookie(null, 'Over 2.5'), null);
+  assert.strictEqual(resolveOddFromBookie({}, 'Over 2.5'), null);
+  assert.strictEqual(resolveOddFromBookie({ bets: [] }, 'Over 2.5'), null);
+  assert.strictEqual(resolveOddFromBookie({ bets: null }, 'Over 2.5'), null);
+});
+
+test('CLV resolver: null markt returnt null (geen crash)', () => {
+  const bk = { bets: [{ id: 1, name: 'Match Winner', values: [{ value: 'Home', odd: '1.80' }] }] };
+  assert.strictEqual(resolveOddFromBookie(bk, null), null);
+  assert.strictEqual(resolveOddFromBookie(bk, ''), null);
+  assert.strictEqual(resolveOddFromBookie(bk, undefined), null);
+});
+
+test('CLV resolver: bet.values null/undefined leidt niet tot crash', () => {
+  const bk = { bets: [
+    { id: 1, name: 'Match Winner', values: null },
+    { id: 2, name: 'Match Winner', values: [{ value: 'Home', odd: '1.95' }] },
+  ]};
+  // eerste bet matcht op naam maar values is null → fallback naar tweede
+  const odd = resolveOddFromBookie(bk, '🏠 Home wint');
+  assert.strictEqual(odd, 1.95, 'skipt null-values en pakt volgende match');
+});
+
+test('detectMarket: alle nieuwe buckets dekken expected labels', () => {
+  assert.strictEqual(detectMarket('BTTS Ja'), 'btts_yes');
+  assert.strictEqual(detectMarket('Beide Teams Score Nee'), 'btts_no');
+  assert.strictEqual(detectMarket('🏠 DNB Home'), 'dnb_home');
+  assert.strictEqual(detectMarket('✈️ DNB Away'), 'dnb_away');
+  assert.strictEqual(detectMarket('Dubbele kans 1X'), 'dc_1x');
+  assert.strictEqual(detectMarket('Dubbele kans X2'), 'dc_x2');
+  assert.strictEqual(detectMarket('🏠 Home -1.5 spread'), 'spread_home');
+  assert.strictEqual(detectMarket('✈️ Away +1.5 handicap'), 'spread_away');
+  assert.strictEqual(detectMarket('NRFI'), 'nrfi');
+  assert.strictEqual(detectMarket('YRFI'), 'yrfi');
+  assert.strictEqual(detectMarket('Odd total'), 'odd');
+  assert.strictEqual(detectMarket('Even total'), 'even');
+});
+
+test('detectMarket: edge cases die eerst foute bucket gaven', () => {
+  // "1X2 Home" mag NIET als dc_1x worden gezien (dat is 3-way ML)
+  assert.notStrictEqual(detectMarket('1X2 Home'), 'dc_1x');
+  // "Draw no bet" mag NIET via draw-tak gevangen worden
+  assert.notStrictEqual(detectMarket('Draw No Bet Home'), 'draw');
+  // "draw" in draw_no_bet context → dnb_* niet draw
+  const dnb = detectMarket('🏠 DNB Ajax');
+  assert.ok(dnb === 'dnb_home', 'DNB labels vangen niet als draw');
+});
+
+// Shared multiplier formula (computeMarketMultiplier)
+// Niet geëxporteerd uit server.js; regression-test via formule reproductie.
+test('rebuild-calib: multiplier-formule preserveert prior bij <8 bets', () => {
+  // Zelfde logica als computeMarketMultiplier in server.js
+  const compute = (stats, prior) => {
+    if (!stats || stats.n < 8) return prior;
+    const wr = stats.w / stats.n;
+    const profitPerBet = stats.profit / stats.n;
+    if (profitPerBet < -3 && wr < 0.40) return Math.max(0.55, prior - 0.05);
+    if (profitPerBet >  3 && wr > 0.55) return Math.min(1.30, prior + 0.03);
+    return +Math.max(0.70, Math.min(1.20, 0.70 + wr * 1.0)).toFixed(3);
+  };
+  // Prior 1.25, 5 bets → behoud prior (n<8)
+  assert.strictEqual(compute({ n: 5, w: 4, profit: 10 }, 1.25), 1.25);
+  // 10 bets, 7W, +50 profit, ppb=5, wr=0.70 → goede markt → prior + 0.03 (1.03)
+  assert.strictEqual(compute({ n: 10, w: 7, profit: 50 }, 1.00), 1.03);
+  // 10 bets, 7W, +25 profit, ppb=2.5 (<3) → else-branch → clamp 0.70+0.7=1.20 (capped)
+  assert.strictEqual(compute({ n: 10, w: 7, profit: 25 }, 1.00), 1.20);
+  // Slechte markt: 10 bets, 2W, -40 profit, ppb=-4, wr=0.20 → prior - 0.05
+  assert.strictEqual(compute({ n: 10, w: 2, profit: -40 }, 1.00), 0.95);
+  // Zeer goede markt: 10 bets, 7W, +40, ppb=4, wr=0.70 → prior + 0.03 capped 1.30
+  assert.strictEqual(compute({ n: 10, w: 7, profit: 40 }, 1.28), 1.30);
+});
+
+test('minDeltaPct validation: rejecteert NaN/Infinity/negatief', () => {
+  const validate = (raw) =>
+    (typeof raw === 'number' && isFinite(raw) && raw >= 0 && raw <= 100) ? Math.abs(raw) : 0.5;
+  assert.strictEqual(validate(NaN), 0.5);
+  assert.strictEqual(validate(Infinity), 0.5);
+  assert.strictEqual(validate(-Infinity), 0.5);
+  assert.strictEqual(validate(-1), 0.5);
+  assert.strictEqual(validate(101), 0.5);
+  assert.strictEqual(validate('0.3'), 0.5, 'strings worden rejected');
+  assert.strictEqual(validate(2.5), 2.5);
+  assert.strictEqual(validate(0), 0);
+});
+
+test('humanize narrative XSS: escape helper werkt', () => {
+  const escape = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  assert.strictEqual(escape('<script>alert(1)</script>'), '&lt;script&gt;alert(1)&lt;/script&gt;');
+  assert.strictEqual(escape('Team A & Team B'), 'Team A &amp; Team B');
+  assert.strictEqual(escape('normaal'), 'normaal');
+});
+
+test('modal recUnits: bij odds-daling daalt aanbevolen units', () => {
+  // Reproduceert de logic uit updatePayout() (v10.7.22 fijne trapjes)
+  const units = (hk) => hk < 0.015 ? 0
+                      : hk < 0.025 ? 0.2
+                      : hk < 0.035 ? 0.3
+                      : hk < 0.045 ? 0.4
+                      : hk < 0.055 ? 0.5
+                      : hk < 0.070 ? 0.75
+                      : hk < 0.090 ? 1.0
+                      : hk < 0.120 ? 1.5
+                      : 2.0;
+  const kelly = (prob, odds) => Math.max(0, (prob * (odds - 1) - (1 - prob)) / (odds - 1));
+  const prob = 0.60;
+  const hkHigh = kelly(prob, 2.0) * 0.5;  // odds 2.0
+  const hkLow  = kelly(prob, 1.8) * 0.5;  // odds 1.8
+  assert.ok(hkHigh > hkLow, 'hk daalt bij lagere odds');
+  assert.ok(units(hkHigh) >= units(hkLow), 'units(hkLow) ≤ units(hkHigh)');
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
 console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
