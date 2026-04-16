@@ -2,6 +2,13 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.17] - 2026-04-16
+
+### Added
+- **Per-pick audit — markt-baseline + signal-coverage op elke pick**. Elke pick krijgt `audit: { baseline_prob, signal_contrib, prob_gap }`. Baseline = markt-implied uit odds (100/odd). signal_contrib = som van alle "+X%" / "-X%" strings uit signals-array. prob_gap = model − baseline. UI toont onder elke pick-analyse de regel: `Markt: X% · signalen: +Ypp → model: Z% (gap ±Npp)`. Kleuren: grijs <10pp, geel 10-15pp, rood >15pp. ⚠️-icon bij onverklaarbare gap (>15pp & signal_contrib < 50% van gap).
+- **Inbox-notificatie bij flagged picks**. Na scan wordt per gevlagde pick een `pick_audit` notificatie naar Supabase geschreven (geen Telegram): "⚠️ N pick(s) met onverklaarbare prob-sprong" + lijst van matches + gaps. Doel: vroege detectie van model-drift of over-confidence voor een specifieke markt/sport.
+- Audit wordt gepersisteerd in scan_history zodat we over tijd kunnen analyseren of flagged picks systematisch slechter presteren dan niet-flagged.
+
 ## [10.8.16] - 2026-04-16
 
 ### Fixed

@@ -384,7 +384,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.16';
+const APP_VERSION    = '10.8.17';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1205,6 +1205,7 @@ async function saveScanEntry(picks, type = 'prematch', totalEvents = 0, userId =
       kickoff: p.kickoff, scanType: p.scanType || type, bookie: p.bookie,
       signals: p.signals || [], sport: p.sport || 'football',
       selected: p.selected !== false,
+      audit: p.audit || null,
     })),
     user_id: userId || null,
   };
@@ -1435,9 +1436,21 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'footbal
 
     const uNum = parseFloat(u);
     const expectedEur = +(uNum * UNIT_EUR * (edge / 100) * dataConf).toFixed(2);
+    // v10.8.17: per-pick audit. Baseline = markt-implied uit de odds (1/odd).
+    // signal_contrib = som van alle signal-adjustments zoals ze in de signals-
+    // array als "+X%" / "-X%" strings staan. Transparantie: user ziet hoeveel
+    // het model van de markt afwijkt en of signalen dat dragen.
+    const baselineProb = +(100 / odd).toFixed(1);
+    const signalContrib = +((signals || []).reduce((s, sig) => {
+      const m = /([+-]?\d+\.?\d*)%/.exec(sig);
+      return s + (m ? parseFloat(m[1]) : 0);
+    }, 0)).toFixed(1);
+    const probGap = +(prob - baselineProb).toFixed(1);
+    const audit = { baseline_prob: baselineProb, signal_contrib: signalContrib, prob_gap: probGap };
     const pick = { match, league, label, odd, units: u, reason, prob, ep: +ep.toFixed(3),
                    strength: k*(odd-1)*vP*epW*dataConf, kelly: hk, edge, expectedEur, kickoff, bookie,
-                   signals: signals || [], referee: referee || null, dataConfidence: dataConf, sport };
+                   signals: signals || [], referee: referee || null, dataConfidence: dataConf, sport,
+                   audit };
 
     // Adaptive MIN_EDGE gate: voor markten met <100 settled bets vereist
     // strenger edge percentage. Voorkomt dat we vroeg te veel risico nemen op
@@ -7588,6 +7601,34 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
     const topSet = new Set(topPicks);
     for (const p of allPicks) p.selected = topSet.has(p);
     saveScanEntry(allPicks, 'prematch', beforeKill);
+
+    // v10.8.17: audit — flag geselecteerde picks waar de model prob >15pp
+    // boven markt-implied zit zonder dat signal_contrib die gap draagt.
+    // Schrijft alleen naar Supabase notifications (inbox), geen Telegram.
+    // Drempel: gap >15pp én signal_contrib < 50% van die gap = onverklaard.
+    try {
+      const flagged = topPicks
+        .filter(p => p.audit && p.audit.prob_gap > 15)
+        .filter(p => {
+          const gap = p.audit.prob_gap;
+          const contrib = p.audit.signal_contrib || 0;
+          return contrib < gap * 0.5;
+        });
+      if (flagged.length > 0) {
+        const body = flagged.map(p => {
+          const a = p.audit;
+          return `• ${p.match} · ${p.label}: markt ${a.baseline_prob}% → model ${p.prob}% (gap +${a.prob_gap}pp, signalen +${a.signal_contrib}pp)`;
+        }).join('\n');
+        await supabase.from('notifications').insert({
+          type: 'pick_audit',
+          title: `⚠️ ${flagged.length} pick(s) met onverklaarbare prob-sprong`,
+          body: `Deze picks claimen >15pp boven markt zonder dat signalen de helft dekken. Check de analyse vóór je inzet:\n\n${body}`.slice(0, 1500),
+          read: false, user_id: null,
+        });
+      }
+    } catch (e) {
+      console.warn('[pick_audit] insert failed:', e.message);
+    }
 
     // Telegram + push notificatie
     if (topPicks.length > 0) {
