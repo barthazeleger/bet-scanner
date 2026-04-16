@@ -2,6 +2,22 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.15] - 2026-04-16
+
+Codex-review fixes op v10.10.14 playability. Hotfix, geen nieuwe features.
+
+### Fixed
+- **[claude] `playable` promoveerde stilletjes naar `true` bij onbekende execution-coverage.** Voorheen: `executable === null` (caller leverde geen coverage-signal) + `lineQuality !== 'low'` gaf `playable = true` — effectief "execution unknown" interpreteren als "waarschijnlijk speelbaar". Gevaarlijk voor operator-beslissingen. Fix: strict `executable === true` vereist voor `playable`. Nieuwe boolean `coverageKnown` in output maakt downstream onderscheid tussen "niet speelbaar want false" en "niet speelbaar want onbekend" zonder `playable` zelf nullable te maken. (Codex-review v10.10.14, belangrijkste finding.)
+
+### Changed
+- **[claude] `basketball.total` dataRich-feed `pace` verwijderd.** Pace is afgeleid uit game-data, niet een externe feed. Het als capability behandelen maakte basketball semantisch te rijk op papier. `rest_days` blijft staan (wel meetbaar gamelog-based). Semantiek: `dataRich` = externe bronondersteuning, niet derived features. (Codex-kalibratie-note v10.10.14.)
+
+### Added
+- **[claude] +3 regressietests** voor de fix: `executable === null → playable=false + coverageKnown=false`, `preferredCount > 0 → executable=true met coverageKnown=true`, basketball pace wordt genegeerd in dataRich.
+
+### Tests
+- `npm test` groen: `410 passed, 0 failed`.
+
 ## [10.10.14] - 2026-04-16
 
 Execution truth afmaken — slice 1 van de EV-gedreven roadmap (Codex × Claude consensus). Claude codet alles, Codex reviewt.

@@ -2300,7 +2300,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.10.14');
+  assert.strictEqual(appMeta.APP_VERSION, '10.10.15');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4992,6 +4992,7 @@ test('assessPlayability: playable = executable && lineQuality !== low', () => {
     capabilities: {},
   });
   assert.strictEqual(good.playable, true);
+  assert.strictEqual(good.coverageKnown, true);
   assert.strictEqual(good.dataRich, false, 'dataRich mag false zijn');
 
   const noExec = playability.assessPlayability({
@@ -4999,12 +5000,42 @@ test('assessPlayability: playable = executable && lineQuality !== low', () => {
     preferredHasCoverage: false, bookmakerCount: 8,
   });
   assert.strictEqual(noExec.playable, false, 'executable=false → not playable');
+  assert.strictEqual(noExec.coverageKnown, true);
 
   const lowLine = playability.assessPlayability({
     sport: 'football', marketType: 'moneyline',
     preferredHasCoverage: true, bookmakerCount: 1,
   });
   assert.strictEqual(lowLine.playable, false, 'lineQuality=low → not playable');
+  assert.strictEqual(lowLine.coverageKnown, true);
+});
+
+// v10.10.15: Codex-review fix — executable onbekend promoveert niet meer
+// stilletjes naar playable=true.
+test('assessPlayability: executable=null → playable=false (conservatief) + coverageKnown=false', () => {
+  // Geen preferredHasCoverage aanwezig → executable = null (onbekend).
+  // Met hoge lineQuality zou dit voorheen gevaarlijk `playable=true` geven.
+  const unknown = playability.assessPlayability({
+    sport: 'football', marketType: 'moneyline',
+    bookmakerCount: 8,
+  });
+  assert.strictEqual(unknown.executable, null);
+  assert.strictEqual(unknown.playable, false, 'execution onbekend → niet-playable (conservatief)');
+  assert.strictEqual(unknown.coverageKnown, false, 'expliciet gemarkeerd als niet-gekend');
+  assert.ok(unknown.notes.some(n => n.includes('coverage onbekend')));
+});
+
+test('assessPlayability: executable=null + preferredCount fallback geeft nog steeds coverageKnown=false', () => {
+  // preferredCount > 0 zet executable naar true (caller heeft preferred gezien)
+  // maar dat wordt als "hint" behandeld, niet als hard confirmation.
+  // Check dat dit pad nog steeds de true-route neemt.
+  const hinted = playability.assessPlayability({
+    sport: 'football', marketType: 'moneyline',
+    preferredCount: 2, bookmakerCount: 8,
+  });
+  assert.strictEqual(hinted.executable, true, 'preferredCount > 0 → executable=true');
+  assert.strictEqual(hinted.coverageKnown, true);
+  assert.strictEqual(hinted.playable, true);
 });
 
 test('assessPlayability: dataRich BLIJFT aparte as van playable (Codex-nuance)', () => {
@@ -5032,6 +5063,21 @@ test('assessPlayability: apiHost auto-vult injuries-capability via supportsApiSp
     apiHost: 'v1.basketball.api-sports.io',
   });
   assert.strictEqual(basketball.dataRich, false, 'basketball heeft geen injuries-feed volgens capabilities');
+});
+
+// v10.10.15: Codex-review fix — basketball pace is derived, niet feed-backed.
+test('assessPlayability: basketball total met pace=true → dataRich=false (pace is derived feature)', () => {
+  const r = playability.assessPlayability({
+    sport: 'basketball', marketType: 'total',
+    capabilities: { pace: true }, // zelfs expliciet pace=true mag niet tellen
+  });
+  assert.strictEqual(r.dataRich, false, 'pace is geen feed, niet meetellen');
+  // injuries WEL tellen
+  const rInjury = playability.assessPlayability({
+    sport: 'basketball', marketType: 'total',
+    capabilities: { injuries: true },
+  });
+  assert.strictEqual(rInjury.dataRich, true, 'injuries is wel feed-backed');
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
