@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.9] - 2026-04-16
+
+### Added
+- **[claude] Nieuwe line-timeline / price-memory query-laag** in `lib/line-timeline.js` boven `odds_snapshots`. De module bouwt nu per `(selection_key, line)` een point-in-time timeline met `open`, `firstSeen`, `firstSeenOnPreferred`, `scanAnchor`, `latestPreKickoff`, `close`, `drift`, `preferredGap`, `stale`, `timeToMoveMs` en `bookmakerCountMax`, plus een async `getLineTimeline(...)` wrapper voor Supabase reads.
+- **[claude] +11 regressietests voor de line-timeline laag**. De suite dekt grouping, scan-anchor selectie, preferred-gap/stale detectie, latest-pre-kickoff vs close, en de async Supabase happy-path/no-query flows.
+
+### Changed
+- **[codex] Resterende odds-helper drift opgeruimd in de canonieke odds-laag**. `calcWinProb`, `fairProbs`, `bestOdds`, `bookiePrice` en `convertAfOdds` leven nu ook centraal in `lib/odds-parser.js` in plaats van als dubbele definities in zowel `server.js` als `lib/picks.js`. Daardoor hangt scanner-runtime en pick-factory nu aan exact dezelfde odds-helpers.
+- **[codex] Preferred-bookies truth expliciet gedocumenteerd in code**. `lib/odds-parser.js` maakt nu by-design duidelijk dat operator/admin settings canoniek zijn voor execution en dat hard-coded bookies alleen fallback/safety-net zijn wanneer settings ontbreken.
+- **[codex] Pre-kickoff timeline-window rechtgetrokken**. `lib/line-timeline.js` behandelt `preKickoffWindowMs` nu als een aparte pre-close window direct vóór de close-window, zodat `latestPreKickoff` en `close` niet samenvallen en de 07:30/14:00/21:00 workflow correct kan onderscheiden tussen pre-close marktstatus en echte near-close state.
+
+### Tests
+- `npm test` groen: `364 passed, 0 failed`.
+
 ## [10.10.8] - 2026-04-16
 
 ### Added

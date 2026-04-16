@@ -10,13 +10,18 @@ const webpush        = require('web-push');
 const { APP_VERSION } = require('./lib/app-meta');
 const { createCalibrationStore } = require('./lib/calibration-store');
 const {
+  calcWinProb,
+  fairProbs,
   fairProbs2Way,
   parseGameOdds,
   setPreferredBookies,
   getPreferredBookies,
+  bestOdds,
+  bookiePrice,
   bestFromArr,
   bestSpreadPick,
   buildSpreadFairProbFns,
+  convertAfOdds,
 } = require('./lib/odds-parser');
 const { buildPickFactory: createPickFactory } = require('./lib/picks');
 const { summarizeExecutionQuality, normalizeBookmaker } = require('./lib/execution-quality');
@@ -1313,12 +1318,6 @@ function calcStakes(pts, leaderPts, relegPts, cl4Pts, eu6Pts) {
   return { label:'', adj:0 };
 }
 
-// ── PROBABILITY CALCULATORS (0-100, puur data, onafhankelijk van odds) ─────────
-function calcWinProb({ h2hEdge, formEdge, posAdj, momentum, injAdj, stakesAdj, homeAdv=0.05 }) {
-  const combined = h2hEdge*0.22 + formEdge*0.35 + posAdj*0.12 + momentum*0.10 + injAdj*0.08 + stakesAdj*0.08 + homeAdv;
-  return clamp((0.50 + combined * 0.32) * 100, 10, 90);
-}
-
 function calcOverProb({ h2hAvgGoals, hmAvgGF, hmAvgGA, awAvgGF, awAvgGA, line=2.5 }) {
   const projGoals = (hmAvgGF + awAvgGF + hmAvgGA + awAvgGA) / 2 * 0.88;
   const factor    = ((projGoals - line) * 0.22) + ((h2hAvgGoals - line) * 0.15);
@@ -1431,54 +1430,6 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'footbal
     activeUnitEur: getActiveUnitEur(),
     adaptiveMinEdge,
   });
-}
-
-// ── ODDS ANALYSE HELPERS ───────────────────────────────────────────────────────
-
-// No-vig kansen per bookmaker normaliseren + gemiddelde over alle bookmakers
-function fairProbs(bookmakers, homeTeam, awayTeam) {
-  const hp = [], ap = [], dp = [];
-  for (const bk of bookmakers) {
-    const mkt = bk.markets?.find(m => m.key === 'h2h');
-    if (!mkt?.outcomes?.length) continue;
-    const totalIP = mkt.outcomes.reduce((s,o) => s + 1/o.price, 0);
-    if (totalIP < 0.5) continue;
-    for (const o of mkt.outcomes) {
-      const p = (1/o.price) / totalIP;
-      if (o.name === homeTeam)  hp.push(p);
-      else if (o.name === awayTeam) ap.push(p);
-      else dp.push(p);
-    }
-  }
-  const avg = a => a.length ? a.reduce((s,v)=>s+v,0)/a.length : 0;
-  const h = avg(hp), a = avg(ap), d = avg(dp);
-  if (!h || !a) return null;
-  const tot = h + a + (d||0);
-  return { home: h/tot, away: a/tot, draw: d/tot };
-}
-
-// Beste odds voor een uitkomst over alle bookmakers
-function bestOdds(bookmakers, marketKey, outcomeName) {
-  let best = { price: 0, bookie: '' };
-  const preferred = getPreferredBookies();
-  for (const bk of bookmakers) {
-    // Respect preferredBookies filter (consensus blijft uit ALLE bookies, pick-odds alleen uit preferred)
-    if (preferred) {
-      const bkName = (bk.title || bk.name || '').toLowerCase();
-      if (!preferred.some(p => bkName.includes(p))) continue;
-    }
-    const mkt = bk.markets?.find(m => m.key === marketKey);
-    const o   = mkt?.outcomes?.find(o => o.name === outcomeName);
-    if (o && o.price > best.price) best = { price: +o.price.toFixed(3), bookie: bk.title };
-  }
-  return best;
-}
-
-// Specifieke bookmaker odds
-function bookiePrice(bookmakers, bookieFragment, marketKey, outcomeName) {
-  const bk = bookmakers.find(b => b.key?.includes(bookieFragment) || b.title?.toLowerCase().includes(bookieFragment));
-  const mkt = bk?.markets?.find(m => m.key === marketKey);
-  return mkt?.outcomes?.find(o => o.name === outcomeName)?.price || null;
 }
 
 // Totals analyse: zoek beste O/U odds + consensus kans
@@ -1629,65 +1580,6 @@ async function afGet(host, path, params = {}) {
 const AF_LEAGUE_MAP = Object.fromEntries(
   AF_FOOTBALL_LEAGUES.map(l => [l.key, { host:'v3.football.api-sports.io', league:l.id, season:l.season }])
 );
-
-// ── ODDS CONVERTER: api-football.com → intern formaat ──────────────────────
-// Converteert api-football.com bookmaker-array naar het formaat dat fairProbs/bestOdds verwacht
-function convertAfOdds(afBookmakers, hm, aw) {
-  return afBookmakers.map(bk => {
-    const markets = [];
-    // Bet ID 1: Match Winner → h2h
-    const mw = bk.bets?.find(b => b.id === 1);
-    if (mw) {
-      markets.push({
-        key: 'h2h',
-        outcomes: mw.values.map(v => ({
-          name:  v.value === 'Home' ? hm : v.value === 'Away' ? aw : 'Draw',
-          price: parseFloat(v.odd) || 0,
-        })).filter(o => o.price > 1.01),
-      });
-    }
-    // Bet ID 5: Goals Over/Under → totals
-    const ou = bk.bets?.find(b => b.id === 5);
-    if (ou) {
-      markets.push({
-        key: 'totals',
-        outcomes: ou.values.map(v => {
-          const m = v.value.match(/(Over|Under)\s+([\d.]+)/i);
-          if (!m) return null;
-          return { name: m[1], price: parseFloat(v.odd) || 0, point: parseFloat(m[2]) };
-        }).filter(Boolean),
-      });
-    }
-    // Bet ID 8: Both Teams to Score → btts
-    const bttsB = bk.bets?.find(b => b.id === 8);
-    if (bttsB) {
-      markets.push({
-        key: 'btts',
-        outcomes: bttsB.values.map(v => ({
-          name: v.value, // "Yes" or "No"
-          price: parseFloat(v.odd) || 0,
-        })).filter(o => o.price > 1.01),
-      });
-    }
-    // Bet ID 12: Asian Handicap → spreads
-    const ah = bk.bets?.find(b => b.id === 12 && !(b.name||'').toLowerCase().includes('draw no bet'));
-    if (ah) {
-      markets.push({
-        key: 'spreads',
-        outcomes: ah.values.map(v => {
-          const m = v.value.match(/^(Home|Away)\s*([+-][\d.]+)?/i);
-          if (!m) return null;
-          return {
-            name:  m[1].toLowerCase() === 'home' ? hm : aw,
-            price: parseFloat(v.odd) || 0,
-            point: parseFloat(m[2] || '0'),
-          };
-        }).filter(o => o && o.price > 1.01),
-      });
-    }
-    return { title: bk.name, key: bk.name?.toLowerCase().replace(/\s+/g,'_'), markets };
-  }).filter(bk => bk.markets.length > 0);
-}
 
 // Generieke stakes-berekening op basis van rank binnen competitie.
 // Per sport verschillen de playoff/degradatie drempels:

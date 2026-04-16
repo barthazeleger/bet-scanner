@@ -15,16 +15,21 @@ const appMeta = require('./lib/app-meta');
 const pkg = require('./package.json');
 const { createCalibrationStore } = require('./lib/calibration-store');
 const {
+  calcWinProb,
+  fairProbs,
   fairProbs2Way,
   parseGameOdds,
   setPreferredBookies,
+  bookiePrice,
   bestFromArr,
   bestSpreadPick,
   buildSpreadFairProbFns,
+  convertAfOdds,
 } = require('./lib/odds-parser');
 const { buildPickFactory, calcBTTSProb, bestOdds } = require('./lib/picks');
 const { summarizeExecutionQuality } = require('./lib/execution-quality');
 const { selectLikelyGoalie, extractNhlGoaliePreview } = require('./lib/nhl-goalie-preview');
+const lineTimeline = require('./lib/line-timeline');
 const {
   epBucketKey, calcKelly, kellyToUnits, kellyScore, KELLY_FRACTION,
   poisson, poissonOver, poisson3Way,
@@ -2200,7 +2205,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.10.8');
+  assert.strictEqual(appMeta.APP_VERSION, '10.10.9');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3545,6 +3550,50 @@ test('odds-parser: fairProbs2Way devigt home/away odds', () => {
   assert.ok(fair.home > fair.away);
 });
 
+test('odds-parser: calcWinProb clamped en monotonic op edge', () => {
+  const low = calcWinProb({ h2hEdge: -0.2, formEdge: -0.2, posAdj: -0.1, momentum: -0.1, injAdj: 0, stakesAdj: 0 });
+  const high = calcWinProb({ h2hEdge: 0.2, formEdge: 0.2, posAdj: 0.1, momentum: 0.1, injAdj: 0, stakesAdj: 0 });
+  assert.ok(low >= 10 && low <= 90);
+  assert.ok(high >= 10 && high <= 90);
+  assert.ok(high > low);
+});
+
+test('odds-parser: fairProbs normaliseert 3-way bookmaker consensus', () => {
+  const probs = fairProbs([
+    { markets: [{ key: 'h2h', outcomes: [{ name: 'Ajax', price: 2.0 }, { name: 'PSV', price: 3.0 }, { name: 'Draw', price: 4.0 }] }] },
+    { markets: [{ key: 'h2h', outcomes: [{ name: 'Ajax', price: 2.1 }, { name: 'PSV', price: 2.9 }, { name: 'Draw', price: 3.8 }] }] },
+  ], 'Ajax', 'PSV');
+  assert.ok(probs);
+  assert.ok(Math.abs(probs.home + probs.away + probs.draw - 1) < 0.0001);
+  assert.ok(probs.home > probs.away);
+});
+
+test('odds-parser: bookiePrice leest specifieke bookmakerprijs', () => {
+  const price = bookiePrice([
+    { title: 'Bet365', key: 'bet365', markets: [{ key: 'h2h', outcomes: [{ name: 'Ajax', price: 2.1 }] }] },
+    { title: 'Unibet', key: 'unibet', markets: [{ key: 'h2h', outcomes: [{ name: 'Ajax', price: 2.05 }] }] },
+  ], 'unibet', 'h2h', 'Ajax');
+  assert.strictEqual(price, 2.05);
+});
+
+test('odds-parser: convertAfOdds zet api-football payload om naar interne markten', () => {
+  const rows = convertAfOdds([{
+    name: 'Bet365',
+    bets: [
+      { id: 1, values: [{ value: 'Home', odd: '2.10' }, { value: 'Away', odd: '3.20' }, { value: 'Draw', odd: '3.40' }] },
+      { id: 5, values: [{ value: 'Over 2.5', odd: '1.83' }, { value: 'Under 2.5', odd: '1.97' }] },
+      { id: 8, values: [{ value: 'Yes', odd: '1.75' }, { value: 'No', odd: '2.05' }] },
+      { id: 12, name: 'Asian Handicap', values: [{ value: 'Home -1.5', odd: '2.17' }, { value: 'Away +1.5', odd: '1.68' }] },
+    ],
+  }], 'Ajax', 'PSV');
+  assert.strictEqual(rows.length, 1);
+  const [bk] = rows;
+  assert.ok(bk.markets.find(m => m.key === 'h2h'));
+  assert.ok(bk.markets.find(m => m.key === 'totals'));
+  assert.ok(bk.markets.find(m => m.key === 'btts'));
+  assert.ok(bk.markets.find(m => m.key === 'spreads'));
+});
+
 test('modal recUnits: bij odds-daling daalt aanbevolen units', () => {
   // Reproduceert de logic uit updatePayout() (v10.7.22 fijne trapjes)
   const units = (hk) => hk < 0.015 ? 0
@@ -4339,6 +4388,200 @@ test('aggregator: healthCheckAll roept alle sources aan', async () => {
   const r = await agg.healthCheckAll();
   assert.strictEqual(r.length, 5);
   assert.ok(r.every(x => x.healthy === null || x.disabled === true || x.healthy === false));
+});
+
+// ── PRICE-MEMORY: line-timeline (v10.10.9, fundament 2 uit Bouwvolgorde) ─────
+console.log('\n  Line-timeline (price-memory query layer):');
+
+function makeOddsRow({ at, bookie, market = 'h2h', sel = 'home', line = null, odds }) {
+  return {
+    captured_at: at, bookmaker: bookie, market_type: market,
+    selection_key: sel, line, odds,
+  };
+}
+
+test('lineTimeline.groupByLine: scheidt buckets per (selection, line) en sorteert chronologisch', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T12:00:00Z', bookie: 'pinnacle', sel: 'over', line: 2.5, odds: 1.95 }),
+    makeOddsRow({ at: '2026-04-16T11:00:00Z', bookie: 'pinnacle', sel: 'over', line: 2.5, odds: 1.92 }),
+    makeOddsRow({ at: '2026-04-16T11:00:00Z', bookie: 'pinnacle', sel: 'under', line: 2.5, odds: 1.93 }),
+    makeOddsRow({ at: '2026-04-16T11:00:00Z', bookie: 'pinnacle', sel: 'over', line: 3.5, odds: 2.10 }),
+  ];
+  const buckets = lineTimeline.groupByLine(rows);
+  assert.strictEqual(buckets.size, 3, 'over@2.5, under@2.5, over@3.5');
+  const over25 = buckets.get('over|2.5');
+  assert.strictEqual(over25.rows.length, 2);
+  assert.strictEqual(over25.rows[0].captured_at, '2026-04-16T11:00:00Z', 'eerste row chronologisch');
+  assert.strictEqual(over25.rows[1].captured_at, '2026-04-16T12:00:00Z');
+});
+
+test('lineTimeline.buildTimeline: lege rows → null structuur, geen crash', () => {
+  const t = lineTimeline.buildTimeline([], { kickoffMs: Date.parse('2026-04-16T20:00:00Z') });
+  assert.strictEqual(t.open, null);
+  assert.strictEqual(t.close, null);
+  assert.strictEqual(t.drift, null);
+  assert.strictEqual(t.preferredGap, null);
+  assert.strictEqual(t.stale, null);
+  assert.strictEqual(t.bookmakerCountMax, 0);
+  assert.strictEqual(t.samples, 0);
+});
+
+test('lineTimeline.buildTimeline: open=eerste cluster, drift positief = prob omhoog (prijs zakt)', () => {
+  // Open @ 2.50 (40%), close @ 2.00 (50%) → drift = +0.10
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T08:00:00Z', bookie: 'pinnacle', odds: 2.50 }),
+    makeOddsRow({ at: '2026-04-16T08:00:00Z', bookie: 'bet365',   odds: 2.50 }),
+    makeOddsRow({ at: '2026-04-16T19:30:00Z', bookie: 'pinnacle', odds: 2.00 }),
+    makeOddsRow({ at: '2026-04-16T19:30:00Z', bookie: 'bet365',   odds: 2.00 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-16T20:00:00Z'),
+    closeWindowMs: 60 * 60 * 1000, // ruim 1u zodat 19:30 als close telt
+    preKickoffWindowMs: 60 * 60 * 1000,
+  });
+  assert.ok(t.open && t.open.marketAvgProb > 0.39 && t.open.marketAvgProb < 0.41, 'open ~40%');
+  assert.ok(t.close && t.close.marketAvgProb > 0.49 && t.close.marketAvgProb < 0.51, 'close ~50%');
+  assert.ok(t.drift > 0.09 && t.drift < 0.11, `drift +0.10 (kreeg ${t.drift})`);
+  assert.strictEqual(t.bookmakerCountMax, 2);
+});
+
+test('lineTimeline.buildTimeline: preferred_gap detectie en stale-flag', () => {
+  // Markt-best 2.20, preferred bet365 op 2.05 → gap 0.15 → stale=true
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'pinnacle', odds: 2.20 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'circa',    odds: 2.18 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'bet365',   odds: 2.05 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-16T20:00:00Z'),
+    preferredBookies: ['bet365', 'unibet'],
+    closeWindowMs: 10 * 60 * 1000,
+    preKickoffWindowMs: 10 * 60 * 1000,
+  });
+  assert.ok(t.close, 'close cluster moet bestaan');
+  assert.strictEqual(t.close.bestPrice, 2.20);
+  assert.strictEqual(t.close.bestPreferredPrice, 2.05);
+  assert.strictEqual(t.preferredGap, 0.15);
+  assert.strictEqual(t.stale, true, 'gap >= 0.05 odds → stale');
+});
+
+test('lineTimeline.buildTimeline: gap < 0.05 → stale=false', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'pinnacle', odds: 2.10 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'bet365',   odds: 2.08 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-16T20:00:00Z'),
+    preferredBookies: ['bet365'],
+    closeWindowMs: 10 * 60 * 1000,
+    preKickoffWindowMs: 10 * 60 * 1000,
+  });
+  assert.ok(t.preferredGap < 0.05);
+  assert.strictEqual(t.stale, false);
+});
+
+test('lineTimeline.buildTimeline: first_seen_on_preferred ≠ open als preferred pas later in markt komt', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T08:00:00Z', bookie: 'pinnacle', odds: 2.10 }),
+    makeOddsRow({ at: '2026-04-16T10:00:00Z', bookie: 'bet365',   odds: 2.05 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'bet365',   odds: 2.00 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-16T20:00:00Z'),
+    preferredBookies: ['bet365'],
+  });
+  assert.strictEqual(t.open.capturedAt, '2026-04-16T08:00:00Z', 'open = eerste pinnacle cluster');
+  assert.strictEqual(t.firstSeenOnPreferred.capturedAt, '2026-04-16T10:00:00Z', 'eerste preferred cluster');
+});
+
+test('lineTimeline.buildTimeline: scan_anchor kiest cluster dichtst bij scan-tijd', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T08:00:00Z', bookie: 'pinnacle', odds: 2.10 }),
+    makeOddsRow({ at: '2026-04-16T14:30:00Z', bookie: 'pinnacle', odds: 2.05 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'pinnacle', odds: 2.00 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-16T20:00:00Z'),
+    scanAnchorMs: Date.parse('2026-04-16T14:00:00Z'),
+  });
+  assert.strictEqual(t.scanAnchor.capturedAt, '2026-04-16T14:30:00Z', 'dichtstbij scan-anchor');
+});
+
+test('lineTimeline.buildTimeline: time_to_move bij significante moves', () => {
+  // Drie significante moves van ~5pp
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T08:00:00Z', bookie: 'pinnacle', odds: 2.50 }),
+    makeOddsRow({ at: '2026-04-16T09:00:00Z', bookie: 'pinnacle', odds: 2.20 }),
+    makeOddsRow({ at: '2026-04-16T10:00:00Z', bookie: 'pinnacle', odds: 2.00 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, { moveThreshold: 0.03 });
+  // Met 2 moves van ieder 1u: median = 1u = 3600000ms
+  assert.ok(t.timeToMoveMs >= 3500000 && t.timeToMoveMs <= 3700000, `time-to-move ~1u (kreeg ${t.timeToMoveMs})`);
+});
+
+test('lineTimeline.buildTimeline: latest_pre_kickoff ≠ close (close zit dichter op kickoff)', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T18:00:00Z', bookie: 'pinnacle', odds: 2.10 }),
+    makeOddsRow({ at: '2026-04-16T19:25:00Z', bookie: 'pinnacle', odds: 2.05 }),
+    makeOddsRow({ at: '2026-04-16T19:58:00Z', bookie: 'pinnacle', odds: 2.00 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-16T20:00:00Z'),
+    closeWindowMs: 5 * 60 * 1000,    // close = ≤ 5min vóór kickoff
+    preKickoffWindowMs: 30 * 60 * 1000, // pre = ≤ 30min vóór kickoff
+  });
+  assert.strictEqual(t.latestPreKickoff.capturedAt, '2026-04-16T19:25:00Z', '≤30min, ≥5min vóór kickoff');
+  assert.strictEqual(t.close.capturedAt, '2026-04-16T19:58:00Z', '≤5min vóór kickoff');
+});
+
+test('lineTimeline.getLineTimeline: empty supabase response → lege Map', async () => {
+  const fakeSupabase = {
+    from: () => ({
+      select: function() { return this; },
+      eq: function() { return this; },
+      order: function() { return Promise.resolve({ data: [], error: null }); },
+    }),
+  };
+  const r = await lineTimeline.getLineTimeline(fakeSupabase, { fixtureId: 1, marketType: 'h2h' });
+  assert.ok(r instanceof Map);
+  assert.strictEqual(r.size, 0);
+});
+
+test('lineTimeline.getLineTimeline: missing fixtureId/marketType → lege Map zonder query', async () => {
+  let queried = false;
+  const fakeSupabase = { from: () => { queried = true; return {}; } };
+  const r1 = await lineTimeline.getLineTimeline(fakeSupabase, { marketType: 'h2h' });
+  const r2 = await lineTimeline.getLineTimeline(fakeSupabase, { fixtureId: 1 });
+  assert.strictEqual(queried, false, 'geen query bij missing required params');
+  assert.strictEqual(r1.size, 0);
+  assert.strictEqual(r2.size, 0);
+});
+
+test('lineTimeline.getLineTimeline: integration met mock supabase happy path', async () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-16T08:00:00Z', bookie: 'pinnacle', sel: 'home', odds: 2.50 }),
+    makeOddsRow({ at: '2026-04-16T08:00:00Z', bookie: 'bet365',   sel: 'home', odds: 2.45 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'pinnacle', sel: 'home', odds: 2.00 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'bet365',   sel: 'home', odds: 1.95 }),
+    makeOddsRow({ at: '2026-04-16T19:55:00Z', bookie: 'pinnacle', sel: 'away', odds: 1.85 }),
+  ];
+  const fakeSupabase = {
+    from: () => ({
+      select: function() { return this; },
+      eq: function() { return this; },
+      order: function() { return Promise.resolve({ data: rows, error: null }); },
+    }),
+  };
+  const r = await lineTimeline.getLineTimeline(fakeSupabase, {
+    fixtureId: 999, marketType: 'h2h',
+    kickoffTime: '2026-04-16T20:00:00Z',
+    preferredBookies: ['bet365'],
+  });
+  assert.strictEqual(r.size, 2, 'home + away buckets');
+  const home = r.get('home|null');
+  assert.ok(home);
+  assert.ok(home.timeline.drift > 0.09, 'home prob steeg ~10pp');
+  assert.ok(home.timeline.firstSeenOnPreferred);
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
