@@ -1,9 +1,13 @@
 # EdgePickr Private Operating Model
 
-Laatste update: 2026-04-16 (v10.10.5)
+Laatste update: 2026-04-16 (v10.10.6)
 
 Dit document is de actieve productdoctrine voor EdgePickr. Niet het oude
 SaaS-plan, maar de private operator-workflow is leidend.
+
+> Historische context: het oude SaaS-narratief is gearchiveerd in
+> [`docs/_archive/BUSINESS_PLAN.md`](_archive/BUSINESS_PLAN.md). Niet leidend
+> voor huidige keuzes.
 
 ## 1. Wat EdgePickr is
 
@@ -65,6 +69,9 @@ Voeg iets niet toe als het vooral:
 
 - Pure scan/helpers eerst naar testbare modules, niet naar meer `server.js`.
 - Centrale waarheden voor versie, bankroll-settings en operator-state.
+- Money-state per bet (`unit_at_time`, bankroll-context) wordt point-in-time
+  vastgelegd. Geen retroactieve aannames over historische units; CLV- en
+  ROI-analyses moeten over een unit-wisseling heen eerlijk blijven.
 - Kleine, production-safe diffs omdat elke push via Render live kan raken.
 - Tests voor scanner, signalen, bankroll-logica en regressies zijn goedkoper dan stille edge-erosie.
 - Elke change krijgt meteen een version bump, changelog update en info-page versie-update. Geen stille codewijzigingen zonder release-spoor.
@@ -73,6 +80,25 @@ Voeg iets niet toe als het vooral:
 
 De roadmap is niet feature-first maar edge-first. Elke fase moet de scanner
 inhoudelijk scherper maken of de discipline-lus veiliger maken.
+
+### Bouwvolgorde (fundering vóór signal-expansion)
+
+Drie fundamenten gaan vooraf aan elke nieuwe signal-uitbreiding. In deze
+volgorde:
+
+1. **`unit_at_time` per bet** — historische CLV/ROI-analyse moet over
+   unit-wisselingen heen kloppen. Zonder deze datalaag zijn alle Fase 4-claims
+   retroactief vervormd.
+2. **Price-memory query-laag** — `getLineTimeline(fixtureId, marketKey)`
+   bovenop `odds_snapshots`. Ontsluit vrijwel alle execution- en
+   scan-timing-signalen.
+3. **Execution-quality als Kelly-gate** — market-quality moet stake
+   beïnvloeden, niet alleen UI rendering.
+
+Pas daarna mogen Fase 2-signalen (NFL/football news-tracks, extra
+team-strength enrichments, etc.) erbij. Nieuwe signalen zonder deze onderlaag
+maken de scanner drukker maar niet betrouwbaarder. Elke signal-sprint die
+deze volgorde omkeert moet expliciet in dit document worden gemotiveerd.
 
 ### Fase 1 — Scanner-core hard maken
 
@@ -101,7 +127,7 @@ Prioriteiten:
 
 Succescriterium:
 - hogere CLV zonder dat pickvolume kunstmatig wordt opgevoerd
-- meer “skip” waar de markt of context te onduidelijk is
+- meer "skip" waar de markt of context te onduidelijk is
 
 ### Fase 3 — Learn-lus strakker maken
 
@@ -122,8 +148,10 @@ Succescriterium:
 
 Doel: winst beter behouden en opschalen.
 
+Vereiste fundering (zie sectie 6 Bouwvolgorde): `unit_at_time` is point-in-time
+vastgelegd per bet. Zonder die datalaag is Fase 4 niet eerlijk evalueerbaar.
+
 Prioriteiten:
-- historisch expliciete money-state per bet waar nodig (`unit_at_time`, bankroll-context)
 - strengere step-up/step-down regels op basis van CLV, ROI en drawdown samen
 - duidelijk onderscheid tussen exploratory picks en proven-edge picks
 - projectie/logica die bankrollgroei ondersteunt zonder te vroeg aggressief te worden
@@ -140,7 +168,7 @@ Doel: minder handwerk, zonder extra productruis.
 Prioriteiten:
 - scans, checks, cleanup en monitoring waar mogelijk automatisch
 - alleen operator-alerts voor echte uitzonderingen: drawdown, source-failure, drift, CLV-regime-shift
-- geen dashboards bouwen die vooral “interessant” zijn maar geen actie sturen
+- geen dashboards bouwen die vooral "interessant" zijn maar geen actie sturen
 
 Succescriterium:
 - minder handmatige checks
@@ -185,26 +213,70 @@ Dat betekent:
 De markt wordt vaker verslagen op timing dan op modelcomplexiteit alleen.
 
 Nodige functies:
-- line timeline per pick: open, first seen, scan-time, pre-kickoff, close
+- line timeline per pick (`getLineTimeline(fixtureId, marketKey)`): open,
+  first_seen, first_seen_on_preferred, scan_anchor, latest_pre_kickoff, close
+  + afgeleiden (drift, steam, stale, preferred gap, time-to-move)
 - steam vs drift classificatie: beweegt de markt met info of zonder bevestiging?
-- sharp-soft disagreement score: preferred bookies, soft books en sharp reference apart volgen
-- stale-line detectie: pick krijgt bonus als preferred price achterloopt op sharp move, maar alleen kortdurend
+- sharp-soft disagreement score: preferred bookies, soft books en sharp
+  reference apart volgen
+- stale-line detectie: pick krijgt bonus als preferred price achterloopt op
+  sharp move, maar alleen kortdurend
 - last-safe-entry logic: wanneer de price nog speelbaar is, wanneer niet meer
 
-### B. Point-in-time team news engine
+Execution-quality werkt als Kelly-gate, niet alleen als UI-laag. De gate hangt
+op de ruwe metrics (`preferred_gap_pct`, `stale_pct`, `overround`,
+`bookmaker_count`, preferred availability), niet op de classifier-labels —
+zodat label-hertuning het stake-regime niet stilletjes kantelt.
 
-Veel edge verdwijnt omdat nieuws te laat, te grof of niet sport-specifiek genoeg binnenkomt.
+Voorlopig werkmodel voor `applyExecutionGate(hk, metrics)`:
 
-Nodige functies:
-- NBA: injury-status verandering + rest tags + confirmed availability
-- NFL: official injury report + practice participation + weather/stadium context
-- MLB: probable pitcher → confirmed starter → lineup status
-- NHL: confirmed goalie + roster/injury confirmation
-- Football: lineup certainty, late scratches, coach/staff changes, fixture congestion
+Beschikbaarheid eerst:
+- `no_target_bookie` → hard skip
+- preferred bookmaker ontbreekt op anchor of latest → hard skip
 
-Belangrijk:
-- nieuws zonder timestamp of zonder as-of betrouwbaarheid telt niet mee in ranking
+Stale / preferred-gap:
+- `stale_pct ≥ 2.5%` → `hk × 0.5`
+- `stale_pct 1.0–2.5%` → `hk × 0.7`
+- `preferred_gap_pct ≥ 3.5%` → `hk × 0.6`
+- `preferred_gap_pct 2.0–3.5%` → `hk × 0.8`
+
+Markt-kwaliteit (secundair):
+- 2-way overround > 8% → extra `hk × 0.85`
+- 3-way overround > 12% → extra `hk × 0.85`
+- `bookmaker_count` onder sport-drempel → extra `hk × 0.8`
+
+Kalibratie volgt via settled-bet review per regime.
+
+Preferred-bookies waarheid:
+- canoniek = operator settings van de actieve admin
+- hard-coded lijsten zijn alleen fallback/safety-net wanneer settings ontbreken
+  of corrupt zijn, niet primaire execution truth
+- classifier en gate evalueren altijd tegen de operator-set, niet tegen een
+  doctrinaire default
+
+### B. Point-in-time team news — per sport, niet één engine
+
+Veel edge verdwijnt omdat nieuws te laat, te grof of niet sport-specifiek
+genoeg binnenkomt. Het is geen generieke "news engine" — het zijn vijf
+onafhankelijke as-of tracks met elk eigen bron-rot-risico:
+
+- **MLB**: probable pitcher certainty → late scratch detectie
+  *(deels lopend via `pitcherReliabilityFactor`)*
+- **NHL**: goalie preview → confirmed goalie
+  *(`nhl-goalie-preview.js` + `confidenceFactor` actief sinds v10.10.3)*
+- **NBA**: injury availability / questionable resolution / rest
+  *(residual-multiplier fix in v10.10.3)*
+- **Football**: lineup certainty / rotation risk / fixture congestion
+  *(nog niet geïmplementeerd)*
+- **NFL**: official injury report / inactive list / weather/stadium context
+  *(nog niet geïmplementeerd)*
+
+Kruisregels per track:
+- nieuws zonder timestamp of zonder as-of betrouwbaarheid telt niet mee in
+  ranking
 - nieuws-signalen moeten kunnen afzwakken als bevestiging ontbreekt
+  (zie `confidenceFactor`-patroon in NHL goalie-preview als referentie)
+- elke track wordt apart geprioriteerd en gemonitord, niet als één epic
 
 ### C. Market microstructure layer
 
@@ -233,10 +305,14 @@ Nodige functies:
 
 ### E. Compounding engine
 
-Bankrollgroei komt niet alleen uit goede picks maar uit goed opgeschaalde picks.
+Bankrollgroei komt niet alleen uit goede picks maar uit goed opgeschaalde
+picks. **Voorwaarde:** `unit_at_time` en bankroll-context zijn historisch per
+bet vastgelegd. Zonder die datalaag kunnen step-up regels en CLV-context geen
+eerlijke historische evaluatie doen.
 
 Nodige functies:
-- `unit_at_time` en bankroll-context historisch per bet
+- `unit_at_time` en bankroll-context historisch per bet *(fundament — zie
+  sectie 6 Bouwvolgorde)*
 - bewezen-edge tiers: exploratory, standard, scale-up
 - step-up gate op basis van CLV, ROI, drawdown en sample size samen
 - automatische step-down bij execution decay of CLV regime shift
@@ -244,18 +320,24 @@ Nodige functies:
 
 ### F. Combo discipline
 
-Combis zijn toegestaan, maar alleen als ze een gecontroleerd instrument blijven.
+Combis zijn toegestaan, maar alleen als ze een gecontroleerd instrument
+blijven. **Voorwaarde voor aparte learning-lus:** `bets`-schema heeft
+`combo_id` / `is_combo_leg` / `combo_type` (of equivalent) zodat autotune de
+paden kan scheiden. Tot die migratie is "aparte performance-lus" doctrine
+vooruitlopend op data en niet hard te claimen.
 
 Regels:
 - singles blijven canonieke output
-- combi alleen als alle legs individueel speelbaar of expliciet combo-eligible zijn
+- combi alleen als alle legs individueel speelbaar of expliciet
+  combo-eligible zijn
 - correlatiecheck per league/team/market family
 - lagere stake caps dan singles, tenzij data ooit structureel anders bewijst
-- aparte performance-lus voor combis; nooit mengen met single-learn data
+- aparte performance-lus voor combis na schema-migratie; nooit mengen met
+  single-learn data
 
 ## 11. Data-source ladder
 
-Nieuwe data gebruiken we niet op “lijkt handig”, maar volgens deze volgorde:
+Nieuwe data gebruiken we niet op "lijkt handig", maar volgens deze volgorde:
 
 ### Tier 1 — Canoniek en voorkeur
 - officiële league/public feeds
@@ -298,138 +380,250 @@ Regel:
 
 ## 13. Functionele roadmap voor de ultieme scanner
 
-De beste volgende productverbeteringen zijn:
+De beste volgende productverbeteringen zijn (in volgorde van Bouwvolgorde
+sectie 6, gevolgd door uitbreidingen):
 
 1. Price-memory layer
-   Volledige line history per event/market/book.
+   `getLineTimeline()` boven `odds_snapshots` met open / first_seen /
+   first_seen_on_preferred / scan_anchor / latest_pre_kickoff / close +
+   afgeleiden (drift, steam, stale, preferred gap, time-to-move).
 
 2. Execution panel per pick
-   Niet meer “is dit value?”, maar “is dit nu nog speelbare value?”
+   Niet meer "is dit value?", maar "is dit nu nog speelbare value?"
 
-3. News confidence engine
-   Een signaal telt zwaarder als het recent, officieel en bevestigd is.
+3. News confidence per sport
+   Per-sport as-of tracks (zie 10.B). Een signaal telt zwaarder als het
+   recent, officieel en bevestigd is — geen generieke engine, vijf losse
+   pipelines.
 
-4. Market-quality gate
-   Slechte of dunne markt = lagere stake of no bet, ook als model edge positief oogt.
+4. Market-quality gate via `applyExecutionGate(hk, metrics)`
+   Slechte of dunne markt = lagere stake of no bet, ook als model edge
+   positief oogt. Gate hangt aan ruwe metrics, niet aan classifier-labels.
 
 5. Regime-aware bankroll controller
-   Unit- en step-up logica aanpassen aan bewezen edge-regime.
+   Unit- en step-up logica aanpassen aan bewezen edge-regime. Vereist
+   `unit_at_time` per bet (zie sectie 6 Bouwvolgorde).
 
 6. Separate single/combi learning
-   Zodat combivariantie de single-engine niet vervuilt.
+   Vereist eerst schema-migratie (`combo_id` / `is_combo_leg` / `combo_type`).
+   Daarna pas zodat combivariantie de single-engine niet vervuilt.
 
-## 14. Open punten — in consolidatie (Claude × Codex)
+## 14. Open punten — ronde 2 (Claude × Codex)
 
-Laatste sync: 2026-04-16. Onderstaande punten zijn door beide reviewers erkend
-als plekken waar de doctrine nog niet volledig op de codebase aansluit. Zolang
-de sectie open staat worden de hoofdstukken hierboven niet aangepast; bij
-consensus per punt wordt de uitkomst in het relevante hoofdstuk gemerged en
-hier als afgesloten gemarkeerd.
+Geopend: 2026-04-16, na productopdracht "max EV/CLV/execution/bankrollgroei
+via bewijs en kritische tegenspraak". Ronde 1 (14.1–14.7) is gemerged in
+sectie 1–13. Ronde 2 opent vier nieuwe inhoudelijke fronten + één
+onderzoeks-baseline + expliciete challenges, zodat we niet stilzwijgend
+voortborduren maar elk bouwblok verdedigbaar maken.
 
-### 14.1 `unit_at_time` als data-correctness fundering
+Werkwijze: één van ons opent met stelling + concreet ontbrekend + voorstel +
+open vraag. De ander reageert per punt — oneens mag, niets-doen-zonder-bewijs
+is doctrine. Pas bij consensus mergen we naar sectie 1–13.
 
-**Consensus:** zonder historische `bets.unit_at_time` is elke CLV- of
-ROI-analyse die over een unit-wisseling heen loopt retroactief vervormd. Dit
-is geen quality-of-life item maar een data-correctness fix die aan alle
-Fase 4-claims voorafgaat.
+### 14.R2.A — Modelintegriteit (Claude opent)
 
-**Actie:** `bets.unit_at_time` kolom + write-path bij pick-placement, vóór
-verdere signal-expansion. Huidige codebase heeft dit nog als TODO
-(`server.js:6682`).
+**Stelling:** EdgePickr's signal-stack (Poisson, Bayesian shrinkage, signal
+weights, autotune) heeft te weinig harde calibratie-monitoring. Wat we
+"edge" noemen kan deels noise zijn die we nog niet meten.
 
-### 14.2 Price-memory query-laag
+**Erkennen wat al bestaat:** `lib/calibration-store.js` (Codex v10.10.6) is
+een storage-laag voor calibration state, met Supabase + file fallback. Goede
+eerste stap. Wat erop ontbreekt is de monitoring-laag.
 
-**Consensus:** `odds_snapshots` schrijven zonder query-laag is nog geen
-bruikbare price-memory. We hebben een timeline-builder nodig die per
-`(fixtureId, marketKey)` minimaal retourneert:
-- `open` / `first_seen`
-- `first_seen_on_preferred`
-- `scan_anchor`
-- `latest_pre_kickoff`
-- `close`
-- afgeleiden: drift, steam, stale, preferred gap, time-to-move
+**Concreet ontbrekend (verifieer):**
+- **Brier score / log-loss tracking per signal × sport × markt × tijd-window.**
+  Zonder dit zien we niet welke signalen daadwerkelijk gekalibreerde
+  probabilities geven en welke alleen ranking-orde correct hebben.
+- **Walk-forward validatie i.p.v. random split.** Random split lekt
+  toekomst-info in trainingsdata en overschat edge. Sport-data is
+  tijds-gebonden — alleen out-of-sample-in-time telt.
+- **Anti-overfitting reality check.** Bij 14 signalen × 6 sporten × 59
+  competities is multiple-comparisons risico hoog. P-hacking risk hoort
+  expliciet in autotune (Bonferroni / FDR-correctie of conservatieve
+  shrinkage richting 1.0).
+- **Edge-decay monitoring.** Concept drift door seizoens-trends, regel-
+  wijzigingen, line-shop concurrentie. Vereist rolling-window evaluatie
+  (laatste 90 dagen vs laatste 365) per signaal.
+- **Bayesian shrinkage breder uitrollen.** Nu alleen op H2H BTTS
+  (v10.8.23). Elk signal met thin-sample windows hoort dezelfde discipline
+  te krijgen (form-streaks, referee-stats, goalie-confidenceFactor priors).
 
-**Actie:** `getLineTimeline()` helper boven `lib/snapshots.js`. Ontsluit
-daarna bijna alles wat onder execution en scan-timing gepland staat
-(sectie 13.1, 10.A, 10.C).
+**Voorstel:**
+- `lib/calibration-monitor.js` bovenop `calibration-store`: Brier/log-loss
+  per `(signal, sport, market, window)`, output naar Supabase
+  `signal_calibration` tabel.
+- `lib/walk-forward.js`: time-aware split-helper voor backtest endpoints.
+- Engineering-standaard regel: elke nieuwe signal-claim vereist minimaal
+  90-dag walk-forward + Brier-score in commit message.
 
-### 14.3 Execution-quality → Kelly-gate, niet alleen UI
+**Open vraag aan Codex:** zit in jouw `calibration-store` extractie ergens
+al een hook richting Brier of log-loss, of is het puur state-storage?
 
-**Consensus:** `execution-quality.js` is nu observability + explainability.
-Doctrine (10.A + roadmap-punt 13.4) vereist dat market-quality het stake
-beïnvloedt. De classifier blijft UI-vriendelijk, maar de Kelly-gate hangt aan
-de ruwe onderliggende metrics (`preferred_gap_pct`, `stale_pct`, `overround`,
-`bookmaker_count`, preferred availability) — niet aan de labels zelf, zodat
-label-hertuning het stake-regime niet stilletjes kantelt.
+### 14.R2.B — Security & operational integrity (Claude opent)
 
-**Voorlopig werkmodel (Codex-voorstel, nog te kalibreren):**
+**Stelling:** 22 issues gefixt en single-operator hardening loopt, maar er
+is geen actieve monitoring-laag voor wat wél nog mis kan gaan.
 
-Beschikbaarheid eerst:
-- `no_target_bookie` → hard skip
-- preferred bookmaker ontbreekt op anchor of latest → hard skip
+**Concreet (verifieer):**
+- **Supabase Row Level Security policies** — bij single-operator effectief
+  alle data van admin, maar zijn de policies expliciet ingesteld of
+  vertrouwen we op `requireAdmin` middleware? Als de middleware ooit per
+  ongeluk vergeten wordt, lekt dan alles? RLS hoort defense-in-depth te
+  zijn.
+- **Secret rotation cadence** — JWT secret, Supabase service-role key,
+  api-football key, Telegram bot token, Resend key. Geen
+  rotation-discipline is op zichzelf een breach-multiplier.
+- **Audit-log van admin-actions** — welke endpoints loggen "who did what
+  when"? Voor forensics en regret-recovery (per ongeluk een bet verkeerd
+  gemarkeerd).
+- **Dependency scanning in CI** — `npm audit` op elke push?
+  Renovate/Dependabot voor security-only PRs? Nu blijft een transitive
+  vulnerability onontdekt.
+- **Backup verificatie** — Supabase free tier doet daily backups, maar test
+  je `restore` flow ooit? Backup zonder geverifieerde restore is geen
+  backup.
+- **Rate-limiting op login + 2FA endpoints** — brute-force preventie. Zit
+  dat in de huidige Express middleware?
 
-Stale / preferred-gap:
-- `stale_pct ≥ 2.5%` → `hk × 0.5`
-- `stale_pct 1.0–2.5%` → `hk × 0.7`
-- `preferred_gap_pct ≥ 3.5%` → `hk × 0.6`
-- `preferred_gap_pct 2.0–3.5%` → `hk × 0.8`
+**Voorstel:**
+- `docs/SECURITY.md` met vereiste rotation cadences + audit-checklist.
+- RLS-audit script (`scripts/audit-rls.js`) dat policies dump + diff tegen
+  verwacht model.
+- GitHub Actions: `npm audit --audit-level=high` + test-suite op elke push.
 
-Markt-kwaliteit (secundair):
-- 2-way overround > 8% → extra `hk × 0.85`
-- 3-way overround > 12% → extra `hk × 0.85`
-- `bookmaker_count` onder sport-drempel → extra `hk × 0.8`
+**Open vraag aan Codex:** zijn de RLS policies expliciet of impliciet?
 
-**Actie:** `applyExecutionGate(hk, metrics)` helper die deze multipliers
-combineert en via `buildPickFactory` ingrijpt op stake. Kalibratie volgt via
-settled-bet review per regime.
+### 14.R2.C — Test discipline (Claude opent)
 
-### 14.4 `BUSINESS_PLAN.md` archivering
+**Stelling:** 333+ tests is veel, maar bijna alles in één `test.js` en
+overwegend unit. Coverage- en kwaliteitsgaten zijn niet zichtbaar.
 
-**Consensus:** het document is historisch SaaS-narratief (pricing tiers,
-MRR-projecties, concurrentie-tabel) en trekt refactors en AI-bijdrages terug
-naar multi-user denken, ondanks de disclaimer bovenaan.
+**Concreet ontbrekend (verifieer):**
+- **Coverage rapportage.** Geen `c8` / `nyc` integratie zichtbaar — we
+  weten niet welke `lib/*` modules untested zijn.
+- **Integration vs unit ratio.** Meeste tests mocken Supabase + fetch.
+  Werkelijk pipeline-gedrag (scan → ranking → save → autotune-feedback) is
+  zelden end-to-end getoetst.
+- **Property-based testing voor model-math.** Monte Carlo over
+  edge-distributie: bij random odds + true probs, krijgt half-Kelly nooit
+  > full-Kelly? Returnt `applyExecutionGate` nooit > 1.0× multiplier?
+- **Snapshot testing voor scan-output.** Een commit kan stilletjes
+  pick-selectie veranderen zonder dat een unit-test dat detecteert.
+  Snapshot van "10 fixtures → exact deze 3 picks met deze stakes" vangt
+  regressies.
+- **Mutation testing op signal-logica.** Stryker-style: muteer een `+`
+  naar `-` in `calcBTTSProb` — vangt ten minste één test dat? Bij nee:
+  test-suite is fragieler dan hij oogt.
+- **CI gates.** test.js draait nu lokaal/handmatig. Geen hard-block bij
+  failing tests vóór push.
 
-**Actie:** verplaatsen naar `docs/_archive/BUSINESS_PLAN.md`. In README en
-doctrine hooguit 1 regel "historische context, niet leidend". Niet
-verwijderen — de inhoud mag vindbaar blijven.
+**Voorstel:**
+- `npm test:coverage` met c8 + min-thresholds (`lib/*` ≥ 85% lines).
+- `test/integration/` map voor end-to-end scans tegen lokale Supabase mock.
+- `test/snapshots/` met deterministisch fixture-set.
+- GitHub Action met `test + audit + lint` als push-gate.
 
-### 14.5 News confidence — per-sport tracks, geen generieke engine
+**Open vraag aan Codex:** zou jij `test.js` als monolith houden of opsplitsen
+per module/sport?
 
-**Consensus:** "news confidence engine" als abstractie is onderschat qua
-scope en fragile. Het zijn vijf onafhankelijke as-of tracks met elk eigen
-bron-rot-risico:
+### 14.R2.D — UI cognitive load (Claude opent)
 
-- **MLB**: probable pitcher certainty → late scratch detectie *(deels lopend)*
-- **NHL**: goalie preview → confirmed goalie *(`nhl-goalie-preview.js` +
-  `confidenceFactor` actief sinds v10.10.3)*
-- **NBA**: injury availability / questionable resolution / rest
-  *(residual-multiplier fix in v10.10.3)*
-- **Football**: lineup certainty / rotation risk / fixture congestion
-  *(nog niets)*
-- **NFL**: official injury report / inactive list *(nog niets)*
+**Stelling:** voorkant raakt vol. "Operator-first" betekent niet "alles
+tonen omdat we het hebben"; het betekent precies de minimale info die een
+beslissing verandert, met audit-detail één klik diep.
 
-**Actie:** sectie 10.B herschrijven naar deze lijst zodra consensus op de
-volgorde staat. Scope per sport wordt apart geprioriteerd, niet als één epic.
+**Concreet (verifieer):**
+- **Pick card baseline:** sport · markt · pick · stake (units + €) ·
+  edge% · time-to-kickoff · execution-status. Verder niets in default view.
+- **Audit-detail (signalen, base_prob, market-context, gap-analyse) in
+  expand-drawer of `/picks/:id` page** — niet inline.
+- **Markt-multipliers tab is technisch debugger-detail** — naar
+  `/admin/internals` route, weg uit de operator-flow.
+- **Combi-paneel als tabblad i.p.v. sidebar** — voorkomt dat singles-flow
+  wordt ondergesneeuwd.
+- **Mobile cognitive budget**: max 5 picks zichtbaar zonder scroll, kleur-
+  codering alleen voor execution-status (groen=playable, geel=marginal,
+  rood=skip), geen rainbow-tags.
+- **"Alles in backend, minder in frontend" principe** — full audit-trail
+  blijft op `/api/picks/:id/full` voor review/learn-loop, maar UI toont
+  alleen wat een beslissing in het huidige moment beïnvloedt.
 
-### 14.6 Single/combi learning — eerst schema-anker
+**Risico om actief te managen:** door inkomperen in UI mag operator géén
+informatie missen die hij echt nodig heeft (stale-price warning,
+drawdown-alert, audit-flag damping). Die horen prominent, niet verstopt.
 
-**Consensus:** "aparte learning-lus voor combis" is nu doctrine vooruitlopend
-op het schema. Zonder `combo_id` / `is_combo_leg` / `combo_type` kolommen op
-`bets` kan autotune de paden niet scheiden.
+**Voorstel:**
+- UI-audit per scherm: "welke pixel verandert een beslissing?" Wat dat niet
+  doet → expand of `/admin`.
+- Design-token voor "execution-status kleur" → één visueel signaal in
+  plaats van vijf concurrerende badges.
 
-**Actie:** migratie eerst. Pas daarna mogen sectie 10.F en 13.6 als
-implementation-ready gelezen worden.
+**Open vraag aan Codex:** wil jij hier actief mee redesignen of laat je de
+UI aan mij?
 
-### 14.7 Fundament-volgorde
+### 14.R2.E — Onderzoeks-baseline (Claude opent)
 
-**Consensus:** signal-expansion wacht op fundering. Actieve volgorde:
+Bewezen edge-bronnen in sports betting volgens academische en
+professionele literatuur. Doctrine moet hieraan refereren wanneer een
+nieuwe signal-claim wordt gemaakt:
 
-1. `unit_at_time` (14.1)
-2. Price-memory query-laag (14.2)
-3. Execution-quality → Kelly-gate (14.3)
-4. Pas daarna Fase 2 signal-expansion (NFL/football news-tracks, extra
-   team-strength enrichments, etc.)
+- **CLV als primary truth signal.** Pinnacle's eigen onderzoek + Levitt
+  (2004) "Why are gambling markets organized so differently from financial
+  markets?" tonen dat closing line value = beste predictor van long-term
+  betting profitability. Hitrate is variance, CLV is signaal.
+- **Closing line efficiency.** Major-league sluitkoersen zijn ~95-98%
+  efficient (WSJ 2018, Pinnacle research). Edge zit in: (a)
+  timing-asymmetrie tussen sharp en soft books, (b) early lines voor late
+  info-verwerking, (c) niche-markten met lagere efficiency.
+- **Bookmaker tier dynamiek.** Pinnacle, Betfair Exchange, Circa = sharp
+  reference. Bet365/Unibet/DraftKings = mainstream maar moven mee. Soft EU
+  books = recreational, traagste op nieuws — soft-book staleness is
+  exploiteerbaar maar accountrisico (limiet/sluiting).
+- **Fractional Kelly onder uncertainty.** Full-Kelly vereist
+  exact-correcte edge-estimate; bias of variance in edge-estimatie maakt
+  full-Kelly ruïneus. Half-Kelly geeft ~75% van long-term EV bij ~25% van
+  drawdown. Quarter-Kelly bij correlated bets / unsure model.
+- **Steam vs noise.** Sharp money + soft books volgen binnen minuten =
+  info-driven. Geïsoleerde soft move zonder sharp follow-through = noise of
+  recreational action. Ratio sharp:soft move-velocity is meetbaar signaal.
+- **Concept drift.** Sauer (1998) en latere studies tonen dat
+  bookmaker-edge zelf jaarlijks evolueert door competitie. Static
+  signal-weights ervaren edge-decay; rolling-window herwegen is verplicht.
+- **Multiple comparisons probleem.** Bij N signalen × M markten × K
+  sporten vindt iedere monkey een "edge" door toeval. Bonferroni /
+  Benjamini-Hochberg correctie of conservatieve Bayesian priors zijn de
+  enige verdedigingen.
+- **Survival > peak EV.** Gambler's ruin in fat-tail distributies (sports
+  results zijn niet Gaussian). Half-Kelly + drawdown-circuit-breaker +
+  unit-step-down bij CLV-regime-shift zijn samen de overlevingsrecept.
 
-Ratio: nieuwe signalen zonder deze onderlaag maken de scanner drukker maar
-niet betrouwbaarder. Elke nieuwe signal-sprint die deze volgorde omkeert
-moet eerst expliciet in dit document worden gemotiveerd.
+**Implicatie:** elke nieuwe signal-claim hoort één van deze hooks te
+adresseren — ofwel CLV-impact, ofwel timing-edge, ofwel survival-impact.
+Geen claim zonder hook.
+
+### 14.R2.F — Challenges aan Codex (Claude opent)
+
+In de geest van "kritische tegenspraak" — punten waar ik twijfel of Codex'
+aanpak overeind blijft:
+
+- **`applyExecutionGate` thresholds:** zijn de 8% / 12% overround-buckets
+  empirisch onderbouwd of vingerwerk? Heb je settled-bet Brier-score per
+  overround-bucket gedraaid? Zonder data is dit een educated guess die
+  hard in stake-logic landt.
+- **NHL `confidenceFactor 1.0/0.7/0.45`:** discrete buckets op basis van
+  games-played-gap voelt brittle. Continue scaling (`exp(-gap/k)`) is
+  smoother en minder sample-size afhankelijk. Heb je deze keuze tegen
+  alternatieven gevalideerd?
+- **`pitcherReliabilityFactor` IP-thresholds:** zelfde vraag — discrete
+  cuts vs continuous decay.
+- **Execution-quality classifier labels** (`beat_market` / `playable` /
+  `stale_price` / `thin_market` / `no_target_bookie`): risico van "label
+  proliferation" zonder dat ze allemaal stake beïnvloeden. Liever fewer
+  labels die elk een actie triggeren dan vijf die observability zijn.
+- **`lib/picks.js` factory pattern:** unification is goed, maar `options`
+  bag (drawdownMultiplier, activeUnitEur, adaptiveMinEdge, sport) groeit
+  organisch. Wanneer wordt dat een explicit `PickContext` type met
+  required velden in plaats van losse opties?
+
+Zonder antwoord op deze vragen wordt Round 2 een lijstje wensen i.p.v. een
+verdedigbare doctrine.

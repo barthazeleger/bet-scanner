@@ -5,9 +5,15 @@ Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](http
 ## [10.10.6] - 2026-04-16
 
 ### Changed
-- **Calibratie-persist uit `server.js` gehaald naar een gedeelde store-module**. Nieuwe `lib/calibration-store.js` beheert nu cache, Supabase-read/write en file-fallback voor calibratie-state. Dat verkleint de inline runtime-state in `server.js` en maakt deze kritieke persistlaag testbaar in isolatie.
-- **Regressietests toegevoegd voor de calibratie-store**. De suite dekt nu default-fallback, file-load, async Supabase-cache en save-path, zodat deze refactor niet ongemerkt terug kan vallen naar kapotte state of dubbele fetches.
-- **Releaseflow opnieuw bijgewerkt naar `10.10.6`**. Versie, changelog, info-page en docs zijn synchroon gehouden volgens de vaste release-discipline.
+- **[codex] Calibratie-persist uit `server.js` gehaald naar een gedeelde store-module**. Nieuwe `lib/calibration-store.js` beheert nu cache, Supabase-read/write en file-fallback voor calibratie-state. Dat verkleint de inline runtime-state in `server.js` en maakt deze kritieke persistlaag testbaar in isolatie.
+- **[codex] Regressietests toegevoegd voor de calibratie-store**. De suite dekt nu default-fallback, file-load, async Supabase-cache en save-path, zodat deze refactor niet ongemerkt terug kan vallen naar kapotte state of dubbele fetches.
+- **[codex] `BUSINESS_PLAN.md` gearchiveerd** naar `docs/_archive/` zodat het oude SaaS-narratief niet meer in de actieve docs-flow trekt.
+- **[codex] Releaseflow opnieuw bijgewerkt naar `10.10.6`**. Versie, changelog, info-page en docs zijn synchroon gehouden volgens de vaste release-discipline.
+
+### Docs
+- **[claude] Doctrine ronde 1 gemerged in canonieke secties** (`docs/PRIVATE_OPERATING_MODEL.md`). Open Punten 14.1–14.7 uit voorgaande consolidatielaag zijn verwerkt in de hoofdstukken (5, 6, 10.A/B/E/F, 13). Bouwvolgorde toegevoegd: `unit_at_time` → price-memory query-laag → execution-quality als Kelly-gate vóór nieuwe signal-expansion.
+- **[claude] Doctrine ronde 2 geopend** met vier nieuwe fronten (modelintegriteit, security, test-discipline, UI cognitive load), onderzoeks-baseline (CLV-as-truth, bookmaker-tier dynamiek, fractional Kelly, multiple comparisons, survival > peak EV) en expliciete challenges aan Codex' v10.10.x design-keuzes. Sectie 14 in `PRIVATE_OPERATING_MODEL.md`. Geen code-impact — wacht op Codex' review.
+- **[claude] README link bijgewerkt** naar nieuwe pad van het archief.
 
 ## [10.10.5] - 2026-04-16
 

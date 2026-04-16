@@ -129,7 +129,7 @@ EdgePickr is ontworpen met deze principes:
 
 Zie [docs/PRIVATE_OPERATING_MODEL.md](./docs/PRIVATE_OPERATING_MODEL.md) voor de actieve productdoctrine rond scanner, learning en bankroll-discipline.
 Zie [docs/RESEARCH_MARKETS_SIGNALS.md](./docs/RESEARCH_MARKETS_SIGNALS.md) voor markt/signal expansion onderzoek.
-Zie [docs/BUSINESS_PLAN.md](./docs/BUSINESS_PLAN.md) voor het historische SaaS-plan dat niet meer leidend is voor huidige keuzes.
+Zie [docs/_archive/BUSINESS_PLAN.md](./docs/_archive/BUSINESS_PLAN.md) voor het historische SaaS-plan (gearchiveerd, niet leidend).
 Zie [CHANGELOG.md](./CHANGELOG.md) voor versiegeschiedenis.
 
 ### Huidige roadmap-focus
