@@ -2,6 +2,11 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.9.5] - 2026-04-16
+
+### Added
+- **System-aanbevelingen nu óók in Supabase inbox**, niet alleen Telegram. User meldde dat "Overweeg All-Sports API upgrade" (die al gedaan was) alleen in phone-notifications verscheen en niet terug te vinden was. Inbox is het permanente logboek. Gemirrored: unit-verhoging, API-upgrade, CLV-milestone, drawdown-alert, odds-drift-alert. Telegram blijft ook bestaan — dubbele kanalen voor betrouwbaarheid.
+
 ## [10.9.4] - 2026-04-16
 
 ### Changed

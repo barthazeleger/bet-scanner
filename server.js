@@ -387,7 +387,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.9.4';
+const APP_VERSION    = '10.9.5';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -6405,10 +6405,25 @@ async function runPrematch(emit) {
     const bkr = stats.bankroll ?? START_BANKROLL;
     const bkrGrowth = bkr - START_BANKROLL;
     const roi2 = stats.roi ?? 0;
+    // v10.9.5: upgrade-aanbevelingen ook naar inbox (Supabase notifications),
+    // niet alleen Telegram. Telegram kan user missen of niet checken; inbox is
+    // het permanente logboek van beslissingen. Plus: sommige aanbevelingen
+    // (zoals All-Sports upgrade) zijn al uitgevoerd — zonder inbox-geschiedenis
+    // weet je niet of je een oude of nieuwe prompt krijgt.
     if (bkrGrowth >= START_BANKROLL) {
-      await tg(`💰 UNIT VERHOGING AANBEVOLEN\nBankroll: €${bkr.toFixed(0)} (+100%)\nOverweeg unit van €${UNIT_EUR} → €${UNIT_EUR*2}\n\nAccepteer via de instellingen.`).catch(()=>{});
+      const title = `💰 Unit-verhoging aanbevolen`;
+      const body = `Bankroll: €${bkr.toFixed(0)} (+100% sinds start). Overweeg unit van €${UNIT_EUR} → €${UNIT_EUR * 2}. Accepteer via Instellingen.`;
+      await tg(`💰 UNIT VERHOGING AANBEVOLEN\nBankroll: €${bkr.toFixed(0)} (+100%)\nOverweeg unit van €${UNIT_EUR} → €${UNIT_EUR*2}\n\nAccepteer via de instellingen.`).catch(() => {});
+      await supabase.from('notifications').insert({
+        type: 'upgrade_unit', title, body, read: false, user_id: null,
+      }).then(() => {}, () => {});
     } else if (cs.totalSettled >= 30 && roi2 > 0.10) {
-      await tg(`🚀 ROI ${(roi2*100).toFixed(1)}% over ${cs.totalSettled} bets.\nOverweeg All Sports upgrade ($99/mnd) voor meer markten.`).catch(()=>{});
+      const title = `🚀 API-upgrade overweging`;
+      const body = `ROI ${(roi2 * 100).toFixed(1)}% over ${cs.totalSettled} bets · overweeg api-sports All Sports upgrade ($99/mnd) voor meer markten. (Negeer als al geupgraded.)`;
+      await tg(`🚀 ROI ${(roi2*100).toFixed(1)}% over ${cs.totalSettled} bets.\nOverweeg All Sports upgrade ($99/mnd) voor meer markten.`).catch(() => {});
+      await supabase.from('notifications').insert({
+        type: 'upgrade_api', title, body, read: false, user_id: null,
+      }).then(() => {}, () => {});
     }
   } catch (e) {
     console.warn('Unit uplevel / ROI-milestone Telegram notification failed:', e.message);
@@ -10509,6 +10524,13 @@ function scheduleHealthAlerts() {
           .join('\n');
         const marketSummary = marketLines || '(nog geen markt met ≥10 samples)';
         await tg(`📊 CLV Milestone\n${all.length} settled bets met CLV data\nGemiddelde CLV: ${avgClv > 0 ? '+' : ''}${avgClv.toFixed(2)}%\n${positive}/${all.length} positief (${posPct}%)\n${verdict}\n\nPer markt (≥10 bets):\n${marketSummary}`).catch(() => {});
+        // v10.9.5: ook in inbox als permanent logboek.
+        await supabase.from('notifications').insert({
+          type: 'clv_milestone',
+          title: `📊 CLV Milestone — ${all.length} settled bets`,
+          body: `Gem. CLV ${avgClv > 0 ? '+' : ''}${avgClv.toFixed(2)}% · ${positive}/${all.length} positief (${posPct}%) · ${verdict}\n\nPer markt:\n${marketSummary}`.slice(0, 1500),
+          read: false, user_id: null,
+        }).then(() => {}, () => {});
         _lastClvAlertN = all.length;
         // v10.7.23: persist counter zodat volgende deploy niet opnieuw triggert
         try {
@@ -10573,6 +10595,13 @@ function scheduleHealthAlerts() {
           const recent7dPct = stats.startBankroll > 0 ? recent7dPnl / stats.startBankroll : 0;
           if (recent7dPct < DD_ALERT_THRESHOLD) {
             await tg(`⚠️ DRAWDOWN ALERT (soft)\nLaatste 7 dagen: ${(recent7dPct * 100).toFixed(1)}% (€${recent7dPnl.toFixed(2)})\nBankroll: €${stats.bankroll}\n\nGeen automatische pause. Overweeg unit-grootte verlagen of stop manueel.`).catch(() => {});
+            // v10.9.5: ook in inbox.
+            await supabase.from('notifications').insert({
+              type: 'drawdown_alert',
+              title: `⚠️ Drawdown alert — laatste 7 dagen`,
+              body: `P/L laatste 7 dagen: ${(recent7dPct * 100).toFixed(1)}% (€${recent7dPnl.toFixed(2)}). Bankroll: €${stats.bankroll}. Geen auto-pause — overweeg unit-verlagen of stop manueel.`,
+              read: false, user_id: null,
+            }).then(() => {}, () => {});
             _lastDdAlertAt = Date.now();
           }
         }
@@ -10926,11 +10955,19 @@ function scheduleOddsMonitor() {
           const shouldAlert        = !prev || directionFlipped || driftChangedEnough || longSincePrev;
 
           if (shouldAlert) {
-            if (direction === 'sharp') {
-              await tg(`📉 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (${driftPct}%) | Scherp geld bevestigt jouw kant`).catch(() => {});
-            } else {
-              await tg(`📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`).catch(() => {});
-            }
+            const alertTitle = direction === 'sharp' ? `📉 Odds-drift: scherp geld` : `📈 Odds-drift: markt draait`;
+            const alertBody = direction === 'sharp'
+              ? `${bet.wedstrijd} · ${bet.markt}\nGelogd: ${loggedOdds} → nu: ${currentOdds} (${driftPct}%)\nScherp geld bevestigt jouw kant.`
+              : `${bet.wedstrijd} · ${bet.markt}\nGelogd: ${loggedOdds} → nu: ${currentOdds} (+${driftPct}%)\nMarkt draait van je af — overweeg cashout.`;
+            await tg((direction === 'sharp'
+              ? `📉 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (${driftPct}%) | Scherp geld bevestigt jouw kant`
+              : `📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`
+            )).catch(() => {});
+            // v10.9.5: ook in inbox.
+            await supabase.from('notifications').insert({
+              type: 'odds_drift', title: alertTitle, body: alertBody,
+              read: false, user_id: null,
+            }).then(() => {}, () => {});
             calib.oddsAlerts[bet.id] = { drift, direction, ts: now };
             dedupDirty = true;
           }
