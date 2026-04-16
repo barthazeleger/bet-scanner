@@ -2,6 +2,16 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.23] - 2026-04-16
+
+### Fixed
+- **Kritiek: H2H sample-size inflate elimineert**. `calcBTTSProb` gebruikte raw `h2hBTTS/h2hN` voor h2hRate — met 3/3 recente ontmoetingen kreeg je `h2hRate = 1.00`, waardoor base-prob tot 83% kon stijgen zonder statistische onderbouwing. Voor League Two / cup teams met kleine H2H-sample = structurele overconfidence. Nu Bayesian shrinkage: `h2hRate = (btts + prior·K) / (n + K)` met `prior=0.52` (voetbal BTTS-baseline) en `K=8`. Effect:
+  - 3/3 BTTS H2H: h2hRate zakt van 1.00 → 0.65 → base ~69% ipv 83%
+  - 20/25 H2H: h2hRate 0.80 → 0.73 (marginaal, terecht — grote sample = vertrouwen)
+  - Resultaat: Kelly-stake schuift met de correcte prob mee. Dunne data = lagere stake automatisch, geen ad-hoc halveren meer nodig.
+- H2H sample count expliciet in BTTS rationale (`H2H: 3/3 BTTS (dun)` bij n<5) zodat user meteen ziet hoe betrouwbaar de base-calc input is.
+- BTTS-NEE rationale toont nu óók GF-waardes (voorheen alleen CS) zodat user de base-driver kan verifiëren.
+
 ## [10.8.22] - 2026-04-16
 
 ### Added

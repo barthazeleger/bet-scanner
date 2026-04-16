@@ -384,7 +384,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.22';
+const APP_VERSION    = '10.8.23';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1310,8 +1310,21 @@ function calcOverProb({ h2hAvgGoals, hmAvgGF, hmAvgGA, awAvgGF, awAvgGA, line=2.
   return clamp((0.50 + factor) * 100, 15, 85);
 }
 
+// v10.8.23: Bayesian shrinkage op h2hRate zodat dunne H2H samples de base-prob
+// niet meer kunnen drijven. Voorheen gaf 3/3 H2H BTTS → h2hRate=1.0 → base ~83%
+// terwijl 3 samples statistisch zwak is. Nu: h2hRate = (btts + prior·K) / (n + K).
+// Met K=8 en prior=0.52 (markt-gemiddelde BTTS-rate voetbal):
+//   0/0  H2H → 0.52 (geen h2h invloed)
+//   3/3  H2H → (3 + 4.16)/(3+8) = 0.651 (voorheen 1.00)
+//   10/12 H2H → (10 + 4.16)/(12+8) = 0.708 (voorheen 0.833)
+//   20/25 H2H → (20 + 4.16)/(25+8) = 0.732 (voorheen 0.800, minimal shift)
+// Groot effect op small-sample picks, klein op goed-sampled.
+const BTTS_H2H_PRIOR = 0.52;     // voetbal BTTS baseline
+const BTTS_H2H_PRIOR_K = 8;      // pseudo-count shrinkage strength
 function calcBTTSProb({ h2hBTTS, h2hN, hmAvgGF, awAvgGF }) {
-  const h2hRate  = h2hN > 0 ? h2hBTTS / h2hN : 0.50;
+  const n = h2hN || 0;
+  const btts = h2hBTTS || 0;
+  const h2hRate = (btts + BTTS_H2H_PRIOR * BTTS_H2H_PRIOR_K) / (n + BTTS_H2H_PRIOR_K);
   const formRate = Math.min(0.92, hmAvgGF / 1.8) * Math.min(0.92, awAvgGF / 1.8);
   return clamp((h2hRate * 0.45 + formRate * 0.55) * 100, 15, 85);
 }
@@ -6072,14 +6085,18 @@ async function runPrematch(emit) {
               if (Math.abs(bttsPoissonAdj) >= 0.005) bttsSignals.push(`btts_poisson:${bttsPoissonAdj>0?'+':''}${(bttsPoissonAdj*100).toFixed(1)}%`);
               if (aggBTTSAdj !== 0) bttsSignals.push(`aggregate_push_btts:+${(aggBTTSAdj*100).toFixed(1)}%`);
 
+              // v10.8.23: H2H sample size tonen in rationale zodat user ziet
+              // hoe betrouwbaar de h2hRate-input is. Dunne samples (<5 games)
+              // worden via BTTS_H2H_PRIOR_K richting neutraal getrokken.
+              const h2hStr = h2hN > 0 ? ` | H2H: ${Math.round(h2hBTTS)}/${h2hN} BTTS${h2hN < 5 ? ' (dun)' : ''}` : ' | H2H: —';
               if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60)
                 mkP(`${hm} vs ${aw}`, league.name, `🔥 BTTS Ja`, bestYes.price,
-                  `BTTS: ${(bttsYesP*100).toFixed(1)}% | ${bestYes.bookie}: ${bestYes.price} | GF: ${hmGFAvg}/${awGFAvg} | ${ko}`,
+                  `BTTS: ${(bttsYesP*100).toFixed(1)}% | ${bestYes.bookie}: ${bestYes.price} | GF: ${hmGFAvg}/${awGFAvg}${h2hStr} | ${ko}`,
                   Math.round(bttsYesP*100), bttsYesEdge * 0.22 * (cm.over?.multiplier ?? 1), kickoffTime, bestYes.bookie, bttsSignals, refereeName);
 
               if (bttsNoEdge >= MIN_EDGE && bestNo.price >= 1.60)
                 mkP(`${hm} vs ${aw}`, league.name, `🛡️ BTTS Nee`, bestNo.price,
-                  `BTTS Nee: ${(bttsNoP*100).toFixed(1)}% | ${bestNo.bookie}: ${bestNo.price} | CS: ${hmTS2?.cleanSheetPct ? (hmTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}/${awTS2?.cleanSheetPct ? (awTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'} | ${ko}`,
+                  `BTTS Nee: ${(bttsNoP*100).toFixed(1)}% | ${bestNo.bookie}: ${bestNo.price} | GF: ${hmGFAvg}/${awGFAvg} | CS: ${hmTS2?.cleanSheetPct ? (hmTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}/${awTS2?.cleanSheetPct ? (awTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}${h2hStr} | ${ko}`,
                   Math.round(bttsNoP*100), bttsNoEdge * 0.20 * (cm.under?.multiplier ?? 1), kickoffTime, bestNo.bookie, bttsSignals, refereeName);
             }
           }
