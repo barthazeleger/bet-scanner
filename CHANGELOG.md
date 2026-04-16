@@ -2,6 +2,12 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.18] - 2026-04-16
+
+### Fixed
+- **Humanized narrative verdween bij middelmatige stats**. `humanizePickReason` had alleen extremen-drempels (BTTS-JA: GF ≥1.7 of ≤1.0, BTTS-NEE: CS ≥35%). Picks in het midden (bv. Bromley BTTS JA met GF 1.58/1.48 of Peterborough BTTS NEE met CS 22%/30%) kregen geen enkele fact → leeg narrative-blok. Nu: elke BTTS pick krijgt een eerlijke beschrijving, ook bij middenwaardes (*"beide teams scoren regelmatig (1.58+1.48 goals/match)"*, *"matige clean-sheet rate (22%/30%) — defensie-signaal aanwezig"*).
+- **Ultimate fallback-narrative**: als zelfs na alle checks geen opening + facts verzameld → gebruik pick.prob vs markt-implied (1/odd) om minimaal een "Model ziet meer/minder kans dan markt" regel te tonen. Elke pick toont voortaan minstens iets.
+
 ## [10.8.17] - 2026-04-16
 
 ### Added

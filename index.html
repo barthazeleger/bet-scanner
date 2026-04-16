@@ -1724,25 +1724,37 @@ function humanizePickReason(pick) {
   }
 
   // BTTS reason: "BTTS: 63.1% | ... | GF: 2.88/2.13"
+  // v10.8.18: elke BTTS pick krijgt altijd een narrative — drempels losgelaten,
+  // in plaats daarvan eerlijke beschrijving van de getallen zodat user ziet wat
+  // de driver is (hoge GF → BTTS-Ja, lage GF → BTTS-Nee, hoge CS bonus).
   const btts = parts.find(p => /^BTTS\s*(Nee)?:/i.test(p));
   if (btts) {
-    const pct = btts.match(/(\d+\.?\d*)%/);
+    const isNee = /BTTS Nee/i.test(btts);
     const gf = parts.find(p => /^GF:/i.test(p));
     const gfMatch = gf && gf.match(/GF:\s*([\d.]+)\/([\d.]+)/);
-    if (pct && gfMatch) {
+    if (gfMatch) {
       const hmGF = parseFloat(gfMatch[1]), awGF = parseFloat(gfMatch[2]);
-      if (hmGF >= 1.7 && awGF >= 1.7) facts.push(`beide teams scoren ruim (${hmGF}+${awGF} goals/match)`);
-      else if (hmGF < 1.0 || awGF < 1.0) facts.push(`één team scoort weinig (${hmGF}/${awGF} goals/match)`);
+      const sum = hmGF + awGF;
+      if (!isNee) {
+        if (hmGF >= 1.7 && awGF >= 1.7)       facts.push(`beide teams scoren ruim (${hmGF}+${awGF} goals/match)`);
+        else if (hmGF >= 1.3 && awGF >= 1.3)  facts.push(`beide teams scoren regelmatig (${hmGF}+${awGF} goals/match)`);
+        else if (hmGF < 1.0 || awGF < 1.0)    facts.push(`één team scoort weinig (${hmGF}/${awGF} goals/match)`);
+        else                                  facts.push(`gemiddelde scoring (${hmGF}/${awGF} goals/match) — model ziet gap t.o.v. markt`);
+      } else {
+        if (sum < 2.2)                        facts.push(`lage combined scoring rate (${hmGF}+${awGF}) — BTTS-Nee plausibel`);
+        else                                  facts.push(`middelmatige scoring (${hmGF}/${awGF}) — BTTS-Nee leunt op defensieve stats`);
+      }
     }
-    // CS hint (Clean sheets) — v10.8.16: alleen "hoge CS rate" noemen als
-    // minstens één team CS ≥ 35% heeft. Onder die grens is 'hoge' misleidend;
-    // de echte driver is dan lage GF, niet hoge CS.
+    // CS hint (Clean sheets) — v10.8.16/18: eerlijke beschrijving per range.
     const cs = parts.find(p => /^CS:/i.test(p));
-    if (cs && /BTTS Nee/i.test(btts)) {
+    if (cs && isNee) {
       const csNums = cs.match(/(\d+)%\/(\d+)%/);
-      const maxCs = csNums ? Math.max(parseInt(csNums[1]), parseInt(csNums[2])) : 0;
-      if (maxCs >= 35) {
-        facts.push(`hoge clean-sheet rate (${maxCs}%) — BTTS-Nee onderbouwd`);
+      if (csNums) {
+        const maxCs = Math.max(parseInt(csNums[1]), parseInt(csNums[2]));
+        const minCs = Math.min(parseInt(csNums[1]), parseInt(csNums[2]));
+        if (maxCs >= 35)      facts.push(`hoge clean-sheet rate (${maxCs}%) — BTTS-Nee onderbouwd`);
+        else if (maxCs >= 25) facts.push(`matige clean-sheet rate (${csNums[1]}%/${csNums[2]}%) — defensie-signaal aanwezig`);
+        else                  facts.push(`lage clean-sheet rate (${csNums[1]}%/${csNums[2]}%) — BTTS-Nee niet door CS gedragen, check GF`);
       }
     }
   }
@@ -1788,6 +1800,19 @@ function humanizePickReason(pick) {
   // Fallback: no opening but we have facts → generic opener
   if (!opening && facts.length) {
     opening = 'Modelanalyse';
+  }
+
+  // v10.8.18: ultimate fallback — elke pick moet iets kunnen laten zien.
+  // Als zowel consensus-opening als facts leeg zijn, gebruik dan de pick's
+  // prob + odds om een minimale narrative te construeren.
+  if (!opening && !facts.length && pick) {
+    const marketImplied = pick.odd ? +(100 / pick.odd).toFixed(1) : null;
+    if (marketImplied != null && pick.prob != null) {
+      const delta = pick.prob - marketImplied;
+      if (Math.abs(delta) < 1.5) opening = 'Markt en model grotendeels eens';
+      else if (delta > 0)        opening = `Model ziet meer kans dan de markt prijst (+${delta.toFixed(1)}%)`;
+      else                       opening = `Model ziet minder kans dan de markt suggereert (${delta.toFixed(1)}%)`;
+    }
   }
 
   if (!opening && !facts.length) return '';
