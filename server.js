@@ -140,6 +140,44 @@ async function refreshMarketSampleCounts() {
   } catch { /* swallow */ }
 }
 
+// v10.8.16: per-sport cap voor de diversification-stap in runFullScan.
+// Default 2 picks per sport. Bij bewezen sport (≥100 settled bets én ROI≥5%)
+// mag het naar 3. In panic_mode altijd 1. Cache-refresh om de 10 min zodat de
+// scan geen extra DB-hit doet per run.
+const SPORT_CAP_PROVEN_N = 100;
+const SPORT_CAP_PROVEN_ROI = 0.05;
+const SPORT_CAP_TTL_MS = 10 * 60 * 1000;
+let _sportCapCache = { caps: {}, stats: {}, at: 0 };
+
+async function refreshSportCaps() {
+  try {
+    const { data: bets } = await supabase.from('bets')
+      .select('sport, inzet, wl, uitkomst').in('uitkomst', ['W', 'L']);
+    const bySport = {};
+    for (const b of (bets || [])) {
+      const s = normalizeSport(b.sport || 'football');
+      if (!bySport[s]) bySport[s] = { n: 0, staked: 0, profit: 0 };
+      bySport[s].n++;
+      bySport[s].staked += parseFloat(b.inzet) || 0;
+      bySport[s].profit += parseFloat(b.wl) || 0;
+    }
+    const caps = {};
+    const stats = {};
+    for (const [s, d] of Object.entries(bySport)) {
+      const roi = d.staked > 0 ? d.profit / d.staked : 0;
+      caps[s] = (d.n >= SPORT_CAP_PROVEN_N && roi >= SPORT_CAP_PROVEN_ROI) ? 3 : 2;
+      stats[s] = { n: d.n, roi: +(roi * 100).toFixed(2), cap: caps[s] };
+    }
+    _sportCapCache = { caps, stats, at: Date.now() };
+  } catch { /* swallow */ }
+}
+
+function getSportCap(sport) {
+  if (OPERATOR.panic_mode) return 1;
+  const key = normalizeSport(sport || 'unknown');
+  return _sportCapCache.caps[key] || 2;
+}
+
 // Bootstrap-fase: tot we minimum totale settled bets hebben gebruiken we
 // base MIN_EDGE overal. Anders strangulen we dataverzameling tijdens de
 // eerste weken waarin per-markt n=0 en alle markten op 8% threshold zouden vallen.
@@ -346,7 +384,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.15';
+const APP_VERSION    = '10.8.16';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1166,6 +1204,7 @@ async function saveScanEntry(picks, type = 'prematch', totalEvents = 0, userId =
       ep: p.ep, edge: p.edge, strength: p.strength, expectedEur: p.expectedEur,
       kickoff: p.kickoff, scanType: p.scanType || type, bookie: p.bookie,
       signals: p.signals || [], sport: p.sport || 'football',
+      selected: p.selected !== false,
     })),
     user_id: userId || null,
   };
@@ -3097,9 +3136,10 @@ async function runBasketball(emit) {
         const stakesAdj = (hmStakes.adj - awStakes.adj) * stakesWeight;
         const stakesNote = (hmStakes.label || awStakes.label) ? ` | Stakes: ${hmStakes.label||'—'} vs ${awStakes.label||'—'}` : '';
 
-        const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + restAdj + nbaInjAdj + stakesAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - restAdj * 0.5 - nbaInjAdj * 0.5 - stakesAdj * 0.5);
+        // v10.8.16: ha uit adjHome — fpHome komt uit market consensus (inclusief HA).
+        const ha = 0;
+        const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + b2bAdj + totalAdv + restAdj + nbaInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - restAdj * 0.5 - nbaInjAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -3537,9 +3577,10 @@ async function runHockey(emit) {
         const stakesAdj = (hmStakes.adj - awStakes.adj) * nhlStakesW;
         const stakesNote = (hmStakes.label || awStakes.label) ? ` | Stakes: ${hmStakes.label||'—'} vs ${awStakes.label||'—'}` : '';
 
-        const ha = league.ha || 0.03;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + b2bAdj + totalAdv + nhlInjAdj + stakesAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - nhlInjAdj * 0.5 - stakesAdj * 0.5);
+        // v10.8.16: ha uit adjHome — fpHome komt uit market consensus (inclusief HA).
+        const ha = 0;
+        const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + b2bAdj + totalAdv + nhlInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - nhlInjAdj * 0.5 - stakesAdj * 0.5);
 
         // Alleen 2-way ML bij bookies die inclusief OT settlen (anders overschat model de edge)
         const isOTBookieHockey = b => !HOCKEY_60MIN_BOOKIES.some(x => (b||'').toLowerCase().includes(x));
@@ -4228,10 +4269,13 @@ async function runBaseball(emit) {
           }
         }
 
-        // Home advantage (~54% in MLB)
-        const ha = 0.04;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + mlbInjAdj + stakesAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - mlbInjAdj * 0.5 - stakesAdj * 0.5);
+        // v10.8.16: home-advantage NIET meer op fpHome optellen. fpHome komt uit
+        // de-vigged bookmaker consensus en INCLUDEERT al home-field pricing.
+        // Ha er bovenop = dubbel-tellen, systematische bias richting home teams.
+        // `ha` variabele blijft 0 voor backwards compat met signals/logging.
+        const ha = 0;
+        const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + totalAdv + mlbInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - mlbInjAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -4661,8 +4705,8 @@ async function runFootballUS(emit) {
           }
         }
 
-        // Home advantage (~57% in NFL)
-        const ha = 0.057;
+        // v10.8.16: ha = 0 — fpHome komt uit market consensus (inclusief HA).
+        const ha = 0;
         // Bye week: markt overvalueert dit (prijst +1.0 punt, werkelijk +0.3)
         // Bron: Frontiers in Behavioral Economics 2024
         // We gebruiken +1% ipv +3% — de EDGE zit in dat de markt het overvalueert
@@ -4719,8 +4763,8 @@ async function runFootballUS(emit) {
         const stakesAdj = (hmStakesN.adj - awStakesN.adj) * nflStakesW;
         const stakesNote = (hmStakesN.label || awStakesN.label) ? ` | Stakes: ${hmStakesN.label||'—'} vs ${awStakesN.label||'—'}` : '';
 
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + byeAdj + totalAdv + injAdj + stakesAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5 - injAdj * 0.5 - stakesAdj * 0.5);
+        const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + byeAdj + totalAdv + injAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5 - injAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -5136,10 +5180,10 @@ async function runHandball(emit) {
         const stakesAdj = (hmStakesH.adj - awStakesH.adj) * hbStakesW;
         const stakesNote = (hmStakesH.label || awStakesH.label) ? ` | Stakes: ${hmStakesH.label||'—'} vs ${awStakesH.label||'—'}` : '';
 
-        // Home advantage is STRONG in handball (~60%)
-        const ha = league.ha || 0.06;
-        const adjHome = Math.min(0.88, fpHome + ha + posAdj + formAdj + totalAdv + hbInjAdj + stakesAdj);
-        const adjAway = Math.max(0.08, fpAway - ha * 0.5 - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - hbInjAdj * 0.5 - stakesAdj * 0.5);
+        // v10.8.16: ha = 0 — fpHome komt uit market consensus (inclusief HA).
+        const ha = 0;
+        const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + totalAdv + hbInjAdj + stakesAdj);
+        const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - hbInjAdj * 0.5 - stakesAdj * 0.5);
 
         const bH = bestFromArr(homeOdds);
         const bA = bestFromArr(awayOdds);
@@ -5589,9 +5633,10 @@ async function runPrematch(emit) {
           }
         }
 
-        const ha = league.ha || 0;
-        const adjHome = Math.min(0.88, fp.home + ha + posAdj + splitAdj + predAdj + lineupPenalty.home);
-        const adjAway = Math.max(0.08, fp.away - ha * 0.5 - posAdj * 0.5 - splitAdj * 0.5 - predAdj * 0.5 + lineupPenalty.away);
+        // v10.8.16: ha = 0 — fp.home komt uit market consensus (inclusief HA).
+        const ha = 0;
+        const adjHome = Math.min(0.88, fp.home + posAdj + splitAdj + predAdj + lineupPenalty.home);
+        const adjAway = Math.max(0.08, fp.away - posAdj * 0.5 - splitAdj * 0.5 - predAdj * 0.5 + lineupPenalty.away);
         const adjDraw = fp.draw && fp.draw > 0.05 ? fp.draw - posAdj * 0.3 - splitAdj * 0.2 : null;
 
         let formAdj = 0, formNote = '';
@@ -7494,7 +7539,11 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
     // Diversification
     const MAX_PICKS = OPERATOR.panic_mode ? Math.min(2, OPERATOR.max_picks_per_day) : OPERATOR.max_picks_per_day;
     const MAX_PER_MATCH = 1;
-    const MAX_PER_SPORT = OPERATOR.panic_mode ? 1 : 2;
+    // v10.8.16: refresh per-sport caps (cache TTL 10min). Non-blocking op cache
+    // miss, gebruikt dan default 2 per sport tot de eerstvolgende scan.
+    if (Date.now() - _sportCapCache.at > SPORT_CAP_TTL_MS) {
+      await refreshSportCaps().catch(() => {});
+    }
     if (OPERATOR.panic_mode) {
       const beforePanic = allPicks.length;
       allPicks = allPicks.filter(p => {
@@ -7511,9 +7560,10 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
     for (const p of allPicks) {
       if (topPicks.length >= MAX_PICKS) break;
       const matchKey = (p.match || '').toLowerCase().trim();
-      const sportKey = p.sport || 'unknown';
+      const sportKey = normalizeSport(p.sport || 'unknown');
+      const sportCap = getSportCap(sportKey);
       if (matchKey && (seenMatches.get(matchKey) || 0) >= MAX_PER_MATCH) { skippedReasons.same_match++; continue; }
-      if ((seenSports.get(sportKey) || 0) >= MAX_PER_SPORT) { skippedReasons.same_sport_cap++; continue; }
+      if ((seenSports.get(sportKey) || 0) >= sportCap) { skippedReasons.same_sport_cap++; continue; }
       topPicks.push(p);
       if (matchKey) seenMatches.set(matchKey, (seenMatches.get(matchKey) || 0) + 1);
       seenSports.set(sportKey, (seenSports.get(sportKey) || 0) + 1);
@@ -7521,8 +7571,12 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
     const droppedCount = allPicks.length - topPicks.length;
 
     emit({ log: `🌐 Totaal: ${footballPicks.length} voetbal + ${nbaPicks.length} basketball + ${nhlPicks.length} hockey + ${mlbPicks.length} baseball + ${nflPicks.length} NFL + ${handballPicks.length} handball = ${beforeKill} kandidaten` });
+    const provenSports = Object.entries(_sportCapCache.stats || {})
+      .filter(([, s]) => s.cap === 3)
+      .map(([k, s]) => `${k}(n=${s.n}, ROI ${s.roi > 0 ? '+' : ''}${s.roi}%)`);
+    if (provenSports.length) emit({ log: `🏆 Bewezen sporten (cap=3): ${provenSports.join(', ')}` });
     if (skippedReasons.same_match) emit({ log: `🎯 ${skippedReasons.same_match} pick(s) geskipt: zelfde wedstrijd al in selectie (correlatie)` });
-    if (skippedReasons.same_sport_cap) emit({ log: `🎯 ${skippedReasons.same_sport_cap} pick(s) geskipt: max ${MAX_PER_SPORT} per sport bereikt` });
+    if (skippedReasons.same_sport_cap) emit({ log: `🎯 ${skippedReasons.same_sport_cap} pick(s) geskipt: per-sport cap bereikt (default 2, bewezen sport 3)` });
     if (droppedCount > 0) emit({ log: `🎯 ${topPicks.length}/${MAX_PICKS} picks geselecteerd (${droppedCount} weggelaten door diversification + ranking)` });
 
     if (topPicks.length === 0) {

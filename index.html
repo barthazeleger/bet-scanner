@@ -1421,6 +1421,11 @@ function addLog(el, text, cls) {
 }
 
 function renderPicks(el, picks) {
+  // v10.8.16: filter op selected-flag uit scan_history. saveScanEntry schrijft
+  // `selected: true/false` mee; pre-v10.8.16 entries hebben geen flag → undefined
+  // → behandelen als geselecteerd (backward compat). Dit zorgt dat restore uit
+  // history alleen de top-N toont die daadwerkelijk door MAX_PICKS-cap zijn.
+  picks = (picks || []).filter(p => p.selected !== false);
   // ── Deduplication: group by match, show strongest as primary ──
   const matchGroups = {};
   picks.forEach(p => {
@@ -1715,10 +1720,16 @@ function humanizePickReason(pick) {
       if (hmGF >= 1.7 && awGF >= 1.7) facts.push(`beide teams scoren ruim (${hmGF}+${awGF} goals/match)`);
       else if (hmGF < 1.0 || awGF < 1.0) facts.push(`één team scoort weinig (${hmGF}/${awGF} goals/match)`);
     }
-    // CS hint (Clean sheets)
+    // CS hint (Clean sheets) — v10.8.16: alleen "hoge CS rate" noemen als
+    // minstens één team CS ≥ 35% heeft. Onder die grens is 'hoge' misleidend;
+    // de echte driver is dan lage GF, niet hoge CS.
     const cs = parts.find(p => /^CS:/i.test(p));
     if (cs && /BTTS Nee/i.test(btts)) {
-      facts.push('hoge clean-sheet rate — BTTS-Nee onderbouwd');
+      const csNums = cs.match(/(\d+)%\/(\d+)%/);
+      const maxCs = csNums ? Math.max(parseInt(csNums[1]), parseInt(csNums[2])) : 0;
+      if (maxCs >= 35) {
+        facts.push(`hoge clean-sheet rate (${maxCs}%) — BTTS-Nee onderbouwd`);
+      }
     }
   }
 

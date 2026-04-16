@@ -2,6 +2,19 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.16] - 2026-04-16
+
+### Fixed
+- **Kritiek: double-counting van home-advantage over ALLE sports**. Probability `adjHome = fpHome + ha + ...` maar `fpHome` komt uit de-vigged bookmaker consensus (`(1/avgHomePrice)/totalIP`) die home-advantage al bevat. Extra `ha` optellen (4-6% per sport/liga) gaf systematische +3-6pp bias richting home teams. Voorbeeld: MLB Reds ML had consensus 53.4% → model 61% (edge 5.7%). Zonder de ha-dubbeltelling zakt prob naar ~57%, edge onder MIN_EDGE → pick haalt de scan niet. Fix: `ha = 0` in de `adjHome`/`adjAway` formules voor football, MLB, NBA, NHL, NFL, handball. `league.ha` configs blijven voor toekomstig gebruik (bv. sport-specifieke residual HA als data dat ondersteunt).
+- **MAX_PICKS-cap kwam niet door naar UI bij scan-restore**. `saveScanEntry` persisteerde de `selected` flag niet naar scan_history — plus `renderPicks` in index.html filterde niet op selected. Live scan emit stuurt wel alleen top-N (5), maar zodra je naar een andere tab ging en terugkwam laadde UI álle kandidaten uit history (bv. 8 picks zichtbaar terwijl MAX_PICKS=5 + MAX_PER_SPORT=2). Nu: `saveScanEntry` schrijft `selected: p.selected !== false` mee, `renderPicks` filtert `p.selected !== false` (pre-v10.8.16 entries zonder flag blijven zichtbaar via undefined-check).
+- **BTTS narrative zei "hoge clean-sheet rate" bij matige CS (22%/30%)**. `humanizePickReason` in index.html voegde altijd "hoge clean-sheet rate — BTTS-Nee onderbouwd" toe zodra `CS:` in de reason-string stond, ongeacht waarde. Gaf misleidende uitleg bij picks waar CS eigenlijk niet de driver was. Nu: alleen tonen als minstens één team CS ≥ 35%, met het daadwerkelijke percentage.
+
+### Added
+- **Dynamische MAX_PER_SPORT cap op basis van bewezen ROI**. Default 2 picks per sport, 3 als een sport ≥100 settled bets én ROI ≥ 5% heeft (bewezen terrein), 1 in panic_mode. Cache-refresh elke 10 min via `refreshSportCaps()` — geen extra DB-hit per scan. Scan-log toont welke sporten op cap=3 staan: `🏆 Bewezen sporten (cap=3): baseball(n=120, ROI +6.4%)`. Voorheen hard-coded op 2 voor alle sports, ongeacht historische prestaties.
+
+### Changed
+- Diversification-stap in runFullScan gebruikt nu `getSportCap(sport)` per pick i.p.v. één constante. Log-tekst bij geskipte picks: "per-sport cap bereikt (default 2, bewezen sport 3)".
+
 ## [10.8.15] - 2026-04-15
 
 ### Fixed
