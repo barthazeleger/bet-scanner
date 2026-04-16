@@ -2,6 +2,28 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.14] - 2026-04-16
+
+Execution truth afmaken — slice 1 van de EV-gedreven roadmap (Codex × Claude consensus). Claude codet alles, Codex reviewt.
+
+### Added
+- **[claude] Execution-gate live in pick-flow** (component A, sectie 6 Bouwvolgorde fundament 3). `createPickContext` krijgt optioneel `executionMetrics` veld (canonical shape, niet ruwe `lineTimeline` — Codex-nuance). `buildPickFactory` roept `applyExecutionGate(hk, metrics)` aan binnen `mkP`, vóór `kellyToUnits`: dempt stake op stale/gap/overround/thin_market, hard skip bij `targetPresent=false`. Plus optionele `resolveExecutionMetrics(pick)` hook voor per-pick metrics. Geen pick-flow verandering voor call-sites zonder metrics (backwards-compat). `pick.executionAudit` geeft per pick het multiplier-spoor.
+- **[claude] `lib/playability.js` matrix** (component D). Per `(sport, market_type)` een assessment met vier aparte assen: `executable` (preferred coverage?), `dataRich` (injury/lineup/starter feeds actief?), `lineQuality` (bookmaker-count tier), `playable` (aggregaat = `executable && lineQuality !== 'low'`). **`dataRich` blijft bewust aparte dimensie** (Codex-nuance): dunne enrichment maakt markt niet onspeelbaar, beïnvloedt confidence/ranking apart. Leunt op `lib/api-sports-capabilities.js` (Codex v10.10.11) voor injury-support detectie. Voorlopige `RELEVANT_FEEDS` mapping per sport × markt — te kalibreren op basis van echte scan-resultaten.
+- **[claude] Hockey 3-way ML diag-symmetrie** (component B, downscoped). `diagBestPrice` in 3-way flow — geen stille skip meer als preferred ontbreekt. Consistent met v10.10.12 hockey 2-way.
+- **[claude] +16 regressietests**: 6 voor execution-gate integratie (createPickContext met/zonder metrics, resolveExecutionMetrics voorrang, skip-pad, kelly-demping), 10 voor playability (lineQuality tiers, overround downgrade, dataRich aparte as van playable, apiHost auto-fill).
+
+### Deferred
+- **[claude] Uitrol multi-sport diag naar NBA/baseball/NFL/handball** vraagt per-match `diag`-array introductie (nieuwe structuur, buiten Codex' approval scope). Uitgesteld tot v10.10.15 na eerst Codex-review van deze release.
+- **[claude] Gestructureerde `rejected_reason` enum** (component C uit slice-plan) vereist Supabase-migratie + call-site refactor. Scope te groot voor deze commit, vraagt Codex-input op schema-design. Uitgesteld tot v10.10.15.
+
+### Tests
+- `npm test` groen: `407 passed, 0 failed`.
+
+### Review-vragen aan Codex
+- `createPickContext` shape met optionele `executionMetrics` + `resolveExecutionMetrics` hook — past dit bij je PickContext-intent?
+- `RELEVANT_FEEDS` mapping in `playability.js` — de sport × market feed-koppelingen zijn mijn eerste schatting. Waar wil je kalibreren?
+- Gedeferde componenten B-uitrol + C-schema — akkoord om ze apart in v10.10.15 te landen?
+
 ## [10.10.13] - 2026-04-16
 
 Issue #3: pre-kickoff drift-checker matchte verkeerde markt op MLB.

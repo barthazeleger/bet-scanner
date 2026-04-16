@@ -3315,6 +3315,15 @@ async function runHockey(emit) {
           const e3D = bD3.price > 0 ? p3.pDraw * bD3.price - 1 : -1;
           const e3A = bA3.price > 0 ? p3.pAway * bA3.price - 1 : -1;
 
+          // v10.10.14: 3-way ML diag symmetrisch met 2-way (v10.10.12). Vervangt
+          // stille skip door echte oorzaak wanneer preferred ontbreekt.
+          const h3Diag = diagBestPrice('home 3-way', bH3, p3.pHome, MIN_EDGE);
+          const d3Diag = diagBestPrice('draw 3-way', bD3, p3.pDraw, MIN_EDGE);
+          const a3Diag = diagBestPrice('away 3-way', bA3, p3.pAway, MIN_EDGE);
+          if (h3Diag) diag.push(h3Diag);
+          if (d3Diag) diag.push(d3Diag);
+          if (a3Diag) diag.push(a3Diag);
+
           // Sanity-check Poisson tegen market consensus: als ons model > threshold
           // divergeert van de market, skip de pick. Poisson kan scheef gaan bij
           // teams met extreme vorm-variatie of onvolledige standings.

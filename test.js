@@ -31,6 +31,7 @@ const { summarizeExecutionQuality } = require('./lib/execution-quality');
 const { selectLikelyGoalie, extractNhlGoaliePreview } = require('./lib/nhl-goalie-preview');
 const lineTimeline = require('./lib/line-timeline');
 const execGate = require('./lib/execution-gate');
+const playability = require('./lib/playability');
 const { supportsApiSportsInjuries } = require('./lib/api-sports-capabilities');
 const {
   epBucketKey, calcKelly, kellyToUnits, kellyScore, KELLY_FRACTION,
@@ -2086,6 +2087,79 @@ test('createPickContext: normaliseert pick-runtime context met veilige defaults'
   assert.strictEqual(fallback.adaptiveMinEdge, null);
 });
 
+// v10.10.14: PickContext executionMetrics integratie (component A)
+test('createPickContext: accepteert executionMetrics als optioneel veld', () => {
+  const withMetrics = createPickContext({
+    executionMetrics: { targetPresent: true, preferredGap: 0.01 },
+  });
+  assert.ok(withMetrics.executionMetrics);
+  assert.strictEqual(withMetrics.executionMetrics.targetPresent, true);
+
+  const withoutMetrics = createPickContext({});
+  assert.strictEqual(withoutMetrics.executionMetrics, null);
+
+  // Garbage in → null out (strict normalisatie)
+  const garbage = createPickContext({ executionMetrics: 'oops' });
+  assert.strictEqual(garbage.executionMetrics, null);
+});
+
+test('buildPickFactory: zonder executionMetrics → identiek aan pre-v10.10.14 gedrag', () => {
+  const { picks, mkP } = buildPickFactory(1.6, {}, { sport: 'football' });
+  mkP('Ajax vs PSV', 'Eredivisie', 'Ajax ML', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%']);
+  assert.strictEqual(picks.length, 1, 'pick komt gewoon door');
+  assert.strictEqual(picks[0].executionAudit, null, 'geen gate-audit bij null metrics');
+});
+
+test('buildPickFactory: executionMetrics met targetPresent=false → skip pick', () => {
+  const { picks, mkP } = buildPickFactory(1.6, {}, {
+    sport: 'football',
+    executionMetrics: { targetPresent: false },
+  });
+  mkP('Ajax vs PSV', 'Eredivisie', 'Ajax ML', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%']);
+  assert.strictEqual(picks.length, 0, 'no_target_bookie → hard skip');
+});
+
+test('buildPickFactory: executionMetrics met stale → dempt kelly', () => {
+  // Zonder gate: baseline kelly-niveau
+  const { picks: noMetricsPicks, mkP: mkNoMetrics } = buildPickFactory(1.6, {}, { sport: 'football' });
+  mkNoMetrics('A vs B', 'L', 'Home', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%']);
+  const baselineKelly = noMetricsPicks[0].kelly;
+
+  // Met stale metrics: kelly gedempt (×0.7 stale_abs_mid)
+  const { picks, mkP } = buildPickFactory(1.6, {}, {
+    sport: 'football',
+    executionMetrics: { targetPresent: true, preferredGap: 0.06 }, // 0.06 → stale_abs_mid × 0.7
+  });
+  mkP('A vs B', 'L', 'Home', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%']);
+  assert.strictEqual(picks.length, 1, 'pick komt door met demping');
+  assert.ok(picks[0].kelly < baselineKelly, `kelly ${picks[0].kelly} < baseline ${baselineKelly}`);
+  assert.ok(picks[0].executionAudit, 'audit aanwezig');
+  assert.strictEqual(picks[0].executionAudit.combinedMultiplier ?? picks[0].executionAudit.combined_multiplier, 0.7);
+  assert.ok(picks[0].executionAudit.reasons.some(r => r.includes('stale_abs_mid')));
+});
+
+test('buildPickFactory: resolveExecutionMetrics heeft voorrang op ctx.executionMetrics', () => {
+  // Static ctx: targetPresent=true (geen skip). Resolver: targetPresent=false (skip).
+  // Als resolver voorrang heeft → pick wordt geskipt.
+  const { picks, mkP } = buildPickFactory(1.6, {}, {
+    sport: 'football',
+    executionMetrics: { targetPresent: true },
+    resolveExecutionMetrics: () => ({ targetPresent: false }),
+  });
+  mkP('A vs B', 'L', 'Home', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%']);
+  assert.strictEqual(picks.length, 0, 'resolver wint → skip');
+});
+
+test('buildPickFactory: resolveExecutionMetrics throw → fallback naar ctx.executionMetrics', () => {
+  const { picks, mkP } = buildPickFactory(1.6, {}, {
+    sport: 'football',
+    executionMetrics: { targetPresent: true }, // safe fallback
+    resolveExecutionMetrics: () => { throw new Error('oeps'); },
+  });
+  mkP('A vs B', 'L', 'Home', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%']);
+  assert.strictEqual(picks.length, 1, 'crash in resolver → pick komt door via ctx-fallback');
+});
+
 test('buildPickFactory: adaptiveMinEdge kan pick uit singles en combiPool weren', () => {
   const { picks, combiPool, mkP } = buildPickFactory(1.6, {}, {
     sport: 'football',
@@ -2226,7 +2300,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.10.13');
+  assert.strictEqual(appMeta.APP_VERSION, '10.10.14');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4856,6 +4930,108 @@ test('buildExecutionMetrics → applyExecutionGate end-to-end', () => {
   assert.strictEqual(r.skip, false);
   assert.ok(Math.abs(r.combinedMultiplier - 0.30) < 0.001, `0.5 × 0.6 = 0.30, kreeg ${r.combinedMultiplier}`);
   assert.ok(r.hk < 0.05);
+});
+
+// ── PLAYABILITY MATRIX (v10.10.14, component D) ──────────────────────────────
+console.log('\n  Playability matrix:');
+
+test('assessPlayability: onbekende sport → dataRich=false + note', () => {
+  const r = playability.assessPlayability({ sport: 'cricket', marketType: 'moneyline' });
+  assert.strictEqual(r.dataRich, false);
+  assert.ok(r.notes.some(n => n.includes('onbekende sport')));
+});
+
+test('assessPlayability: voetbal moneyline met injuries+lineups → dataRich=true', () => {
+  const r = playability.assessPlayability({
+    sport: 'football', marketType: 'moneyline',
+    capabilities: { injuries: true, lineups: true },
+  });
+  assert.strictEqual(r.dataRich, true);
+});
+
+test('assessPlayability: voetbal btts zonder lineups/injuries → dataRich=false', () => {
+  const r = playability.assessPlayability({
+    sport: 'football', marketType: 'btts',
+    capabilities: {},
+  });
+  assert.strictEqual(r.dataRich, false);
+});
+
+test('assessPlayability: NHL moneyline met goalie_preview → dataRich=true', () => {
+  const r = playability.assessPlayability({
+    sport: 'hockey', marketType: 'moneyline',
+    capabilities: { goalie_preview: true },
+  });
+  assert.strictEqual(r.dataRich, true);
+});
+
+test('assessPlayability: MLB f5_total met probable_pitcher → dataRich=true', () => {
+  const r = playability.assessPlayability({
+    sport: 'baseball', marketType: 'f5_total',
+    capabilities: { probable_pitcher: true },
+  });
+  assert.strictEqual(r.dataRich, true);
+});
+
+test('assessPlayability: lineQuality tier-mapping op bookmakerCount', () => {
+  assert.strictEqual(playability.assessPlayability({ bookmakerCount: 8 }).lineQuality, 'high');
+  assert.strictEqual(playability.assessPlayability({ bookmakerCount: 4 }).lineQuality, 'medium');
+  assert.strictEqual(playability.assessPlayability({ bookmakerCount: 2 }).lineQuality, 'low');
+});
+
+test('assessPlayability: overround > 10% degradeert lineQuality één tier', () => {
+  const r = playability.assessPlayability({ bookmakerCount: 8, overroundPct: 0.12 });
+  assert.strictEqual(r.lineQuality, 'medium', 'high → medium bij hoge overround');
+  assert.ok(r.notes.some(n => n.includes('downgrade')));
+});
+
+test('assessPlayability: playable = executable && lineQuality !== low', () => {
+  const good = playability.assessPlayability({
+    sport: 'football', marketType: 'moneyline',
+    preferredHasCoverage: true, bookmakerCount: 8,
+    capabilities: {},
+  });
+  assert.strictEqual(good.playable, true);
+  assert.strictEqual(good.dataRich, false, 'dataRich mag false zijn');
+
+  const noExec = playability.assessPlayability({
+    sport: 'football', marketType: 'moneyline',
+    preferredHasCoverage: false, bookmakerCount: 8,
+  });
+  assert.strictEqual(noExec.playable, false, 'executable=false → not playable');
+
+  const lowLine = playability.assessPlayability({
+    sport: 'football', marketType: 'moneyline',
+    preferredHasCoverage: true, bookmakerCount: 1,
+  });
+  assert.strictEqual(lowLine.playable, false, 'lineQuality=low → not playable');
+});
+
+test('assessPlayability: dataRich BLIJFT aparte as van playable (Codex-nuance)', () => {
+  // Markt is speelbaar (preferred + 6+ bookies), maar geen enrichment-data.
+  // Moet playable=true geven maar dataRich=false.
+  const r = playability.assessPlayability({
+    sport: 'hockey', marketType: 'total',
+    preferredHasCoverage: true, bookmakerCount: 6,
+    capabilities: { goalie_preview: false }, // expliciet geen feed
+  });
+  assert.strictEqual(r.playable, true, 'markt is speelbaar ondanks dunne data');
+  assert.strictEqual(r.dataRich, false);
+});
+
+test('assessPlayability: apiHost auto-vult injuries-capability via supportsApiSportsInjuries', () => {
+  const football = playability.assessPlayability({
+    sport: 'football', marketType: 'moneyline',
+    apiHost: 'v3.football.api-sports.io',
+    capabilities: { lineups: true },
+  });
+  assert.strictEqual(football.dataRich, true, 'football injuries auto-true');
+
+  const basketball = playability.assessPlayability({
+    sport: 'basketball', marketType: 'moneyline',
+    apiHost: 'v1.basketball.api-sports.io',
+  });
+  assert.strictEqual(basketball.dataRich, false, 'basketball heeft geen injuries-feed volgens capabilities');
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
