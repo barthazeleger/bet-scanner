@@ -387,7 +387,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.9.5';
+const APP_VERSION    = '10.9.6';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -6410,20 +6410,38 @@ async function runPrematch(emit) {
     // het permanente logboek van beslissingen. Plus: sommige aanbevelingen
     // (zoals All-Sports upgrade) zijn al uitgevoerd — zonder inbox-geschiedenis
     // weet je niet of je een oude of nieuwe prompt krijgt.
-    if (bkrGrowth >= START_BANKROLL) {
+    // v10.9.6: dedup-guard. User meldde dat API-upgrade-notif elke scan kwam,
+    // terwijl upgrade al gedaan was. Fix: (1) permanent-dismiss vlag via
+    // calib (cs.upgrades_dismissed[type]=true), (2) rate-limit van 7 dagen
+    // tussen dezelfde notificatie-type zodat het niet spamt als user nog geen
+    // dismiss heeft doorgegeven. Admin dismist via /api/admin/v2/upgrade-ack.
+    const now = Date.now();
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    cs.upgrades_dismissed = cs.upgrades_dismissed || {};
+    cs.upgrades_lastAt = cs.upgrades_lastAt || {};
+    const canFire = (key) => {
+      if (cs.upgrades_dismissed[key]) return false;
+      const lastAt = cs.upgrades_lastAt[key] || 0;
+      return (now - lastAt) > WEEK_MS;
+    };
+    if (bkrGrowth >= START_BANKROLL && canFire('upgrade_unit')) {
       const title = `💰 Unit-verhoging aanbevolen`;
-      const body = `Bankroll: €${bkr.toFixed(0)} (+100% sinds start). Overweeg unit van €${UNIT_EUR} → €${UNIT_EUR * 2}. Accepteer via Instellingen.`;
+      const body = `Bankroll: €${bkr.toFixed(0)} (+100% sinds start). Overweeg unit van €${UNIT_EUR} → €${UNIT_EUR * 2}. Accepteer via Instellingen. (Wordt pas over 7 dagen opnieuw getoond; dismiss permanent via admin.)`;
       await tg(`💰 UNIT VERHOGING AANBEVOLEN\nBankroll: €${bkr.toFixed(0)} (+100%)\nOverweeg unit van €${UNIT_EUR} → €${UNIT_EUR*2}\n\nAccepteer via de instellingen.`).catch(() => {});
       await supabase.from('notifications').insert({
         type: 'upgrade_unit', title, body, read: false, user_id: null,
       }).then(() => {}, () => {});
-    } else if (cs.totalSettled >= 30 && roi2 > 0.10) {
+      cs.upgrades_lastAt.upgrade_unit = now;
+      await saveCalib(cs).catch(() => {});
+    } else if (cs.totalSettled >= 30 && roi2 > 0.10 && canFire('upgrade_api')) {
       const title = `🚀 API-upgrade overweging`;
-      const body = `ROI ${(roi2 * 100).toFixed(1)}% over ${cs.totalSettled} bets · overweeg api-sports All Sports upgrade ($99/mnd) voor meer markten. (Negeer als al geupgraded.)`;
+      const body = `ROI ${(roi2 * 100).toFixed(1)}% over ${cs.totalSettled} bets · overweeg api-sports All Sports upgrade ($99/mnd). (Negeer als al gedaan. Wordt pas over 7d opnieuw getoond; dismiss permanent via admin.)`;
       await tg(`🚀 ROI ${(roi2*100).toFixed(1)}% over ${cs.totalSettled} bets.\nOverweeg All Sports upgrade ($99/mnd) voor meer markten.`).catch(() => {});
       await supabase.from('notifications').insert({
         type: 'upgrade_api', title, body, read: false, user_id: null,
       }).then(() => {}, () => {});
+      cs.upgrades_lastAt.upgrade_api = now;
+      await saveCalib(cs).catch(() => {});
     }
   } catch (e) {
     console.warn('Unit uplevel / ROI-milestone Telegram notification failed:', e.message);
@@ -7109,6 +7127,25 @@ app.get('/api/admin/v2/walkforward', requireAdmin, async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: (e && e.message) || 'Interne fout' });
+  }
+});
+
+// v10.9.6: POST /api/admin/v2/upgrade-ack — permanent dismiss een
+// upgrade-aanbeveling-type (upgrade_api / upgrade_unit) zodat die niet opnieuw
+// vuurt. Body: { type: 'upgrade_api', dismissed: true }.
+app.post('/api/admin/v2/upgrade-ack', requireAdmin, async (req, res) => {
+  try {
+    const valid = new Set(['upgrade_api', 'upgrade_unit']);
+    const type = String(req.body?.type || '');
+    if (!valid.has(type)) return res.status(400).json({ error: 'unknown type; allowed: upgrade_api, upgrade_unit' });
+    const dismissed = req.body?.dismissed !== false;
+    const cs = loadCalib();
+    cs.upgrades_dismissed = cs.upgrades_dismissed || {};
+    cs.upgrades_dismissed[type] = dismissed;
+    await saveCalib(cs);
+    res.json({ ok: true, type, dismissed });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -10468,6 +10505,37 @@ const _driftAlertedKeys = new Set();
 const DRIFT_ALERT_RESET_MS = 7 * 86400000; // reset wekelijks
 let _driftAlertResetAt = Date.now();
 
+// v10.9.6: odds_snapshots retention. Drift-dashboard query't alleen laatste 14
+// dagen (`sinceIso` default). Alles ouder dan 30d (safety margin) is dode
+// opslag → ruimt Supabase free-tier 500MB quota leeg. Ook feature_snapshots
+// opschonen (>60d). Draait één keer per 24u.
+async function runRetentionCleanup() {
+  const ODDS_RETENTION_DAYS = 30;
+  const FEATURE_RETENTION_DAYS = 60;
+  try {
+    const oddsIso = new Date(Date.now() - ODDS_RETENTION_DAYS * 86400000).toISOString();
+    const { error: oErr, count: oCount } = await supabase.from('odds_snapshots')
+      .delete({ count: 'estimated' }).lt('captured_at', oddsIso);
+    if (oErr) console.warn('[retention] odds_snapshots delete:', oErr.message);
+    else console.log(`🧹 odds_snapshots: ${oCount ?? '?'} rows ouder dan ${ODDS_RETENTION_DAYS}d verwijderd`);
+
+    const fIso = new Date(Date.now() - FEATURE_RETENTION_DAYS * 86400000).toISOString();
+    const { error: fErr, count: fCount } = await supabase.from('feature_snapshots')
+      .delete({ count: 'estimated' }).lt('captured_at', fIso);
+    if (fErr) console.warn('[retention] feature_snapshots delete:', fErr.message);
+    else console.log(`🧹 feature_snapshots: ${fCount ?? '?'} rows ouder dan ${FEATURE_RETENTION_DAYS}d verwijderd`);
+  } catch (e) {
+    console.warn('[retention] crash:', e.message);
+  }
+}
+function scheduleRetentionCleanup() {
+  // Draai 1x bij boot (na 5min om scan niet te blokkeren), daarna elke 24u.
+  setTimeout(() => {
+    runRetentionCleanup();
+    setInterval(runRetentionCleanup, 24 * 60 * 60 * 1000);
+  }, 5 * 60 * 1000);
+}
+
 function scheduleHealthAlerts() {
   const INTERVAL_MS = 60 * 60 * 1000; // hourly check
 
@@ -11131,6 +11199,7 @@ app.listen(PORT, () => {
   scheduleAutoRetraining();
   scheduleSignalStatsRefresh();
   scheduleHealthAlerts();
+  scheduleRetentionCleanup();
 
   // Kill-switch initial load + 30-min refresh
   // Operator state laden VÓÓR kill-switch refresh zodat market_auto_kill_enabled correct staat

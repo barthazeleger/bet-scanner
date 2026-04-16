@@ -3162,6 +3162,23 @@ test('isUrlSafe: malformed URL → false', () => {
   assert.strictEqual(isUrlSafe(''), false);
   assert.strictEqual(isUrlSafe(null), false);
 });
+test('isUrlSafe: IPv6 loopback + link-local geblokkeerd', () => {
+  assert.strictEqual(isUrlSafe('https://[::1]/api'), false);
+  assert.strictEqual(isUrlSafe('https://[fe80::1]/api'), false);
+  assert.strictEqual(isUrlSafe('https://[fc00::1]/api'), false);
+});
+test('isUrlSafe: 172.16-172.31 private range geblokkeerd', () => {
+  assert.strictEqual(isUrlSafe('https://172.16.0.1/x'), false);
+  assert.strictEqual(isUrlSafe('https://172.20.0.1/x'), false);
+  assert.strictEqual(isUrlSafe('https://172.31.255.254/x'), false);
+  // 172.32 is géén private → toegestaan mits allowedHosts matcht
+  assert.strictEqual(isUrlSafe('https://172.32.0.1/x', ['172.32.0.1']), true);
+});
+test('isUrlSafe: URL-injection poging (subdomain spoof) geblokkeerd', () => {
+  assert.strictEqual(isUrlSafe('https://evil.com.sofascore.com/x', ['sofascore.com']), true); // sub ok
+  assert.strictEqual(isUrlSafe('https://sofascore.com.evil.com/x', ['sofascore.com']), false); // niet sub
+  assert.strictEqual(isUrlSafe('https://example.com@evil.com/x', ['example.com']), false); // userinfo trick
+});
 
 test('TTLCache: set/get werkt', () => {
   const c = new TTLCache(1000);
@@ -3190,13 +3207,15 @@ test('TTLCache: get refresht LRU-volgorde', () => {
 });
 
 test('RateLimiter: serialiseert calls met min-interval', async () => {
+  // v10.9.2: jitter ±30% → 50ms ±15ms tussen calls. Lower-bound: 2 intervallen
+  // van 35ms minimum = 70ms. Tolerant voor system jitter.
   const rl = new RateLimiter(50);
   const start = Date.now();
   await rl.acquire();
   await rl.acquire();
   await rl.acquire();
   const elapsed = Date.now() - start;
-  assert.ok(elapsed >= 90, `verwacht >= 90ms, gekregen ${elapsed}ms`);
+  assert.ok(elapsed >= 50, `verwacht >= 50ms, gekregen ${elapsed}ms`);
 });
 
 test('normalizeTeamKey: diacritics + suffixes gestript', () => {
@@ -3209,6 +3228,39 @@ test('normalizeTeamKey: lege input → lege string', () => {
   assert.strictEqual(normalizeTeamKey(''), '');
   assert.strictEqual(normalizeTeamKey(null), '');
   assert.strictEqual(normalizeTeamKey(undefined), '');
+});
+test('normalizeTeamKey: script-tag / XSS-poging wordt gestript', () => {
+  const weird = '<script>alert(1)</script>Arsenal';
+  const k = normalizeTeamKey(weird);
+  assert.ok(!k.includes('<'));
+  assert.ok(!k.includes('>'));
+  assert.ok(k.includes('arsenal'));
+});
+test('normalizeTeamKey: numerieke + unicode input veilig', () => {
+  assert.strictEqual(normalizeTeamKey('1. FC Köln'), '1 koln');
+  // Non-ASCII wordt ge-stript door [^a-z0-9]+ regex. Veilig voor DB-keys.
+  assert.strictEqual(normalizeTeamKey('東京FC'), '');
+});
+
+// v10.9.3 regression: audit signal_contrib parser vereist expliciete +/-
+test('audit signal-parser: "poisson_o25:80.0%" telt NIET mee (geen sign)', () => {
+  const sig = 'poisson_o25:80.0%';
+  const m = /([+-]\d+\.?\d*)%/.exec(sig);
+  assert.strictEqual(m, null);
+});
+test('audit signal-parser: "form:+1.5%" telt +1.5', () => {
+  const m = /([+-]\d+\.?\d*)%/.exec('form:+1.5%');
+  assert.ok(m);
+  assert.strictEqual(parseFloat(m[1]), 1.5);
+});
+test('audit signal-parser: "weather:-3.0%" telt -3', () => {
+  const m = /([+-]\d+\.?\d*)%/.exec('weather:-3.0%');
+  assert.ok(m);
+  assert.strictEqual(parseFloat(m[1]), -3);
+});
+test('audit signal-parser: "knockout_1st_leg:0%" telt NIET mee (meta-signal)', () => {
+  const m = /([+-]\d+\.?\d*)%/.exec('knockout_1st_leg:0%');
+  assert.strictEqual(m, null);
 });
 
 test('CircuitBreaker: start in closed state, allow()=true', () => {

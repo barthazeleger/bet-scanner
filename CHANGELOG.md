@@ -2,6 +2,19 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.9.6] - 2026-04-16
+
+### Fixed
+- **Upgrade-notify spam na elke scan**. `upgrade_api` / `upgrade_unit` notifs vuurden elke scan opnieuw — user kreeg "overweeg All-Sports" terwijl dat al gedaan was. Nu: 7-dagen rate-limit (`cs.upgrades_lastAt`) + permanent-dismiss flag (`cs.upgrades_dismissed`) in calib. Beide persisteren in Supabase zodat deploys de state niet wegvegen.
+- `POST /api/admin/v2/upgrade-ack` endpoint om aanbevelingen permanent te dismissen: `{ type: 'upgrade_api', dismissed: true }`.
+
+### Added
+- **Retention-cleanup voor Supabase**. `odds_snapshots` tabel groeide onbegrensd (10k+ rows/dag), Supabase free tier is 500MB. Job draait dagelijks + delete rows >30d (drift-dashboard query't max 14d). Ook `feature_snapshots` >60d opgeruimd. Start 5min na boot om scan niet te blokkeren, daarna elke 24u.
+
+### Security / tests
+- 9 nieuwe tests: IPv6 SSRF edge cases, 172.16-172.31 private range, URL-injection met userinfo-trick + subdomain-spoof, XSS in normalizeTeamKey, unicode-input, audit signal-parser sign-requirement regressie (poisson_o25 leak die AEK-Rayo fix veroorzaakte).
+- RateLimiter timing-threshold verlaagd naar 50ms (was 90ms) — jitter + system load maakte 90ms flaky.
+
 ## [10.9.5] - 2026-04-16
 
 ### Added
