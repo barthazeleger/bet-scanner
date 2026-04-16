@@ -6,7 +6,7 @@ const assert = require('assert');
 // Als iemand de implementatie in lib/model-math.js verandert, breken de tests hier.
 const modelMath = require('./lib/model-math');
 const {
-  epBucketKey, calcKelly, kellyToUnits, KELLY_FRACTION,
+  epBucketKey, calcKelly, kellyToUnits, kellyScore, KELLY_FRACTION,
   poisson, poissonOver, poisson3Way,
   devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck,
   normalizeTeamName, teamMatchScore, normalizeSport, detectMarket,
@@ -57,19 +57,7 @@ function createRateLimiter() {
   };
 }
 
-// kellyToUnits komt uit lib/model-math.js
-
-// Score: kelly -> 5-10 scale (implied by strength sorting in server)
-function kellyScore(hk) {
-  // The app uses strength = k*(odd-1)*vP*epW for ranking
-  // Approximate 5-10 score based on half-kelly thresholds
-  if (hk > 0.09) return 10;
-  if (hk > 0.07) return 9;
-  if (hk > 0.05) return 8;
-  if (hk > 0.04) return 7;
-  if (hk > 0.03) return 6;
-  return 5;
-}
+// kellyToUnits en kellyScore komen uit lib/model-math.js (geïmporteerd bovenaan)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TESTS
@@ -156,15 +144,14 @@ test('kelly scales with half-kelly fraction', () => {
 // ── Unit Sizing ──────────────────────────────────────────────────────────────
 console.log('\n  Unit Sizing:');
 
-test('hk > 0.11 = 2.0U (score 9+, v10.8.19 drempel)', () => {
-  assert.strictEqual(kellyToUnits(0.12), '2.0U');
+test('hk > 0.10 = 2.0U (raw Kelly > 20%)', () => {
+  assert.strictEqual(kellyToUnits(0.11), '2.0U');
   assert.strictEqual(kellyToUnits(0.20), '2.0U');
 });
 
-test('hk 0.07-0.11 = 1.5U (score 8 bucket, incl. voorheen-2.0U zone 0.10-0.11)', () => {
+test('hk 0.07-0.10 = 1.5U (raw Kelly 14-20%)', () => {
   assert.strictEqual(kellyToUnits(0.08), '1.5U');
   assert.strictEqual(kellyToUnits(0.10), '1.5U');
-  assert.strictEqual(kellyToUnits(0.11), '1.5U');
 });
 
 test('hk 0.05-0.07 = 1.0U (raw Kelly 10-14%)', () => {
@@ -188,21 +175,46 @@ test('hk <= 0.015 = 0.3U (raw Kelly < 3%)', () => {
 });
 
 // ── Kelly Score ──────────────────────────────────────────────────────────────
-console.log('\n  Kelly Score (5-10):');
+console.log('\n  Kelly Score (5-10, tier-aligned met kellyToUnits):');
 
-test('high kelly maps to score 10', () => {
-  assert.strictEqual(kellyScore(0.10), 10);
+test('hk > 0.10 maps to score 10 (2.0U tier)', () => {
+  assert.strictEqual(kellyScore(0.11), 10);
+  assert.strictEqual(kellyScore(0.20), 10);
 });
 
-test('low kelly maps to score 5', () => {
-  assert.strictEqual(kellyScore(0.02), 5);
+test('hk 0.07-0.10 maps to score 9 (1.5U tier)', () => {
+  assert.strictEqual(kellyScore(0.08), 9);
+  assert.strictEqual(kellyScore(0.10), 9);
 });
 
-test('scores are monotonic with kelly', () => {
-  const vals = [0.02, 0.03, 0.04, 0.05, 0.07, 0.10];
-  const scores = vals.map(kellyScore);
-  for (let i = 1; i < scores.length; i++) {
-    assert.ok(scores[i] >= scores[i - 1], `Score should not decrease: ${scores[i]} >= ${scores[i - 1]}`);
+test('hk 0.05-0.07 maps to score 8 (1.0U tier)', () => {
+  assert.strictEqual(kellyScore(0.06), 8);
+  assert.strictEqual(kellyScore(0.07), 8);
+});
+
+test('hk 0.03-0.05 maps to score 7 (0.75U tier)', () => {
+  assert.strictEqual(kellyScore(0.04), 7);
+  assert.strictEqual(kellyScore(0.05), 7);
+});
+
+test('hk 0.015-0.03 maps to score 6 (0.5U tier)', () => {
+  assert.strictEqual(kellyScore(0.02), 6);
+  assert.strictEqual(kellyScore(0.03), 6);
+});
+
+test('hk <= 0.015 maps to score 5 (0.3U tier)', () => {
+  assert.strictEqual(kellyScore(0.01), 5);
+  assert.strictEqual(kellyScore(0.015), 5);
+});
+
+test('score and kellyToUnits stay in lockstep', () => {
+  const pairs = [
+    [0.01, '0.3U', 5], [0.02, '0.5U', 6], [0.04, '0.75U', 7],
+    [0.06, '1.0U', 8], [0.08, '1.5U', 9], [0.12, '2.0U', 10],
+  ];
+  for (const [hk, u, s] of pairs) {
+    assert.strictEqual(kellyToUnits(hk), u, `hk=${hk} → units mismatch`);
+    assert.strictEqual(kellyScore(hk), s, `hk=${hk} → score mismatch`);
   }
 });
 

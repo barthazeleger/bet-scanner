@@ -2,6 +2,13 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.8.20] - 2026-04-16
+
+### Fixed
+- **Rollback v10.8.19: Kelly-math weer primair**. kellyToUnits 2.0U-drempel terug naar `hk > 0.10` zodat half-Kelly sizing EV-optimaal blijft. v10.8.19 had dit verhoogd naar 0.11 voor display-consistentie, maar dat offert kleine EV op (picks met hk 0.10-0.11 kregen 1.5U i.p.v. 2.0U).
+- **Score-tier nu 1-1 gekoppeld aan stake-tier** i.p.v. lineaire formule. 0.3U=5 · 0.5U=6 · 0.75U=7 · 1.0U=8 · 1.5U=9 · 2.0U=10. Voorheen gaf (hk-0.015)/0.135*5+5 bv. hk=0.105 → score 8 + 2.0U (inconsistent). Nu krijgt elke 2.0U pick automatisch score 10/10. Geen EV-impact want stake-thresholds zijn niet veranderd — alleen de score-display volgt voortaan de stake-tier.
+- `kellyScore()` nieuwe export uit lib/model-math.js; server.js `safePicks`, lib/modal-advice.js `scoreFromHk` en index.html `renderPicks` gebruiken allen dezelfde tier-mapping. Tests ge-refactored naar nieuwe 6-tier assertions + lockstep-check tussen kellyToUnits en kellyScore.
+
 ## [10.8.19] - 2026-04-16
 
 ### Fixed

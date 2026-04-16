@@ -211,7 +211,7 @@ const {
   poisson, poissonOver, poisson3Way,
   devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck,
   normalizeTeamName, teamMatchScore, normalizeSport,
-  detectMarket, calcKelly, kellyToUnits, epBucketKey,
+  detectMarket, calcKelly, kellyToUnits, kellyScore, epBucketKey,
   pitcherAdjustment, shotsDifferentialAdjustment, recomputeWl,
 } = modelMath;
 
@@ -384,7 +384,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.19';
+const APP_VERSION    = '10.8.20';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -7648,7 +7648,7 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
 
     const safePicks = topPicks.map(p => {
       const hk = p.kelly || 0;
-      const score = Math.min(10, Math.max(5, Math.round((hk - 0.015) / 0.135 * 5) + 5));
+      const score = kellyScore(hk);
       const pick = { match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, edge: p.edge, score, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie, sport: p.sport || 'football', audit: p.audit || null };
       if (isAdmin) { pick.reason = p.reason; pick.kelly = p.kelly; pick.ep = p.ep; pick.strength = p.strength; pick.expectedEur = p.expectedEur; pick.signals = p.signals || []; }
       return pick;

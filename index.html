@@ -1456,10 +1456,17 @@ function renderPicks(el, picks) {
     const prob  = p.prob || 0;
     const pc    = prob >= 65 ? '#34d399' : prob >= 50 ? '#fbbf24' : '#f87171';
 
-    // Score 5–10: alles wat getoond wordt IS een aanbeveling, minimum 5
-    // 0.3U → 5–6 | 0.5U → 7–8 | 1.0U → 9 | uitzonderlijk (2U) → 10
+    // v10.8.20: score direct gekoppeld aan stake-tier (kellyToUnits):
+    // 0.3U=5 · 0.5U=6 · 0.75U=7 · 1.0U=8 · 1.5U=9 · 2.0U=10.
+    // Als p.score al door server is meegeleverd (safePicks uit runFullScan),
+    // gebruik die. Fallback via local hk-mapping voor oude scan-history entries.
     const hk2  = p.kelly || 0;
-    const score = Math.min(10, Math.max(5, Math.round((hk2 - 0.015) / 0.135 * 5) + 5));
+    const score = (typeof p.score === 'number') ? p.score :
+                  hk2 > 0.10 ? 10 :
+                  hk2 > 0.07 ? 9 :
+                  hk2 > 0.05 ? 8 :
+                  hk2 > 0.03 ? 7 :
+                  hk2 > 0.015 ? 6 : 5;
     const scoreCol = score >= 8 ? '#34d399' : score >= 5 ? '#fbbf24' : '#f87171';
     const scoreBadge = score != null
       ? `<span class="edge-badge" style="background:${score>=8?'rgba(52,211,153,0.15)':score>=5?'rgba(251,191,36,0.15)':'rgba(248,113,113,0.15)'};color:${scoreCol};font-size:12px;font-weight:800;padding:2px 8px">${score}/10</span>`
@@ -3720,7 +3727,7 @@ async function logModalBet() {
       wedstrijd: match,
       markt: document.getElementById('m-markt').value,
       odds, units, tip: document.getElementById('m-bookie').value || 'Bet365', uitkomst: 'Open', notities: '',
-      score: modalPick ? (() => { const hk = modalPick.kelly||0; return Math.min(10, Math.max(5, Math.round((hk-0.015)/0.135*5)+5)); })() : null,
+      score: modalPick ? (() => { const hk = modalPick.kelly||0; return hk>0.10?10:hk>0.07?9:hk>0.05?8:hk>0.03?7:hk>0.015?6:5; })() : null,
       // v10.7.26: stuur signals mee zodat Signal Performance dashboard data krijgt
       signals: modalPick?.signals || [],
       reason: modalPick?.reason || null,
