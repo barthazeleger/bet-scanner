@@ -387,7 +387,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.9.6';
+const APP_VERSION    = '10.9.7';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -7856,6 +7856,18 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
 
     const topSet = new Set(topPicks);
     for (const p of allPicks) p.selected = topSet.has(p);
+
+    // v10.9.7: combi-alternatieven. Combis (isCombi:true) die niet in top-5
+    // singles landen worden hier apart opgepakt — user ziet de hoogste-EV
+    // 2/3-bener als alternatief voor wie variance accepteert voor hoger EV.
+    // Max 3 getoond. Elke combi heeft stake-cap 0.5U via makeCombi, dus zelfs
+    // bij grote rally's aan legs wordt geen onverantwoord exposed.
+    const topCombis = allPicks
+      .filter(p => p.isCombi && !topSet.has(p))
+      .sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0))
+      .slice(0, 3);
+    for (const p of topCombis) p.combiAlternative = true;
+
     saveScanEntry(allPicks, 'prematch', beforeKill);
 
     // v10.8.17/22: audit — flag picks waar de base-model (pre-signalen) ver
@@ -7883,14 +7895,23 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
       tg(`🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n\n🚫 Geen picks met voldoende edge gevonden.`).catch(() => {});
     }
 
-    const safePicks = topPicks.map(p => {
+    const toSafe = (p) => {
       const hk = p.kelly || 0;
       const score = kellyScore(hk);
-      const pick = { match: p.match, league: p.league, label: p.label, odd: p.odd, prob: p.prob, units: p.units, edge: p.edge, score, kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie, sport: p.sport || 'football', audit: p.audit || null };
+      const pick = {
+        match: p.match, league: p.league, label: p.label, odd: p.odd,
+        prob: p.prob, units: p.units, edge: p.edge, score,
+        kickoff: p.kickoff, scanType: p.scanType, bookie: p.bookie,
+        sport: p.sport || 'football', audit: p.audit || null,
+        isCombi: p.isCombi === true, legs: p.legs || null,
+      };
       if (isAdmin) { pick.reason = p.reason; pick.kelly = p.kelly; pick.ep = p.ep; pick.strength = p.strength; pick.expectedEur = p.expectedEur; pick.signals = p.signals || []; }
       return pick;
-    });
-    return { safePicks, topPicks, allPicks, beforeKill };
+    };
+    const safePicks = topPicks.map(toSafe);
+    // v10.9.7: combi-alternatieven meegeven zodat UI een apart paneel rendert.
+    const safeCombis = topCombis.map(toSafe);
+    return { safePicks, safeCombis, topPicks, topCombis, allPicks, beforeKill };
   } finally {
     setPreferredBookies(null);
   }
@@ -7925,8 +7946,8 @@ app.post('/api/prematch', (req, res) => {
     } catch (e) {
       console.warn('Scan: user prefs load failed, scan loopt zonder filter:', e.message);
     }
-    const { safePicks } = await runFullScan({ emit, prefs, isAdmin, triggerLabel: 'manual' });
-    emit({ done: true, picks: safePicks });
+    const { safePicks, safeCombis } = await runFullScan({ emit, prefs, isAdmin, triggerLabel: 'manual' });
+    emit({ done: true, picks: safePicks, combis: safeCombis || [] });
     res.end();
     scanRunning = false;
   })().catch(err => {

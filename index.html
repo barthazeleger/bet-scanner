@@ -1425,7 +1425,13 @@ function renderPicks(el, picks) {
   // `selected: true/false` mee; pre-v10.8.16 entries hebben geen flag → undefined
   // → behandelen als geselecteerd (backward compat). Dit zorgt dat restore uit
   // history alleen de top-N toont die daadwerkelijk door MAX_PICKS-cap zijn.
-  picks = (picks || []).filter(p => p.selected !== false);
+  const all = (picks || []);
+  // v10.9.7: splitst singles van combi-alternatieven. Combi's (isCombi:true)
+  // worden in eigen paneel gerenderd (zie renderCombiAlternatives hieronder).
+  // Singles: selected=true (top-N), Combis: combiAlternative=true of isCombi
+  // zonder selected.
+  picks = all.filter(p => p.selected !== false && !p.isCombi);
+  const combiAlternatives = all.filter(p => p.isCombi === true && !p.selected);
   // ── Deduplication: group by match, show strongest as primary ──
   const matchGroups = {};
   picks.forEach(p => {
@@ -1568,6 +1574,41 @@ function renderPicks(el, picks) {
   // Bij re-render (loadBets race) dedupt renderPicks opnieuw — anders gaan
   // "See also" secondary picks verloren na re-render.
   el._picks = picks;
+
+  // v10.9.7: combi-alternatieven paneel. Als er combi's waren die niet in
+  // top-5 singles landden maar wel EV+ zijn, toon ze hier. User kan ervoor
+  // kiezen als alternatief (hoger EV mits variance geaccepteerd).
+  if (combiAlternatives.length > 0) {
+    const combiSection = document.createElement('div');
+    combiSection.className = 'combi-alternatives';
+    combiSection.style.cssText = 'margin-top:20px;padding-top:14px;border-top:1px dashed rgba(255,255,255,0.2)';
+    let html = `<div class="picks-hdr" style="font-size:13px;color:#a78bfa;margin-bottom:10px">💎 Combi-alternatieven · ${combiAlternatives.length} beschikbaar</div>`;
+    html += `<div style="font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.5">Hogere EV per ingezette euro, hogere variance. Stake gecapt op 0.3-0.5U. Niet in top-5 singles — gebruik als alternatief, niet extra.</div>`;
+    for (const c of combiAlternatives) {
+      const prob = c.prob || 0;
+      const pc = prob >= 50 ? '#34d399' : prob >= 30 ? '#fbbf24' : '#f87171';
+      const legsLabel = c.legs === 3 ? '3-bener' : '2-bener';
+      html += `
+        <div class="pick-card" style="opacity:0.85;border-left:3px solid #a78bfa;margin-bottom:8px;padding:10px 12px">
+          <div style="flex:1;min-width:0">
+            <div class="pick-name" style="font-size:13px">💎 ${escHtml(c.label || '')} <span style="font-size:10px;color:#a78bfa;font-weight:600;margin-left:6px">${legsLabel}</span></div>
+            <div class="pick-meta" style="font-size:11.5px">${escHtml(c.match || '')}${c.kickoff ? ` · <span style="color:#fbbf24;font-weight:600">⏰ ${escHtml(c.kickoff)}</span>` : ''}</div>
+            <div class="prob-row" style="margin-top:5px">
+              <div class="prob-bar"><div class="prob-fill" style="width:${Math.min(prob,100)}%;background:${pc}"></div></div>
+              <span class="prob-pct">${prob}% combi-kans</span>
+              ${c.expectedEur != null ? `<span style="font-size:11px;color:#4ade80;font-weight:700;margin-left:8px">+€${c.expectedEur}</span>` : ''}
+            </div>
+            ${c.reason ? `<div style="font-size:10.5px;color:var(--muted);margin-top:5px">${escHtml(c.reason)}</div>` : ''}
+          </div>
+          <div class="pick-right">
+            <div class="pick-odds">${c.odd || '?'}</div>
+            <div class="pick-units" style="margin-top:3px">${c.units}</div>
+          </div>
+        </div>`;
+    }
+    combiSection.innerHTML = html;
+    el.appendChild(combiSection);
+  }
 }
 
 function toggleReason(i) {

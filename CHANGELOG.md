@@ -2,6 +2,17 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.9.7] - 2026-04-16
+
+### Added
+- **💎 Combi-alternatieven paneel**. Combi's (2+3 beners) werden al berekend (`server.js:6314`) maar vielen vaak buiten top-5 door de lagere stake-cap (0.3-0.5U) vs singles (tot 2U). Nu: top-3 combis die niet in top-5 singles landen worden apart opgeslagen (`combiAlternative: true`) en gerenderd als apart paneel onder de reguliere picks. User ziet EV-max combi-optie per dag met duidelijke framing: "hogere EV per €, hogere variance — alternatief, niet extra".
+- Server expose `safeCombis` array op scan-emit + persist via scan_history zodat ook restored scans het combi-paneel tonen.
+- UI: nieuwe sectie met paars-accent (💎) onder top-picks, geen overlap met "See also"-secondaries (die blijven per-match).
+
+### Beperkingen
+- Alleen football combis (sport-override in `runFootball`). NBA/NHL/MLB/NFL/handball generen nog geen combis; die blijven top-5 singles only.
+- Combi-stake cap (0.3-0.5U) blijft bewust laag ivm correlatie-risico tussen niet-identieke-match legs + hogere variance bij leg-failure.
+
 ## [10.9.6] - 2026-04-16
 
 ### Fixed
