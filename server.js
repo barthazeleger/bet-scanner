@@ -387,7 +387,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.9.2';
+const APP_VERSION    = '10.9.3';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -1474,8 +1474,12 @@ function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'footbal
       return !/btts|aggregate_push_btts|totalscore|o2\.5|u2\.5/.test(sigLc);
     });
     const baselineProb = +(100 / odd).toFixed(1);
+    // v10.9.3: parser vereist expliciet +/- teken. Voorheen werden ongetekende
+    // percentages (bv. "poisson_o25:80.0%" = prob-waarde, niet adjustment)
+    // als +80pp meegeteld → AEK-Rayo audit toonde nonsense "signalen +86pp".
+    // Echte adjustment-signalen gebruiken altijd expliciete sign ('+' of '-').
     const signalContrib = +(relevantSignals.reduce((s, sig) => {
-      const m = /([+-]?\d+\.?\d*)%/.exec(sig);
+      const m = /([+-]\d+\.?\d*)%/.exec(sig);
       return s + (m ? parseFloat(m[1]) : 0);
     }, 0)).toFixed(1);
     const probGap = +(prob - baselineProb).toFixed(1);

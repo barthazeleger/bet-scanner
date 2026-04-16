@@ -2,6 +2,11 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.9.3] - 2026-04-16
+
+### Fixed
+- **Bug: audit signal_contrib-parser telde prob-waardes mee als adjustments**. Signals als `poisson_o25:80.0%` zijn **prob-waardes** (referentie, model gebruikt ze als input), geen adjustments. Audit-parser telde de `80.0%` als een +80pp adjustment → AEK-Rayo toonde `signalen +86pp` en `base: -12%` (nonsense). Fix: parser vereist nu expliciet `+` of `-` teken voor matches. Adjustment-signalen hebben altijd sign (`+1.5%` / `-3.0%`); prob-referenties niet (`80.0%`).
+
 ## [10.9.2] - 2026-04-16
 
 ### Changed
