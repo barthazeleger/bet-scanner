@@ -7,7 +7,7 @@ Dit document inventariseert (a) markten in api-sports die we nu niet gebruiken,
 prioritering op basis van impact vs effort. Niets hardcoded — elke nieuwe
 constante / gewicht krijgt een calibratiepad.
 
-## Actieve prioriteiten (v10.10.3)
+## Actieve prioriteiten (v10.10.4)
 
 Niet alles met theoretische edge hoort nu bovenaan. Voor de huidige productfase
 geldt deze volgorde:

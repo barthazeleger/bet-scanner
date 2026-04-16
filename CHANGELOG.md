@@ -2,6 +2,11 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.4] - 2026-04-16
+
+### Fixed
+- **Markt-multipliers UI miste sport-prefix bij legacy bare keys** (index.html:4636). Buckets als `home`/`over`/`btts_no` (oude calibratie-data van vóór sport-prefix) toonden geen sport-label terwijl `football_*` keys dat wél deden. Inconsistent met de grouping-logica die bare keys al naar `'football'` fallbackde. Fix: `renderRow()` gebruikt dezelfde fallback — eerste segment géén known sport ⇒ default `'football'` (legacy data van vóór sport-prefix-tijdperk).
+
 ## [10.10.3] - 2026-04-16
 
 Follow-up op pre-merge review-feedback voor Codex's v10.10.2 (sport-specific starter/availability edges). Twee fixes geïdentificeerd in de review zijn nu doorgevoerd plus één voorzichtigheidsaanpassing.
