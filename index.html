@@ -4762,8 +4762,10 @@ async function loadV2Dashboard() {
         html += `<button class="btn btn-ghost btn-sm" onclick="toggleOp('master_scan_enabled', ${!op.master_scan_enabled})">${op.master_scan_enabled ? '✅' : '❌'} Master scan ${op.master_scan_enabled ? 'aan' : 'uit'}</button>`;
         html += `<button class="btn btn-ghost btn-sm" onclick="toggleOp('market_auto_kill_enabled', ${!op.market_auto_kill_enabled})">${op.market_auto_kill_enabled ? '✅' : '❌'} Markt-kill ${op.market_auto_kill_enabled ? 'aan' : 'uit'}</button>`;
         html += `<button class="btn btn-ghost btn-sm" onclick="toggleOp('signal_auto_kill_enabled', ${!op.signal_auto_kill_enabled})">${op.signal_auto_kill_enabled ? '✅' : '❌'} Signal-kill ${op.signal_auto_kill_enabled ? 'aan' : 'uit'}</button>`;
+        html += `<button class="btn btn-ghost btn-sm" style="${op.scraping_enabled ? 'background:#065f46;color:#fff' : ''}" onclick="toggleOp('scraping_enabled', ${!op.scraping_enabled})">${op.scraping_enabled ? '🌐 Scraping AAN' : '🌐 Scraping uit'}</button>`;
         html += `<button class="btn btn-ghost btn-sm" style="${op.panic_mode ? 'background:#7f1d1d;color:#fff' : ''}" onclick="toggleOp('panic_mode', ${!op.panic_mode})">${op.panic_mode ? '🚨 PANIC AAN' : '🚨 Panic mode'}</button>`;
         html += `<button class="btn btn-ghost btn-sm" onclick="loadDriftView()">📉 Drift</button>`;
+        html += `<button class="btn btn-ghost btn-sm" onclick="loadScrapeSourcesView()">🔌 Scrape sources</button>`;
         html += `</div>`;
         html += `<div style="font-size:11px;color:var(--muted);margin-bottom:14px">Max picks/dag: ${op.max_picks_per_day}${op.panic_mode ? ' (panic: max 2)' : ''} · CLV autotune: ${op.signal_auto_kill_enabled ? 'auto' : 'pause'}</div>`;
       }
@@ -4776,13 +4778,51 @@ async function loadV2Dashboard() {
 }
 
 async function toggleOp(key, value) {
-  const labels = { master_scan_enabled: 'Master scan', market_auto_kill_enabled: 'Markt auto-kill', signal_auto_kill_enabled: 'Signal auto-kill', panic_mode: 'Panic mode' };
+  const labels = { master_scan_enabled: 'Master scan', market_auto_kill_enabled: 'Markt auto-kill', signal_auto_kill_enabled: 'Signal auto-kill', panic_mode: 'Panic mode', scraping_enabled: 'Scraping (externe data-bronnen)' };
   const action = value ? t('action_enable') : t('action_disable');
   if (!confirm(`${labels[key] || key} ${action}?`)) return;
   await api('/api/admin/v2/operator', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ [key]: value }),
   });
+  loadV2Dashboard();
+}
+async function loadScrapeSourcesView() {
+  // v10.9.0: admin panel voor scraper bronnen — enable/disable + health + circuit-breaker reset.
+  const r = await api('/api/admin/v2/scrape-sources').then(x => x?.json()).catch(() => null);
+  if (!r) { alert('scrape-sources: kon status niet laden'); return; }
+  const lines = [];
+  lines.push(`Scraping master: ${r.scraping_enabled ? 'AAN' : 'UIT'}`);
+  lines.push('');
+  lines.push('Sources (enabled · health · breaker):');
+  const known = ['sofascore', 'fotmob', 'nba-stats', 'nhl-api', 'mlb-stats-ext'];
+  for (const name of known) {
+    const src = (r.sources || []).find(s => s.name === name);
+    const enabled = src ? src.enabled : false;
+    const h = (r.health || []).find(x => x.source === name);
+    const healthStr = !h ? '?' : h.disabled ? 'disabled' : (h.healthy ? `healthy (${h.latencyMs}ms)` : 'FAIL');
+    const b = (r.breakers || []).find(x => x.name === name);
+    const bStr = b ? `${b.state} (${b.totalFails}/${b.totalCalls})` : '—';
+    lines.push(`  ${enabled ? '✅' : '⬜'} ${name.padEnd(16)} · ${healthStr.padEnd(25)} · ${bStr}`);
+  }
+  lines.push('');
+  lines.push('Typ een source-naam om te togglen (sofascore/fotmob/nba-stats/nhl-api/mlb-stats-ext):');
+  lines.push('Prefix met "reset:" om circuit breaker te resetten, bv. "reset:sofascore"');
+  const input = prompt(lines.join('\n'), '');
+  if (!input) return;
+  let action = {};
+  if (input.startsWith('reset:')) {
+    action = { action: 'reset-breaker', name: input.slice(6).trim() };
+  } else {
+    const name = input.trim();
+    const src = (r.sources || []).find(s => s.name === name);
+    action = { name, enabled: !(src && src.enabled) };
+  }
+  const out = await api('/api/admin/v2/scrape-sources', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(action),
+  }).then(x => x?.json()).catch(() => null);
+  alert(out ? JSON.stringify(out, null, 2) : 'geen response');
   loadV2Dashboard();
 }
 async function loadDriftView() {

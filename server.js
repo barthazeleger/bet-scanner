@@ -22,6 +22,9 @@ const OPERATOR = {
   signal_auto_kill_enabled: true,
   panic_mode: false,
   max_picks_per_day: 5,
+  // v10.9.0: master-switch voor externe data-aggregatie (sofascore/fotmob/nba-stats/nhl-api/mlb-stats-ext).
+  // Default uit → pas inschakelen na productie-smoketest via admin endpoint.
+  scraping_enabled: false,
 };
 
 async function loadOperatorState() {
@@ -384,7 +387,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.8.23';
+const APP_VERSION    = '10.9.0';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -3151,6 +3154,7 @@ async function runBasketball(emit) {
         }
 
         // Home/away splits from standings (0 extra API calls)
+        let splitSourceTag = '';
         if (hmSt && awSt) {
           const hmHomeGames = (hmSt.homeWin || 0) + (hmSt.homeLoss || 0);
           const awAwayGames = (awSt.awayWin || 0) + (awSt.awayLoss || 0);
@@ -3163,6 +3167,30 @@ async function runBasketball(emit) {
               splitNote = ` | H/A:${hmHomeWR.toFixed(2)}/${awAwayWR.toFixed(2)}`;
             }
           }
+        }
+        // v10.9.0: fallback naar stats.nba.com als api-sports standings dun zijn.
+        if (OPERATOR.scraping_enabled && homeSplitAdj === 0) {
+          try {
+            const agg = require('./lib/data-aggregator');
+            const [hmExt, awExt] = await Promise.all([
+              agg.getTeamSummary('basketball', hm),
+              agg.getTeamSummary('basketball', aw),
+            ]);
+            if (hmExt && awExt) {
+              const hmHG = (hmExt.homeWin || 0) + (hmExt.homeLoss || 0);
+              const awAG = (awExt.roadWin || 0) + (awExt.roadLoss || 0);
+              if (hmHG >= 5 && awAG >= 5) {
+                const hmWR = hmExt.homeWin / hmHG;
+                const awWR = awExt.roadWin / awAG;
+                const diff = hmWR - awWR;
+                if (Math.abs(diff) > 0.15) {
+                  homeSplitAdj = Math.min(0.04, Math.max(-0.04, diff * 0.08));
+                  splitNote = ` | H/A:${hmWR.toFixed(2)}/${awWR.toFixed(2)} [nba-stats]`;
+                  splitSourceTag = 'nba-stats';
+                }
+              }
+            }
+          } catch { /* swallow */ }
         }
 
         const totalAdv = ppgAdj + rebAdj + homeSplitAdj;
@@ -3579,6 +3607,24 @@ async function runHockey(emit) {
             goalDiffAdj = Math.min(0.04, Math.max(-0.04, gdDiff * 0.02));
             goalDiffNote = ` | GD/g:${hmGDpg > 0 ? '+' : ''}${hmGDpg.toFixed(2)} vs ${awGDpg > 0 ? '+' : ''}${awGDpg.toFixed(2)}`;
           }
+        } else if (OPERATOR.scraping_enabled) {
+          // v10.9.0: fallback naar api-web.nhle.com als api-sports dun is.
+          try {
+            const agg = require('./lib/data-aggregator');
+            const [hmExt, awExt] = await Promise.all([
+              agg.getTeamSummary('hockey', hm),
+              agg.getTeamSummary('hockey', aw),
+            ]);
+            if (hmExt && awExt && hmExt.gamesPlayed >= 5 && awExt.gamesPlayed >= 5) {
+              const hmGDpg = hmExt.gd / hmExt.gamesPlayed;
+              const awGDpg = awExt.gd / awExt.gamesPlayed;
+              const gdDiff = hmGDpg - awGDpg;
+              if (Math.abs(gdDiff) > 0.5) {
+                goalDiffAdj = Math.min(0.04, Math.max(-0.04, gdDiff * 0.02));
+                goalDiffNote = ` | GD/g:${hmGDpg > 0 ? '+' : ''}${hmGDpg.toFixed(2)} vs ${awGDpg > 0 ? '+' : ''}${awGDpg.toFixed(2)} [nhl-api]`;
+              }
+            }
+          } catch { /* swallow */ }
         }
 
         // Home/away record: strong home vs weak away → +2%
@@ -4244,6 +4290,18 @@ async function runBaseball(emit) {
         let runDiffNote = '', homeAwayNote = '', streakNote = '';
 
         // Run differential per game: >0.5/game → +2%
+        // v10.9.0: fallback naar MLB Stats API extended als api-football stale/dun is.
+        let mlbExtSummary = null;
+        if (OPERATOR.scraping_enabled && (!hmSt || hmSt.totalGames < 10 || !awSt || awSt.totalGames < 10)) {
+          try {
+            const agg = require('./lib/data-aggregator');
+            const [hmExt, awExt] = await Promise.all([
+              agg.getTeamSummary('baseball', hm),
+              agg.getTeamSummary('baseball', aw),
+            ]);
+            if (hmExt && awExt) mlbExtSummary = { hm: hmExt, aw: awExt };
+          } catch { /* swallow */ }
+        }
         if (hmSt && awSt && hmSt.totalGames >= 10 && awSt.totalGames >= 10) {
           const hmRDpg = (hmSt.pointsFor - hmSt.pointsAgainst) / hmSt.totalGames;
           const awRDpg = (awSt.pointsFor - awSt.pointsAgainst) / awSt.totalGames;
@@ -4251,6 +4309,14 @@ async function runBaseball(emit) {
           if (Math.abs(rdDiff) > 0.5) {
             runDiffAdj = Math.min(0.04, Math.max(-0.04, rdDiff * 0.02));
             runDiffNote = ` | RD/g:${hmRDpg > 0 ? '+' : ''}${hmRDpg.toFixed(2)} vs ${awRDpg > 0 ? '+' : ''}${awRDpg.toFixed(2)}`;
+          }
+        } else if (mlbExtSummary && mlbExtSummary.hm.gamesPlayed >= 10 && mlbExtSummary.aw.gamesPlayed >= 10) {
+          const hmRDpg = mlbExtSummary.hm.runDiff / mlbExtSummary.hm.gamesPlayed;
+          const awRDpg = mlbExtSummary.aw.runDiff / mlbExtSummary.aw.gamesPlayed;
+          const rdDiff = hmRDpg - awRDpg;
+          if (Math.abs(rdDiff) > 0.5) {
+            runDiffAdj = Math.min(0.04, Math.max(-0.04, rdDiff * 0.02));
+            runDiffNote = ` | RD/g:${hmRDpg > 0 ? '+' : ''}${hmRDpg.toFixed(2)} vs ${awRDpg > 0 ? '+' : ''}${awRDpg.toFixed(2)} [mlb-ext]`;
           }
         }
 
@@ -6023,8 +6089,23 @@ async function runPrematch(emit) {
               // Base BTTS probability from H2H + form
               const h2hKey2 = hmSt?.teamId && awSt?.teamId ? `${Math.min(hmSt.teamId,awSt.teamId)}-${Math.max(hmSt.teamId,awSt.teamId)}` : null;
               const h2hData = h2hKey2 ? afCache.h2h[h2hKey2] : null;
-              const h2hBTTS = h2hData ? h2hData.bttsRate * h2hData.n : 0;
-              const h2hN    = h2hData ? h2hData.n : 0;
+              let h2hBTTS = h2hData ? h2hData.bttsRate * h2hData.n : 0;
+              let h2hN    = h2hData ? h2hData.n : 0;
+              let h2hSources = ['api-football'];
+              // v10.9.0: enrich H2H met aggregator-data (sofascore + fotmob) als enabled.
+              // Merged sample vergroot n → Bayesian shrinkage knijpt minder → meer
+              // vertrouwen in h2hRate als de data het ondersteunt.
+              if (OPERATOR.scraping_enabled) {
+                try {
+                  const agg = require('./lib/data-aggregator');
+                  const merged = await agg.getMergedH2H('football', hm, aw);
+                  if (merged && merged.n > 0) {
+                    h2hBTTS += merged.btts;
+                    h2hN    += merged.n;
+                    h2hSources = h2hSources.concat(merged.sources || []);
+                  }
+                } catch { /* swallow: aggregator mag scan nooit breken */ }
+              }
               const hmGFAvg = hmSt?.goalsFor || 1.2;
               const awGFAvg = awSt?.goalsFor || 1.2;
 
@@ -6088,7 +6169,8 @@ async function runPrematch(emit) {
               // v10.8.23: H2H sample size tonen in rationale zodat user ziet
               // hoe betrouwbaar de h2hRate-input is. Dunne samples (<5 games)
               // worden via BTTS_H2H_PRIOR_K richting neutraal getrokken.
-              const h2hStr = h2hN > 0 ? ` | H2H: ${Math.round(h2hBTTS)}/${h2hN} BTTS${h2hN < 5 ? ' (dun)' : ''}` : ' | H2H: —';
+              const sourceTag = h2hSources.length > 1 ? ` [${h2hSources.join('+')}]` : '';
+              const h2hStr = h2hN > 0 ? ` | H2H: ${Math.round(h2hBTTS)}/${h2hN} BTTS${h2hN < 5 ? ' (dun)' : ''}${sourceTag}` : ' | H2H: —';
               if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60)
                 mkP(`${hm} vs ${aw}`, league.name, `🔥 BTTS Ja`, bestYes.price,
                   `BTTS: ${(bttsYesP*100).toFixed(1)}% | ${bestYes.bookie}: ${bestYes.price} | GF: ${hmGFAvg}/${awGFAvg}${h2hStr} | ${ko}`,
@@ -7015,12 +7097,54 @@ app.get('/api/admin/v2/walkforward', requireAdmin, async (req, res) => {
   }
 });
 
+// v10.9.0: GET /api/admin/v2/scrape-sources — status alle externe data-sources.
+// Levert health, breaker state, enabled-flag. Geen auth-lekkage; alleen admin.
+app.get('/api/admin/v2/scrape-sources', requireAdmin, async (req, res) => {
+  try {
+    const dataAggregator = require('./lib/data-aggregator');
+    const scraperBase = require('./lib/scraper-base');
+    const [health, breakers] = await Promise.all([
+      dataAggregator.healthCheckAll(),
+      Promise.resolve(scraperBase.allBreakerStatuses()),
+    ]);
+    res.json({
+      scraping_enabled: OPERATOR.scraping_enabled,
+      sources: scraperBase.listSources(),
+      health,
+      breakers,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'scrape-sources fetch failed', detail: e.message });
+  }
+});
+
+// v10.9.0: POST /api/admin/v2/scrape-sources — enable/disable source runtime.
+// Body: { name: 'sofascore', enabled: true } of { action: 'reset-breaker', name: 'sofascore' }
+app.post('/api/admin/v2/scrape-sources', requireAdmin, async (req, res) => {
+  try {
+    const scraperBase = require('./lib/scraper-base');
+    const body = req.body || {};
+    const validNames = ['sofascore', 'fotmob', 'nba-stats', 'nhl-api', 'mlb-stats-ext'];
+    if (body.action === 'reset-breaker') {
+      if (!validNames.includes(body.name)) return res.status(400).json({ error: 'unknown source' });
+      const b = scraperBase.getBreaker(body.name);
+      if (b) b.reset();
+      return res.json({ ok: true, action: 'reset-breaker', name: body.name });
+    }
+    if (!validNames.includes(body.name)) return res.status(400).json({ error: 'unknown source; allowed: ' + validNames.join(', ') });
+    scraperBase.setSourceEnabled(body.name, !!body.enabled);
+    res.json({ ok: true, name: body.name, enabled: !!body.enabled });
+  } catch (e) {
+    res.status(500).json({ error: 'scrape-sources update failed', detail: e.message });
+  }
+});
+
 // GET/POST /api/admin/v2/operator — minimal failsafe-toggles
 app.get('/api/admin/v2/operator', requireAdmin, (req, res) => {
   res.json({ ...OPERATOR, kill_switch_active_count: KILL_SWITCH.set.size });
 });
 app.post('/api/admin/v2/operator', requireAdmin, async (req, res) => {
-  const allowed = ['master_scan_enabled', 'market_auto_kill_enabled', 'signal_auto_kill_enabled', 'panic_mode', 'max_picks_per_day'];
+  const allowed = ['master_scan_enabled', 'market_auto_kill_enabled', 'signal_auto_kill_enabled', 'panic_mode', 'max_picks_per_day', 'scraping_enabled'];
   for (const k of allowed) {
     if (req.body && req.body[k] !== undefined) {
       OPERATOR[k] = (k === 'max_picks_per_day') ? Math.max(1, Math.min(10, parseInt(req.body[k]) || 5)) : !!req.body[k];

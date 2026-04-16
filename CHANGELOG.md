@@ -2,6 +2,49 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.9.0] - 2026-04-16
+
+Minor-release: externe data-aggregatie framework toegevoegd. Kelly-math en
+bestaande scanners onveranderd in gedrag; scraping voegt **aanvullende** data
+toe om dunne H2H-samples en stale stats op te vangen. Master-switch default
+UIT — admin schakelt na productie-verificatie aan.
+
+### Added
+- **`lib/scraper-base.js`** — gedeelde primitives: `safeFetch` met SSRF-guard (blokkeert localhost/private IPs/non-https), `RateLimiter` (serialised met min-interval), `TTLCache` (LRU + TTL), `normalizeTeamKey` (diacritics + suffix-tokens strip), `CircuitBreaker` (closed/open/half-open state machine met exponential cooldown), per-source `isSourceEnabled`/`setSourceEnabled` registry.
+- **`lib/sources/sofascore.js`** — SofaScore adapter (api.sofascore.com) met findTeamId + fetchH2HEvents + fetchTeamFormEvents voor football/basketball/hockey/baseball/handball/volleyball. Cache 24h, rate-limit 1200ms.
+- **`lib/sources/fotmob.js`** — FotMob adapter (www.fotmob.com) voor football-form + H2H via team-fixtures kruising. Cache 12h, rate-limit 1500ms.
+- **`lib/sources/nba-stats.js`** — stats.nba.com officiële endpoints met juiste headers (x-nba-stats-origin/token, Referer/Origin). Levert standings + team summary (records, streak, L10). Cache 1u.
+- **`lib/sources/nhl-api.js`** — api-web.nhle.com officieel. Standings + team summary (points, GD, home/road, L10, streak). Cache 1u.
+- **`lib/sources/mlb-stats-ext.js`** — statsapi.mlb.com uitbreiding. Standings met run-diff + splits + streak. Cache 1u.
+- **`lib/data-aggregator.js`** — unified API `getMergedH2H` / `getMergedForm` / `getTeamSummary` per sport. Event-level dedup (date + sorted-team-pair) zodat twee bronnen die dezelfde H2H tonen niet dubbel-tellen. Fail-safe: elke source-fail → skip, aggregator faalt nooit.
+- **Admin endpoints**:
+  - `GET /api/admin/v2/scrape-sources` → status per source (enabled, health, breaker-state, latency)
+  - `POST /api/admin/v2/scrape-sources` → toggle enable/disable óf `{action:'reset-breaker', name}` zonder redeploy
+- **UI admin-panel** (v2 Operator kaart): 🌐 Scraping master toggle + 🔌 Scrape sources knop die alle source-statussen + health toont met inline reset.
+
+### Integrated
+- **Football BTTS**: `calcBTTSProb` krijgt H2H van api-football **plus** geaggregeerde events van SofaScore + FotMob. Met meer samples knijpt de v10.8.23 Bayesian shrinkage minder hard → meer vertrouwen in h2hRate waar de data het ondersteunt. Sources worden in reason getoond: `H2H: 8/12 BTTS [api-football+sofascore+fotmob]`.
+- **MLB moneyline**: als api-football run-diff dun is (totalGames<10), fallback naar MLB Stats API extended (`RD/g: ... [mlb-ext]`).
+- **NBA moneyline**: als api-sports home/away-split geen signaal oplevert, fallback naar stats.nba.com (`H/A: ... [nba-stats]`).
+- **NHL moneyline**: als api-sports goal-diff geen signaal oplevert (dun), fallback naar api-web.nhle.com (`GD/g: ... [nhl-api]`).
+
+### Safety
+- **Default OFF**: `OPERATOR.scraping_enabled = false` en elke source individueel default off. Aanzetten via admin endpoint of UI-knop — geen code-deploy nodig.
+- **Circuit breaker per source**: 5 opeenvolgende fails → open (5min cooldown, exponential tot 1u). Half-open probeert 2 successes voor close. Scraper-uitval breekt scan niet.
+- **SSRF-guard**: `safeFetch` staat alleen https + allowed-hosts lijst per source toe. Blokkeert localhost, RFC1918-IP's, link-local, IPv6 loopback.
+- **Rate-limiter per source**: elke bron eigen serialisatie. Timeout 5s per request.
+- **Error-isolation**: aggregator-code in try/catch; scan kan niet crashen door scraper.
+
+### Tests
+- 303 unit tests totaal (45 nieuwe voor v10.9.0): SSRF-guard, TTLCache (expire/LRU), RateLimiter-serialisatie, normalizeTeamKey, CircuitBreaker state-machine, sofascore (mocked fetch: find/H2H/form, kapotte scores, disabled-state), fotmob (nested suggestions, non-finished skip, score-parsing), nba-stats (resultSets parsing, streak + records), nhl-api (nested defaults), mlb-stats-ext (records-splits parsing), aggregator (dedup-by-date+pair, summarize, merge met mocked sources).
+- Async tests serialiseren nu via `runAsyncTests()` om race op global-fetch mock + module-state te voorkomen.
+
+### Niet in deze release (komt in v10.9.x)
+- FlashScore + LiveScore (headless browser nodig; aparte sessie)
+- Volleybal als nieuwe sport (scanners + markten ontbreken)
+- Auto-pre-fetch op scan-start (nu on-demand caching)
+- Circuit-breaker metrics naar notifications-tabel (nu in-memory)
+
 ## [10.8.23] - 2026-04-16
 
 ### Fixed

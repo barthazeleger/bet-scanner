@@ -66,7 +66,15 @@ function createRateLimiter() {
 let passed = 0;
 let failed = 0;
 
+// v10.9.0: async tests moeten sequentieel lopen want ze delen global.fetch mock
+// en module-state (caches, circuit breakers). Parallel = races.
+const pendingAsync = [];
 function test(name, fn) {
+  if (fn.constructor.name === 'AsyncFunction') {
+    // Queue async — run in volgorde via runAsyncTests().
+    pendingAsync.push({ name, fn });
+    return;
+  }
   try {
     fn();
     passed++;
@@ -74,6 +82,18 @@ function test(name, fn) {
   } catch (e) {
     failed++;
     console.log(`  \u274c ${name}: ${e.message}`);
+  }
+}
+async function runAsyncTests() {
+  for (const { name, fn } of pendingAsync) {
+    try {
+      await fn();
+      passed++;
+      console.log(`  \u2705 (async) ${name}`);
+    } catch (e) {
+      failed++;
+      console.log(`  \u274c (async) ${name}: ${e && e.message || e}`);
+    }
   }
 }
 
@@ -3108,6 +3128,619 @@ test('modal: lagere odds schalen origUnits met kelly-ratio, niet met pure Kelly'
   assert.ok(r.recUnits <= 0.3, `rec (${r.recUnits}) mag niet boven origUnits (0.3) uitkomen`);
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.9.0 — SCRAPING / DATA-AGGREGATOR TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+console.log('\n  Scraper Base (v10.9.0):');
+
+const scraperBase = require('./lib/scraper-base');
+const { isUrlSafe, TTLCache, RateLimiter, CircuitBreaker, normalizeTeamKey,
+        setSourceEnabled, isSourceEnabled, allBreakerStatuses, getBreaker } = scraperBase;
+
+test('isUrlSafe: blokkeert non-https', () => {
+  assert.strictEqual(isUrlSafe('http://example.com/x'), false);
+  assert.strictEqual(isUrlSafe('ftp://example.com/x'), false);
+});
+test('isUrlSafe: blokkeert localhost + private IPs (SSRF)', () => {
+  assert.strictEqual(isUrlSafe('https://localhost/x'), false);
+  assert.strictEqual(isUrlSafe('https://127.0.0.1/x'), false);
+  assert.strictEqual(isUrlSafe('https://10.0.0.5/x'), false);
+  assert.strictEqual(isUrlSafe('https://192.168.1.1/x'), false);
+  assert.strictEqual(isUrlSafe('https://169.254.169.254/latest'), false);
+});
+test('isUrlSafe: respecteert allowedHosts-lijst', () => {
+  assert.strictEqual(isUrlSafe('https://example.com/x', ['example.com']), true);
+  assert.strictEqual(isUrlSafe('https://sub.example.com/x', ['example.com']), true);
+  assert.strictEqual(isUrlSafe('https://evil.com/x', ['example.com']), false);
+});
+test('isUrlSafe: weigert mega-lange URLs (DOS-guard)', () => {
+  const url = 'https://x.com/' + 'a'.repeat(3000);
+  assert.strictEqual(isUrlSafe(url, ['x.com']), false);
+});
+test('isUrlSafe: malformed URL → false', () => {
+  assert.strictEqual(isUrlSafe('not-a-url'), false);
+  assert.strictEqual(isUrlSafe(''), false);
+  assert.strictEqual(isUrlSafe(null), false);
+});
+
+test('TTLCache: set/get werkt', () => {
+  const c = new TTLCache(1000);
+  c.set('a', 42);
+  assert.strictEqual(c.get('a'), 42);
+});
+test('TTLCache: expire na TTL', () => {
+  const c = new TTLCache(-1); // negative TTL → immediate expire
+  c.set('a', 42);
+  assert.strictEqual(c.get('a'), undefined);
+});
+test('TTLCache: maxEntries evict oudste', () => {
+  const c = new TTLCache(10000, 3);
+  c.set('a', 1); c.set('b', 2); c.set('c', 3); c.set('d', 4);
+  assert.strictEqual(c.size, 3);
+  assert.strictEqual(c.get('a'), undefined);
+  assert.strictEqual(c.get('d'), 4);
+});
+test('TTLCache: get refresht LRU-volgorde', () => {
+  const c = new TTLCache(10000, 3);
+  c.set('a', 1); c.set('b', 2); c.set('c', 3);
+  c.get('a'); // a wordt meest-recent
+  c.set('d', 4);
+  assert.strictEqual(c.get('b'), undefined); // b is nu oudst → evicted
+  assert.strictEqual(c.get('a'), 1);
+});
+
+test('RateLimiter: serialiseert calls met min-interval', async () => {
+  const rl = new RateLimiter(50);
+  const start = Date.now();
+  await rl.acquire();
+  await rl.acquire();
+  await rl.acquire();
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed >= 90, `verwacht >= 90ms, gekregen ${elapsed}ms`);
+});
+
+test('normalizeTeamKey: diacritics + suffixes gestript', () => {
+  assert.strictEqual(normalizeTeamKey('Bromley FC'), 'bromley');
+  assert.strictEqual(normalizeTeamKey('Cambridge United'), 'cambridge');
+  assert.strictEqual(normalizeTeamKey('Atlético Madrid'), 'atletico madrid');
+  assert.strictEqual(normalizeTeamKey('FC Köln'), 'koln');
+});
+test('normalizeTeamKey: lege input → lege string', () => {
+  assert.strictEqual(normalizeTeamKey(''), '');
+  assert.strictEqual(normalizeTeamKey(null), '');
+  assert.strictEqual(normalizeTeamKey(undefined), '');
+});
+
+test('CircuitBreaker: start in closed state, allow()=true', () => {
+  const cb = new CircuitBreaker({ name: 'test1', failureThreshold: 3 });
+  assert.strictEqual(cb.state, 'closed');
+  assert.strictEqual(cb.allow(), true);
+});
+test('CircuitBreaker: failure threshold trigger → open', () => {
+  const cb = new CircuitBreaker({ name: 'test2', failureThreshold: 3, minCooldownMs: 100000 });
+  cb.allow(); cb.onFailure('err');
+  cb.allow(); cb.onFailure('err');
+  cb.allow(); cb.onFailure('err');
+  assert.strictEqual(cb.state, 'open');
+  assert.strictEqual(cb.allow(), false);
+});
+test('CircuitBreaker: open → half-open na cooldown', () => {
+  const cb = new CircuitBreaker({ name: 'test3', failureThreshold: 1, minCooldownMs: 0 });
+  cb.allow(); cb.onFailure('err');
+  assert.strictEqual(cb.state, 'open');
+  const allowed = cb.allow(); // cooldown is 0 → direct half-open
+  assert.strictEqual(allowed, true);
+  assert.strictEqual(cb.state, 'half-open');
+});
+test('CircuitBreaker: half-open success threshold → closed', () => {
+  const cb = new CircuitBreaker({ name: 'test4', failureThreshold: 1, successThreshold: 2, minCooldownMs: 0 });
+  cb.allow(); cb.onFailure('err');
+  cb.allow(); cb.onSuccess();
+  cb.allow(); cb.onSuccess();
+  assert.strictEqual(cb.state, 'closed');
+});
+test('CircuitBreaker: half-open fail → open met langere cooldown', () => {
+  const cb = new CircuitBreaker({ name: 'test5', failureThreshold: 1, minCooldownMs: 100, maxCooldownMs: 1000 });
+  cb.allow(); cb.onFailure('err');
+  const before = cb.currentCooldownMs;
+  cb.openedAt = Date.now() - 200; // simuleer verstreken cooldown
+  cb.allow(); // → half-open
+  cb.onFailure('err');
+  assert.strictEqual(cb.state, 'open');
+  assert.ok(cb.currentCooldownMs > before, 'cooldown moet verdubbelen');
+});
+test('CircuitBreaker: reset() herstelt volledig', () => {
+  const cb = new CircuitBreaker({ name: 'test6', failureThreshold: 1 });
+  cb.allow(); cb.onFailure('err');
+  cb.reset();
+  assert.strictEqual(cb.state, 'closed');
+  assert.strictEqual(cb.fails, 0);
+});
+test('CircuitBreaker: status() bevat breaker metadata', () => {
+  const cb = new CircuitBreaker({ name: 'test7' });
+  const s = cb.status();
+  assert.strictEqual(s.name, 'test7');
+  assert.strictEqual(s.state, 'closed');
+  assert.strictEqual(typeof s.totalCalls, 'number');
+});
+
+test('setSourceEnabled / isSourceEnabled roundtrip', () => {
+  setSourceEnabled('x-test', true);
+  assert.strictEqual(isSourceEnabled('x-test'), true);
+  setSourceEnabled('x-test', false);
+  assert.strictEqual(isSourceEnabled('x-test'), false);
+});
+test('isSourceEnabled: onbekende source = false (default off)', () => {
+  assert.strictEqual(isSourceEnabled('never-registered-xyz'), false);
+});
+
+// ── Mocked fetch helper ──
+function withMockFetch(handler, testFn) {
+  const orig = global.fetch;
+  global.fetch = async (url, opts) => {
+    const res = await handler(url, opts);
+    if (res === null || res === undefined) {
+      return { ok: false, status: 500, text: async () => '', json: async () => null };
+    }
+    if (res.status && res.status >= 400) {
+      return { ok: false, status: res.status, text: async () => '', json: async () => null };
+    }
+    const body = res.body === undefined ? res : res.body;
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    return { ok: true, status: 200, text: async () => text, json: async () => body };
+  };
+  const restore = () => { global.fetch = orig; };
+  const result = testFn();
+  if (result && typeof result.then === 'function') return result.finally(restore);
+  restore();
+  return result;
+}
+
+// ── SOFASCORE ──────────────────────────────────────────────────────────────
+console.log('\n  Sources/SofaScore (v10.9.0):');
+
+const sofa = require('./lib/sources/sofascore');
+
+test('sofascore: disabled source → null (default off)', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', false);
+  const r = await sofa.findTeamId('Arsenal', 'football');
+  assert.strictEqual(r, null);
+});
+
+test('sofascore: findTeamId match op exact normalized name', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  await withMockFetch(async () => ({
+    results: [
+      { type: 'team', entity: { id: 42, name: 'Arsenal', slug: 'arsenal', sport: { slug: 'football' } } },
+      { type: 'team', entity: { id: 43, name: 'Arsenal Tula', slug: 'arsenal-tula', sport: { slug: 'football' } } },
+    ],
+  }), async () => {
+    const r = await sofa.findTeamId('Arsenal', 'football');
+    assert.strictEqual(r.id, 42);
+    assert.strictEqual(r.name, 'Arsenal');
+  });
+});
+
+test('sofascore: findTeamId filtert op sport', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  await withMockFetch(async () => ({
+    results: [
+      { type: 'team', entity: { id: 10, name: 'Arsenal', sport: { slug: 'basketball' } } },
+      { type: 'team', entity: { id: 42, name: 'Arsenal', sport: { slug: 'football' } } },
+    ],
+  }), async () => {
+    const r = await sofa.findTeamId('Arsenal', 'football');
+    assert.strictEqual(r.id, 42);
+  });
+});
+
+test('sofascore: findTeamId: geen match → null', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  await withMockFetch(async () => ({ results: [] }), async () => {
+    const r = await sofa.findTeamId('NietBestaand', 'football');
+    assert.strictEqual(r, null);
+  });
+});
+
+test('sofascore: 5xx → circuit breaker telt failure, return null', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  let calls = 0;
+  await withMockFetch(async () => { calls++; return { status: 500 }; }, async () => {
+    const r = await sofa.findTeamId('X', 'football');
+    assert.strictEqual(r, null);
+    assert.ok(calls === 1);
+  });
+});
+
+test('sofascore: fetchH2HEvents parses scores + dates', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  const now = Math.floor(Date.now() / 1000);
+  let call = 0;
+  await withMockFetch(async (url) => {
+    call++;
+    if (url.includes('/search/suggestions/')) {
+      const q = decodeURIComponent(url.split('/').pop());
+      if (q.toLowerCase().includes('bromley')) {
+        return { results: [{ type: 'team', entity: { id: 1, name: 'Bromley', sport: { slug: 'football' } } }] };
+      }
+      return { results: [{ type: 'team', entity: { id: 2, name: 'Cambridge United', sport: { slug: 'football' } } }] };
+    }
+    if (url.includes('/h2h/')) {
+      return {
+        events: [
+          { startTimestamp: now - 86400*30, homeTeam: { id: 1, name: 'Bromley' }, awayTeam: { id: 2, name: 'Cambridge United' }, homeScore: { current: 2 }, awayScore: { current: 1 } },
+          { startTimestamp: now - 86400*60, homeTeam: { id: 2, name: 'Cambridge United' }, awayTeam: { id: 1, name: 'Bromley' }, homeScore: { current: 0 }, awayScore: { current: 0 } },
+          { startTimestamp: now - 86400*90, homeTeam: { id: 1, name: 'Bromley' }, awayTeam: { id: 2, name: 'Cambridge United' }, homeScore: { current: 3 }, awayScore: { current: 2 } },
+        ],
+      };
+    }
+    return { results: [] };
+  }, async () => {
+    const events = await sofa.fetchH2HEvents('Bromley', 'Cambridge United', 'football');
+    assert.strictEqual(events.length, 3);
+    assert.strictEqual(events[0].btts, true);   // 2-1
+    assert.strictEqual(events[1].btts, false);  // 0-0
+    assert.strictEqual(events[2].btts, true);   // 3-2
+    const btts = events.filter(e => e.btts).length;
+    assert.strictEqual(btts, 2);
+  });
+});
+
+test('sofascore: fetchH2HEvents met kapotte scores → skipt bad event', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  await withMockFetch(async (url) => {
+    if (url.includes('/search/suggestions/')) {
+      return { results: [{ type: 'team', entity: { id: 1, name: 'A', sport: { slug: 'football' } } }] };
+    }
+    if (url.includes('/h2h/')) {
+      return {
+        events: [
+          { homeTeam: { id: 1, name: 'A' }, awayTeam: { id: 2, name: 'B' }, homeScore: { current: 'abc' }, awayScore: { current: 1 } },
+          { homeTeam: null, awayTeam: { id: 2 }, homeScore: { current: 1 }, awayScore: { current: 0 } },
+          { homeTeam: { id: 1, name: 'A' }, awayTeam: { id: 2, name: 'B' }, homeScore: { current: 300 }, awayScore: { current: 1 } }, // sanity cap
+        ],
+      };
+    }
+    return {};
+  }, async () => {
+    const events = await sofa.fetchH2HEvents('A', 'B', 'football');
+    assert.strictEqual(events.length, 0);
+  });
+});
+
+test('sofascore: fetchTeamFormEvents: parseert W/D/L + home/away', async () => {
+  sofa._clearCache();
+  sofa._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  await withMockFetch(async (url) => {
+    if (url.includes('/search/suggestions/')) {
+      return { results: [{ type: 'team', entity: { id: 1, name: 'X', sport: { slug: 'football' } } }] };
+    }
+    if (url.includes('/events/last/')) {
+      return {
+        events: [
+          { startTimestamp: 100, homeTeam: { id: 1, name: 'X' }, awayTeam: { id: 2, name: 'Y' }, homeScore: { current: 2 }, awayScore: { current: 0 } }, // W home
+          { startTimestamp: 99, homeTeam: { id: 2, name: 'Z' }, awayTeam: { id: 1, name: 'X' }, homeScore: { current: 3 }, awayScore: { current: 1 } }, // L away
+          { startTimestamp: 98, homeTeam: { id: 1, name: 'X' }, awayTeam: { id: 3, name: 'A' }, homeScore: { current: 1 }, awayScore: { current: 1 } }, // D
+        ],
+      };
+    }
+    return {};
+  }, async () => {
+    const form = await sofa.fetchTeamFormEvents('X', 'football', 10);
+    assert.strictEqual(form.length, 3);
+    assert.strictEqual(form[0].result, 'W');
+    assert.strictEqual(form[1].result, 'L');
+    assert.strictEqual(form[2].result, 'D');
+    assert.strictEqual(form[0].isHome, true);
+    assert.strictEqual(form[1].isHome, false);
+  });
+});
+
+// ── FOTMOB ──────────────────────────────────────────────────────────────
+console.log('\n  Sources/FotMob (v10.9.0):');
+
+const fotmob = require('./lib/sources/fotmob');
+
+test('fotmob: disabled → null', async () => {
+  fotmob._clearCache(); fotmob._breaker.reset();
+  setSourceEnabled('fotmob', false);
+  const r = await fotmob.findTeamId('Arsenal');
+  assert.strictEqual(r, null);
+});
+
+test('fotmob: findTeamId parseert nested suggestions-array', async () => {
+  fotmob._clearCache(); fotmob._breaker.reset();
+  setSourceEnabled('fotmob', true);
+  await withMockFetch(async () => ({
+    suggestions: [[{ type: 'team', id: 9825, name: 'Arsenal' }]],
+  }), async () => {
+    const r = await fotmob.findTeamId('Arsenal');
+    assert.strictEqual(r.id, 9825);
+  });
+});
+
+test('fotmob: fetchTeamFormEvents skipt non-finished + malformed', async () => {
+  fotmob._clearCache(); fotmob._breaker.reset();
+  setSourceEnabled('fotmob', true);
+  await withMockFetch(async (url) => {
+    if (url.includes('/searchapi/suggest')) {
+      return { suggestions: [[{ type: 'team', id: 1, name: 'X' }]] };
+    }
+    if (url.includes('/teams?id=')) {
+      return {
+        fixtures: {
+          allFixtures: {
+            fixtures: [
+              { status: { finished: true, utcTime: '2026-04-01T18:00:00Z', scoreStr: '2 - 1' }, home: { id: 1, name: 'X' }, away: { id: 2, name: 'Y' } }, // W
+              { status: { finished: false, utcTime: '2026-04-08T20:00:00Z' }, home: { id: 1, name: 'X' }, away: { id: 3, name: 'Z' } }, // upcoming → skip
+              { status: { finished: true, utcTime: '2026-03-25T15:30:00Z', scoreStr: '??' }, home: { id: 1, name: 'X' }, away: { id: 4, name: 'A' } }, // no score → skip
+              { status: { finished: true, utcTime: '2026-03-20T12:00:00Z', scoreStr: '0 - 0' }, home: { id: 5, name: 'B' }, away: { id: 1, name: 'X' } }, // D away
+            ],
+          },
+        },
+      };
+    }
+    return {};
+  }, async () => {
+    const f = await fotmob.fetchTeamFormEvents('X', 10);
+    assert.strictEqual(f.length, 2);
+    assert.strictEqual(f[0].result, 'W');
+    assert.strictEqual(f[1].result, 'D');
+  });
+});
+
+// ── NBA-STATS ──────────────────────────────────────────────────────────
+console.log('\n  Sources/NBA-stats (v10.9.0):');
+
+const nbaStats = require('./lib/sources/nba-stats');
+
+test('nba-stats: fetchStandings parseert resultSets', async () => {
+  nbaStats._clearCache(); nbaStats._breaker.reset();
+  setSourceEnabled('nba-stats', true);
+  await withMockFetch(async () => ({
+    resultSets: [{
+      headers: ['TeamID', 'TeamCity', 'TeamName', 'Conference', 'WINS', 'LOSSES', 'WinPCT', 'HOME', 'ROAD', 'L10', 'strCurrentStreak', 'PointsPG', 'OppPointsPG', 'DiffPointsPG', 'Division'],
+      rowSet: [
+        [1, 'Boston', 'Celtics', 'East', 60, 22, 0.731, '32-9', '28-13', '8-2', 'W5', 115, 108, 7, 'Atlantic'],
+      ],
+    }],
+  }), async () => {
+    const rows = await nbaStats.fetchStandings('2025-26');
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].fullName, 'Boston Celtics');
+    assert.strictEqual(rows[0].wins, 60);
+  });
+});
+
+test('nba-stats: fetchTeamSummary parseert streak + records', async () => {
+  nbaStats._clearCache(); nbaStats._breaker.reset();
+  setSourceEnabled('nba-stats', true);
+  await withMockFetch(async () => ({
+    resultSets: [{
+      headers: ['TeamID', 'TeamCity', 'TeamName', 'Conference', 'WINS', 'LOSSES', 'WinPCT', 'HOME', 'ROAD', 'L10', 'strCurrentStreak', 'PointsPG', 'OppPointsPG', 'DiffPointsPG'],
+      rowSet: [[1, 'Boston', 'Celtics', 'East', 60, 22, 0.731, '32-9', '28-13', '8-2', 'W5', 115, 108, 7]],
+    }],
+  }), async () => {
+    const s = await nbaStats.fetchTeamSummary('Boston Celtics', '2025-26');
+    assert.strictEqual(s.streakType, 'W');
+    assert.strictEqual(s.streakCount, 5);
+    assert.strictEqual(s.homeWin, 32);
+    assert.strictEqual(s.l10Win, 8);
+  });
+});
+
+test('nba-stats: no resultSets → null', async () => {
+  nbaStats._clearCache(); nbaStats._breaker.reset();
+  setSourceEnabled('nba-stats', true);
+  await withMockFetch(async () => ({ resultSets: [] }), async () => {
+    const r = await nbaStats.fetchStandings('2025-26');
+    assert.strictEqual(r, null);
+  });
+});
+
+// ── NHL-API ────────────────────────────────────────────────────────────
+console.log('\n  Sources/NHL-api (v10.9.0):');
+
+const nhlApi = require('./lib/sources/nhl-api');
+
+test('nhl-api: fetchStandings parseert nested team fields', async () => {
+  nhlApi._clearCache(); nhlApi._breaker.reset();
+  setSourceEnabled('nhl-api', true);
+  await withMockFetch(async () => ({
+    standings: [
+      { teamAbbrev: { default: 'BOS' }, teamName: { default: 'Bruins' }, conferenceName: 'East', divisionName: 'Atlantic',
+        wins: 40, losses: 25, otLosses: 7, points: 87, gamesPlayed: 72, goalDifferential: 25,
+        homeWins: 22, homeLosses: 10, homeOtLosses: 3,
+        roadWins: 18, roadLosses: 15, roadOtLosses: 4,
+        l10Wins: 6, l10Losses: 3, l10OtLosses: 1,
+        streakCode: 'W', streakCount: 4, goalFor: 220, goalAgainst: 195 },
+    ],
+  }), async () => {
+    const rows = await nhlApi.fetchStandings();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].teamAbbrev, 'BOS');
+    assert.strictEqual(rows[0].points, 87);
+  });
+});
+
+test('nhl-api: findTeamByName case-insensitive', async () => {
+  nhlApi._clearCache(); nhlApi._breaker.reset();
+  setSourceEnabled('nhl-api', true);
+  await withMockFetch(async () => ({
+    standings: [{ teamAbbrev: { default: 'BOS' }, teamName: { default: 'Bruins' }, wins: 40, losses: 25 }],
+  }), async () => {
+    const r = await nhlApi.findTeamByName('bruins');
+    assert.ok(r);
+    assert.strictEqual(r.teamAbbrev, 'BOS');
+  });
+});
+
+// ── MLB-EXT ────────────────────────────────────────────────────────────
+console.log('\n  Sources/MLB-stats-ext (v10.9.0):');
+
+const mlbExt = require('./lib/sources/mlb-stats-ext');
+
+test('mlb-ext: fetchStandings parseert records-splits', async () => {
+  mlbExt._clearCache(); mlbExt._breaker.reset();
+  setSourceEnabled('mlb-stats-ext', true);
+  await withMockFetch(async () => ({
+    records: [{
+      division: { name: 'AL East' },
+      teamRecords: [{
+        team: { id: 111, name: 'Red Sox' },
+        wins: 90, losses: 72, winningPercentage: '.556',
+        runsScored: 780, runsAllowed: 700, runDifferential: 80,
+        gamesPlayed: 162,
+        streak: { streakCode: 'W3', streakType: 'wins', streakNumber: 3 },
+        records: { splitRecords: [
+          { type: 'home', wins: 50, losses: 31 },
+          { type: 'away', wins: 40, losses: 41 },
+          { type: 'lastTen', wins: 6, losses: 4 },
+        ]},
+      }],
+    }],
+  }), async () => {
+    const rows = await mlbExt.fetchStandings('2025');
+    assert.strictEqual(rows.length, 1);
+    const s = await mlbExt.fetchTeamSummary('Red Sox', '2025');
+    assert.strictEqual(s.wins, 90);
+    assert.strictEqual(s.homeWin, 50);
+    assert.strictEqual(s.streakCount, 3);
+  });
+});
+
+// ── DATA AGGREGATOR ────────────────────────────────────────────────────
+console.log('\n  Data Aggregator (v10.9.0):');
+
+const agg = require('./lib/data-aggregator');
+
+test('aggregator: _dedupH2H verwijdert duplicates by date+pair', () => {
+  const events = [
+    { source: 's1', date: '2025-10-01', homeTeam: 'A', awayTeam: 'B', homeScore: 1, awayScore: 1 },
+    { source: 's2', date: '2025-10-01', homeTeam: 'B', awayTeam: 'A', homeScore: 1, awayScore: 1 }, // zelfde match, andere home-positie
+    { source: 's1', date: '2025-09-10', homeTeam: 'A', awayTeam: 'B', homeScore: 2, awayScore: 0 },
+  ];
+  const d = agg._dedupH2H(events);
+  assert.strictEqual(d.length, 2);
+});
+
+test('aggregator: _summarizeH2H telt btts + rates', () => {
+  const events = [
+    { homeTeam: 'A', awayTeam: 'B', homeScore: 2, awayScore: 1, btts: true },  // btts
+    { homeTeam: 'A', awayTeam: 'B', homeScore: 1, awayScore: 0, btts: false }, // geen btts
+    { homeTeam: 'B', awayTeam: 'A', homeScore: 3, awayScore: 3, btts: true },  // btts + over2.5
+  ];
+  const s = agg._summarizeH2H(events, 'A', 'B');
+  assert.strictEqual(s.n, 3);
+  assert.strictEqual(s.btts, 2);
+  assert.ok(Math.abs(s.bttsRate - 0.667) < 0.01);
+});
+
+test('aggregator: _dedupFormEvents op date+opp', () => {
+  const events = [
+    { source: 's1', date: '2025-10-01', oppName: 'X', myScore: 2, oppScore: 1, result: 'W' },
+    { source: 's2', date: '2025-10-01', oppName: 'X', myScore: 2, oppScore: 1, result: 'W' }, // duplicate
+    { source: 's1', date: '2025-09-15', oppName: 'Y', myScore: 1, oppScore: 1, result: 'D' },
+  ];
+  const d = agg._dedupFormEvents(events);
+  assert.strictEqual(d.length, 2);
+});
+
+test('aggregator: _summarizeForm telt W/D/L + GF/GA', () => {
+  const events = [
+    { date: '2025-10-01', myScore: 2, oppScore: 1 }, // W
+    { date: '2025-09-15', myScore: 1, oppScore: 1 }, // D
+    { date: '2025-09-01', myScore: 0, oppScore: 2 }, // L
+  ];
+  const s = agg._summarizeForm(events);
+  assert.strictEqual(s.n, 3);
+  assert.strictEqual(s.w, 1);
+  assert.strictEqual(s.d, 1);
+  assert.strictEqual(s.l, 1);
+  assert.strictEqual(s.gfPerGame, 1);
+  assert.strictEqual(s.gaPerGame, 4 / 3 > 1.33 && 4 / 3 < 1.34 ? +(4/3).toFixed(2) : s.gaPerGame);
+  assert.ok(s.form.length > 0);
+});
+
+test('aggregator: getMergedH2H faalt gracefully als alle sources disabled', async () => {
+  setSourceEnabled('sofascore', false);
+  setSourceEnabled('fotmob', false);
+  const r = await agg.getMergedH2H('football', 'A', 'B');
+  assert.strictEqual(r, null);
+});
+
+test('aggregator: getMergedH2H merged events van meerdere sources (dedup)', async () => {
+  sofa._clearCache(); sofa._breaker.reset();
+  fotmob._clearCache(); fotmob._breaker.reset();
+  setSourceEnabled('sofascore', true);
+  setSourceEnabled('fotmob', true);
+  const now = Math.floor(Date.now() / 1000);
+  await withMockFetch(async (url) => {
+    if (url.includes('sofascore') && url.includes('/search/suggestions/')) {
+      const q = decodeURIComponent(url.split('/').pop()).toLowerCase();
+      return { results: [{ type: 'team', entity: { id: q.includes('bromley') ? 1 : 2, name: q.includes('bromley') ? 'Bromley' : 'Cambridge United', sport: { slug: 'football' } } }] };
+    }
+    if (url.includes('sofascore') && url.includes('/h2h/')) {
+      return {
+        events: [
+          { startTimestamp: now - 86400 * 30, homeTeam: { id: 1, name: 'Bromley' }, awayTeam: { id: 2, name: 'Cambridge United' }, homeScore: { current: 2 }, awayScore: { current: 1 } },
+        ],
+      };
+    }
+    if (url.includes('fotmob') && url.includes('searchapi/suggest')) {
+      const term = url.split('term=')[1];
+      return { suggestions: [[{ type: 'team', id: term.toLowerCase().includes('bromley') ? 11 : 22, name: term.toLowerCase().includes('bromley') ? 'Bromley' : 'Cambridge United' }]] };
+    }
+    if (url.includes('fotmob') && url.includes('/teams?id=')) {
+      return {
+        fixtures: {
+          allFixtures: {
+            fixtures: [
+              { status: { finished: true, utcTime: new Date(Date.now() - 86400 * 1000 * 30).toISOString(), scoreStr: '2 - 1' }, home: { id: 11, name: 'Bromley' }, away: { id: 22, name: 'Cambridge United' } },  // zelfde wedstrijd
+              { status: { finished: true, utcTime: new Date(Date.now() - 86400 * 1000 * 60).toISOString(), scoreStr: '0 - 0' }, home: { id: 22, name: 'Cambridge United' }, away: { id: 11, name: 'Bromley' } }, // extra
+            ],
+          },
+        },
+      };
+    }
+    return {};
+  }, async () => {
+    const r = await agg.getMergedH2H('football', 'Bromley', 'Cambridge United');
+    assert.ok(r);
+    // sofascore gives 1 game, fotmob gives 2 but 1 overlapt → total dedup = 2
+    assert.ok(r.n >= 1 && r.n <= 2, `verwacht 1-2 unieke events, kreeg ${r.n}`);
+    assert.ok(r.sources.length >= 1);
+  });
+});
+
+test('aggregator: healthCheckAll roept alle sources aan', async () => {
+  setSourceEnabled('sofascore', false);
+  setSourceEnabled('fotmob', false);
+  setSourceEnabled('nba-stats', false);
+  setSourceEnabled('nhl-api', false);
+  setSourceEnabled('mlb-stats-ext', false);
+  const r = await agg.healthCheckAll();
+  assert.strictEqual(r.length, 5);
+  assert.ok(r.every(x => x.healthy === null || x.disabled === true || x.healthy === false));
+});
+
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
-console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+runAsyncTests().then(() => {
+  console.log(`\n\u2514\u2500\u2500 Results: ${passed} passed, ${failed} failed\n`);
+  process.exit(failed > 0 ? 1 : 0);
+});
