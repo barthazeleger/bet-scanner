@@ -6408,6 +6408,45 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
+// ── v2 Admin: calibration-monitor read (slice 2, v10.10.16) ────────────────
+// GET /api/admin/v2/calibration-monitor?window=90d&sport=football
+// Leest per-signaal Brier/log-loss/bins uit signal_calibration. Rows dragen
+// expliciet `probability_source` zodat v1 ep_proxy niet als canonical
+// pick.ep-calibratie gelezen wordt. Optioneel filterable op window_key /
+// sport / market_type. Niet-paginated: huidige cardinaliteit is
+// signals × sporten × markten × 4 windows = O(100-500) rows.
+app.get('/api/admin/v2/calibration-monitor', requireAdmin, async (req, res) => {
+  try {
+    const window = typeof req.query.window === 'string' ? req.query.window : null;
+    const sport = typeof req.query.sport === 'string' ? req.query.sport : null;
+    const marketType = typeof req.query.market_type === 'string' ? req.query.market_type : null;
+    const allowedWindows = new Set(['30d', '90d', '365d', 'lifetime']);
+    let query = supabase.from('signal_calibration')
+      .select('*')
+      .order('brier_score', { ascending: true, nullsLast: true })
+      .limit(2000);
+    if (window && allowedWindows.has(window)) query = query.eq('window_key', window);
+    if (sport) query = query.eq('sport', sport);
+    if (marketType) query = query.eq('market_type', marketType);
+    const { data, error } = await query;
+    if (error) {
+      if (/relation .* does not exist/i.test(error.message || '')) {
+        return res.json({ ready: false, reason: 'signal_calibration tabel niet gemigreerd', rows: [] });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    const rows = data || [];
+    return res.json({
+      ready: true,
+      filters: { window, sport, market_type: marketType },
+      rowCount: rows.length,
+      rows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── v2 Admin: pick_candidates analytics ─────────────────────────────────────
 // GET /api/admin/v2/pick-candidates-summary?hours=24
 // Toont aggregaties: totaal kandidaten, accepted ratio, top reject reasons,
@@ -11163,11 +11202,117 @@ function scheduleDailyResultsCheck() {
       } catch { /* swallow */ }
     }
 
+    // v10.10.16: calibration-monitor (slice 2, sectie 14.R2.A). Meet of
+    // onze signaal-voorspellingen daadwerkelijk gekalibreerd zijn.
+    const calResult = await updateCalibrationMonitor().catch(e => ({ error: e.message }));
+    if (calResult?.aggregated > 0) {
+      console.log(`📊 Calibration monitor: ${calResult.aggregated} signal×sport×markt×window rows bijgewerkt`);
+    } else if (calResult?.error) {
+      console.warn(`⚠️ Calibration monitor skip: ${calResult.error}`);
+    }
+
     // Actionable todos check — sticky inbox-items voor beslissingen die je moet nemen
     await evaluateActionableTodos().catch(e => console.error('Todo-check fout:', e.message));
 
     scheduleDailyResultsCheck(); // plan volgende dag
   }, delay);
+}
+
+// ── CALIBRATION MONITOR · slice 2 (v10.10.16) ───────────────────────────────
+// Per-window Brier/log-loss per (signal, sport, market_type). Daily job
+// leest settled bets, bouwt prediction-records via lib/calibration-monitor,
+// en upsert resultaten naar Supabase.signal_calibration.
+//
+// v1-aanpak: gebruikt expliciet `ep_proxy = 1/odds + Σsignal_contribution%`.
+// Dit is GEEN canonical `pick.ep`; de echte model-adjusted probability vereist
+// een bet↔pick join-layer die in een aparte slice komt. Daarom schrijven we
+// `probability_source='ep_proxy'` weg zodat downstream dit niet als model
+// truth leest.
+
+const {
+  aggregateBySignal: _calAggregateBySignal,
+  buildCalibrationRows: _buildCalibrationRows,
+} = require('./lib/calibration-monitor');
+
+function _parseSignalsBlob(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function _parseBetDatum(datum) {
+  // bets.datum formaat: 'DD-MM-YYYY'
+  if (typeof datum !== 'string') return null;
+  const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(datum.trim());
+  if (!m) return null;
+  const t = Date.UTC(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  return Number.isFinite(t) ? t : null;
+}
+
+async function updateCalibrationMonitor() {
+  const now = Date.now();
+  const cutoffMs = now - 400 * 24 * 60 * 60 * 1000;
+  const { data: betsRows, error } = await supabase.from('bets')
+    .select('bet_id, datum, sport, markt, odds, uitkomst, signals, fixture_id')
+    .in('uitkomst', ['W', 'L'])
+    .limit(10000);
+  if (error) return { error: error.message, aggregated: 0 };
+
+  const settled = [];
+  for (const b of betsRows || []) {
+    const odds = parseFloat(b.odds);
+    if (!Number.isFinite(odds) || odds <= 1.0) continue;
+    const settledAt = _parseBetDatum(b.datum);
+    if (!settledAt || settledAt < cutoffMs) continue;
+
+    const signals = _parseSignalsBlob(b.signals);
+    const implied = 1 / odds;
+    const signalBoost = signals
+      .map(s => { const m = /([+-]\d+\.?\d*)%/.exec(String(s)); return m ? parseFloat(m[1]) / 100 : 0; })
+      .reduce((a, c) => a + c, 0);
+    const ep = Math.max(0.02, Math.min(0.95, implied + signalBoost));
+
+    settled.push({
+      ep,
+      uitkomst: b.uitkomst,
+      settledAt,
+      signals,
+      sport: b.sport || null,
+      marketType: detectMarket(b.markt || 'other'),
+    });
+  }
+
+  if (!settled.length) return { aggregated: 0, settledCount: 0 };
+
+  const aggregates = _calAggregateBySignal(settled, { now });
+  const rows = _buildCalibrationRows(aggregates, {
+    windowEndMs: now,
+    probabilitySource: 'ep_proxy',
+  });
+  if (!rows.length) return { aggregated: 0, settledCount: settled.length };
+
+  try {
+    for (let i = 0; i < rows.length; i += 500) {
+      const chunk = rows.slice(i, i + 500);
+      const { error: upErr } = await supabase.from('signal_calibration')
+        .upsert(chunk, { onConflict: 'signal_name,sport,market_type,window_key' });
+      if (upErr) {
+        // Tabel kan nog niet bestaan (migratie niet gedraaid). Niet-fataal.
+        if (/relation .* does not exist/i.test(upErr.message || '')) {
+          return { error: 'signal_calibration tabel nog niet gemigreerd', aggregated: 0 };
+        }
+        return { error: upErr.message, aggregated: 0 };
+      }
+    }
+    return { aggregated: rows.length, settledCount: settled.length };
+  } catch (e) {
+    return { error: e.message, aggregated: 0 };
+  }
 }
 
 // ── ACTIONABLE TODOS — sticky inbox-items ───────────────────────────────────

@@ -1,4 +1,4 @@
-# EdgePickr v10.10.15
+# EdgePickr v10.10.16
 
 **Private operator betting terminal** voor een single bankroll, een canonieke
 scan-state en een CLV-first workflow. Markt = baseline truth, model = residual
@@ -41,6 +41,10 @@ Kernprincipes:
 | **Walk-forward backtest** | Brier + log loss + calibration buckets per sport/window |
 | **Hierarchical calibration** | Bayesian smoothing global → sport → market → league |
 | **Residual model framework** | Skeleton activeert bij ≥500 picks/markt voor logistic regression delta |
+
+Calibration-monitor v1 schrijft bewust `probability_source='ep_proxy'` in
+`signal_calibration`. De canonical model probability (`pick.ep` /
+`pick_candidates.fair_prob`) volgt pas zodra de bet↔pick join-layer is geland.
 
 ## Stack
 

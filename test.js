@@ -32,6 +32,7 @@ const { selectLikelyGoalie, extractNhlGoaliePreview } = require('./lib/nhl-goali
 const lineTimeline = require('./lib/line-timeline');
 const execGate = require('./lib/execution-gate');
 const playability = require('./lib/playability');
+const calMonitor = require('./lib/calibration-monitor');
 const { supportsApiSportsInjuries } = require('./lib/api-sports-capabilities');
 const {
   epBucketKey, calcKelly, kellyToUnits, kellyScore, KELLY_FRACTION,
@@ -2300,7 +2301,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.10.15');
+  assert.strictEqual(appMeta.APP_VERSION, '10.10.16');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -5025,10 +5026,10 @@ test('assessPlayability: executable=null → playable=false (conservatief) + cov
   assert.ok(unknown.notes.some(n => n.includes('coverage onbekend')));
 });
 
-test('assessPlayability: executable=null + preferredCount fallback geeft nog steeds coverageKnown=false', () => {
-  // preferredCount > 0 zet executable naar true (caller heeft preferred gezien)
-  // maar dat wordt als "hint" behandeld, niet als hard confirmation.
-  // Check dat dit pad nog steeds de true-route neemt.
+test('assessPlayability: preferredCount > 0 promoveert executable naar true (coverageKnown=true)', () => {
+  // preferredCount > 0 betekent dat de caller expliciet preferred bookies
+  // heeft geteld op dit event — dat telt als known coverage, dus
+  // coverageKnown=true en executable=true.
   const hinted = playability.assessPlayability({
     sport: 'football', marketType: 'moneyline',
     preferredCount: 2, bookmakerCount: 8,
@@ -5078,6 +5079,292 @@ test('assessPlayability: basketball total met pace=true → dataRich=false (pace
     capabilities: { injuries: true },
   });
   assert.strictEqual(rInjury.dataRich, true, 'injuries is wel feed-backed');
+});
+
+// ── CALIBRATION MONITOR (slice 2, v10.10.16) ─────────────────────────────────
+console.log('\n  Calibration monitor:');
+
+test('computeBrierScore: perfect kalibratie (0 of 1 matcht outcome) → 0', () => {
+  const preds = [
+    { prob: 1.0, outcome: 1 },
+    { prob: 0.0, outcome: 0 },
+    { prob: 1.0, outcome: 1 },
+  ];
+  assert.strictEqual(calMonitor.computeBrierScore(preds), 0);
+});
+
+test('computeBrierScore: random 0.5 gok → 0.25', () => {
+  const preds = [
+    { prob: 0.5, outcome: 1 },
+    { prob: 0.5, outcome: 0 },
+    { prob: 0.5, outcome: 1 },
+    { prob: 0.5, outcome: 0 },
+  ];
+  assert.strictEqual(calMonitor.computeBrierScore(preds), 0.25);
+});
+
+test('computeBrierScore: lege/invalid → null', () => {
+  assert.strictEqual(calMonitor.computeBrierScore([]), null);
+  assert.strictEqual(calMonitor.computeBrierScore(null), null);
+  assert.strictEqual(calMonitor.computeBrierScore([{ prob: 'x', outcome: 0 }]), null);
+});
+
+test('computeWeightedBrierScore: dominante weight trekt metric richting dominante pick', () => {
+  const preds = [
+    { prob: 0.9, outcome: 1, weight: 0.9 }, // bijna perfect, zwaar
+    { prob: 0.9, outcome: 0, weight: 0.1 }, // slecht, licht
+  ];
+  const weighted = calMonitor.computeWeightedBrierScore(preds);
+  const unweighted = calMonitor.computeBrierScore(preds);
+  assert.ok(weighted < unweighted, `weighted ${weighted} moet lager zijn dan unweighted ${unweighted}`);
+});
+
+test('computeLogLoss: perfect → ~0 (clamped bij log(0))', () => {
+  const preds = [
+    { prob: 0.99, outcome: 1 },
+    { prob: 0.01, outcome: 0 },
+  ];
+  const ll = calMonitor.computeLogLoss(preds);
+  assert.ok(ll >= 0 && ll < 0.05, `verwacht ~0, kreeg ${ll}`);
+});
+
+test('computeLogLoss: random 0.5 → ~ln(2) = 0.693', () => {
+  const preds = [
+    { prob: 0.5, outcome: 1 },
+    { prob: 0.5, outcome: 0 },
+  ];
+  const ll = calMonitor.computeLogLoss(preds);
+  assert.ok(Math.abs(ll - Math.log(2)) < 0.001, `verwacht ~0.693, kreeg ${ll}`);
+});
+
+test('computeLogLoss: clamps extreme probs om log(0) te vermijden', () => {
+  const preds = [{ prob: 1.0, outcome: 0 }]; // worst case
+  const ll = calMonitor.computeLogLoss(preds);
+  assert.ok(Number.isFinite(ll), 'geen -Infinity of NaN');
+  assert.ok(ll > 30, 'maar wel heel groot — dit is een catastrofale fout');
+});
+
+test('computeWeightedLogLoss: dominante weight trekt metric richting dominante pick', () => {
+  const preds = [
+    { prob: 0.8, outcome: 1, weight: 0.9 },
+    { prob: 0.8, outcome: 0, weight: 0.1 },
+  ];
+  const weighted = calMonitor.computeWeightedLogLoss(preds);
+  const unweighted = calMonitor.computeLogLoss(preds);
+  assert.ok(weighted < unweighted, `weighted ${weighted} moet lager zijn dan unweighted ${unweighted}`);
+  assert.ok(Number.isFinite(weighted));
+});
+
+test('computeCalibrationBins: split in 10 bins, bin-indices + counts kloppen', () => {
+  const preds = [
+    { prob: 0.05, outcome: 0 },
+    { prob: 0.15, outcome: 1 },
+    { prob: 0.55, outcome: 1 },
+    { prob: 0.55, outcome: 0 },
+    { prob: 0.95, outcome: 1 },
+  ];
+  const bins = calMonitor.computeCalibrationBins(preds, 10);
+  assert.strictEqual(bins.length, 10);
+  assert.strictEqual(bins[0].n, 1); // 0.05 zit in bin 0
+  assert.strictEqual(bins[1].n, 1); // 0.15 in bin 1
+  assert.strictEqual(bins[5].n, 2); // 0.55×2 in bin 5
+  assert.strictEqual(bins[9].n, 1); // 0.95 in bin 9
+  assert.strictEqual(bins[5].actualRate, 0.5, '1W 1L op bin 5 → 50%');
+});
+
+test('computeWeightedCalibrationBins: avgProb/actualRate gebruiken weights i.p.v. plain counts', () => {
+  const preds = [
+    { prob: 0.55, outcome: 1, weight: 0.75 },
+    { prob: 0.55, outcome: 0, weight: 0.25 },
+  ];
+  const bins = calMonitor.computeWeightedCalibrationBins(preds, 10);
+  assert.strictEqual(bins[5].n, 2);
+  assert.ok(Math.abs(bins[5].weightSum - 1.0) < 0.0001);
+  assert.strictEqual(bins[5].avgProb, 0.55);
+  assert.strictEqual(bins[5].actualRate, 0.75);
+});
+
+test('parseSignalContribution: standaard pattern', () => {
+  assert.deepStrictEqual(
+    calMonitor.parseSignalContribution('form:+2.5%'),
+    { name: 'form', contribution: 2.5 }
+  );
+  assert.deepStrictEqual(
+    calMonitor.parseSignalContribution('nhl_goalie:-1.2%'),
+    { name: 'nhl_goalie', contribution: -1.2 }
+  );
+  assert.strictEqual(calMonitor.parseSignalContribution('sanity_ok'), null);
+  assert.strictEqual(calMonitor.parseSignalContribution(null), null);
+});
+
+test('attributePickToSignals: gewogen mode bij parseable percentages', () => {
+  const result = calMonitor.attributePickToSignals({
+    signals: ['form:+3.0%', 'h2h:+1.0%'],
+  });
+  assert.strictEqual(result.mode, 'weighted');
+  assert.strictEqual(result.signals.length, 2);
+  const form = result.signals.find(s => s.name === 'form');
+  const h2h = result.signals.find(s => s.name === 'h2h');
+  assert.ok(Math.abs(form.weight - 0.75) < 0.001, 'form 3/4 = 75%');
+  assert.ok(Math.abs(h2h.weight - 0.25) < 0.001, 'h2h 1/4 = 25%');
+});
+
+test('attributePickToSignals: uniform fallback bij labels zonder percentages', () => {
+  const result = calMonitor.attributePickToSignals({
+    signals: ['sanity_ok', '3way_ml'],
+  });
+  assert.strictEqual(result.mode, 'uniform');
+  assert.strictEqual(result.signals.length, 2);
+  assert.ok(result.signals.every(s => Math.abs(s.weight - 0.5) < 0.001));
+});
+
+test('attributePickToSignals: mixed percent + label → gewogen modus op percent-only', () => {
+  const result = calMonitor.attributePickToSignals({
+    signals: ['form:+2.0%', 'sanity_ok'],
+  });
+  // Alleen form is parseable → mode weighted, weight 1.0 voor form, sanity_ok wordt genegeerd in weighted modus.
+  assert.strictEqual(result.mode, 'weighted');
+  assert.strictEqual(result.signals.length, 1);
+  assert.strictEqual(result.signals[0].name, 'form');
+});
+
+test('attributePickToSignals: totalAbs=0 (alle contributions 0) → uniform fallback', () => {
+  const result = calMonitor.attributePickToSignals({
+    signals: ['form:+0%', 'h2h:+0%'],
+  });
+  assert.strictEqual(result.mode, 'uniform');
+  assert.strictEqual(result.signals.length, 2);
+});
+
+test('windowsFor: settled 15d ago hoort bij 30d/90d/365d/lifetime', () => {
+  const now = Date.now();
+  const settled = now - 15 * 24 * 60 * 60 * 1000;
+  const windows = calMonitor.windowsFor(settled, now);
+  assert.ok(windows.includes('30d'));
+  assert.ok(windows.includes('90d'));
+  assert.ok(windows.includes('365d'));
+  assert.ok(windows.includes('lifetime'));
+});
+
+test('windowsFor: settled 200d ago hoort alleen bij 365d/lifetime', () => {
+  const now = Date.now();
+  const settled = now - 200 * 24 * 60 * 60 * 1000;
+  const windows = calMonitor.windowsFor(settled, now);
+  assert.ok(!windows.includes('30d'));
+  assert.ok(!windows.includes('90d'));
+  assert.ok(windows.includes('365d'));
+  assert.ok(windows.includes('lifetime'));
+});
+
+test('aggregateBySignal: weegt settled picks per (signal, sport, market, window)', () => {
+  const now = Date.now();
+  const recent = now - 5 * 24 * 60 * 60 * 1000; // 5 dagen geleden
+  const oud = now - 120 * 24 * 60 * 60 * 1000;  // 120 dagen geleden
+  const settled = [
+    {
+      ep: 0.60, uitkomst: 'W', settledAt: recent,
+      signals: ['form:+2.5%'], sport: 'football', markt: '1x2',
+    },
+    {
+      ep: 0.55, uitkomst: 'L', settledAt: recent,
+      signals: ['form:+1.5%'], sport: 'football', markt: '1x2',
+    },
+    {
+      ep: 0.65, uitkomst: 'W', settledAt: oud,
+      signals: ['form:+3.0%'], sport: 'football', markt: '1x2',
+    },
+  ];
+  const out = calMonitor.aggregateBySignal(settled, { now });
+
+  const formFb1x2_30d = out.get('form|football|1x2|30d');
+  const formFb1x2_lifetime = out.get('form|football|1x2|lifetime');
+  assert.ok(formFb1x2_30d, 'form/football/1x2/30d bucket bestaat');
+  assert.strictEqual(formFb1x2_30d.n, 2, 'alleen de 2 recente picks in 30d');
+  assert.ok(formFb1x2_lifetime, 'lifetime bucket bestaat');
+  assert.strictEqual(formFb1x2_lifetime.n, 3, 'alle drie in lifetime');
+  assert.strictEqual(formFb1x2_lifetime.attributionMode, 'weighted');
+  assert.ok(formFb1x2_lifetime.brierScore >= 0);
+  assert.ok(formFb1x2_lifetime.logLoss >= 0);
+});
+
+test('aggregateBySignal: mixed pick weegt signal buckets 0.75 / 0.25', () => {
+  const now = Date.now();
+  const settled = [
+    {
+      ep: 0.70, uitkomst: 'W', settledAt: now - 86400000,
+      signals: ['form:+3.0%', 'h2h:+1.0%'], sport: 'football', markt: '1x2',
+    },
+  ];
+  const out = calMonitor.aggregateBySignal(settled, { now });
+  const form = out.get('form|football|1x2|lifetime');
+  const h2h = out.get('h2h|football|1x2|lifetime');
+  assert.ok(form && h2h);
+  assert.strictEqual(form.n, 1);
+  assert.strictEqual(h2h.n, 1);
+  assert.ok(Math.abs(form.nEffective - 0.75) < 0.001, `form nEffective ${form.nEffective}`);
+  assert.ok(Math.abs(h2h.nEffective - 0.25) < 0.001, `h2h nEffective ${h2h.nEffective}`);
+});
+
+test('aggregateBySignal: mixed attribution-mode per signaal krijgt "mixed" label', () => {
+  const now = Date.now();
+  const recent = now - 5 * 24 * 60 * 60 * 1000;
+  const settled = [
+    // Pick 1: gewogen
+    { ep: 0.60, uitkomst: 'W', settledAt: recent, signals: ['form:+2.5%'], sport: 'football', markt: '1x2' },
+    // Pick 2: uniform (geen percentages)
+    { ep: 0.55, uitkomst: 'L', settledAt: recent, signals: ['form'], sport: 'football', markt: '1x2' },
+  ];
+  const out = calMonitor.aggregateBySignal(settled, { now });
+  const form = out.get('form|football|1x2|lifetime');
+  assert.ok(form);
+  assert.strictEqual(form.attributionMode, 'mixed');
+});
+
+test('aggregateBySignal: open bets (uitkomst Open) worden genegeerd', () => {
+  const now = Date.now();
+  const settled = [
+    { ep: 0.60, uitkomst: 'Open', settledAt: now - 86400000, signals: ['form:+2%'], sport: 'football', markt: '1x2' },
+    { ep: 0.55, uitkomst: 'W', settledAt: now - 86400000, signals: ['form:+2%'], sport: 'football', markt: '1x2' },
+  ];
+  const out = calMonitor.aggregateBySignal(settled, { now });
+  const form = out.get('form|football|1x2|lifetime');
+  assert.strictEqual(form.n, 1, 'alleen de settled W telt');
+});
+
+test('windowStartFor: 30d/90d/365d krijgen expliciete start, lifetime blijft null', () => {
+  const endMs = Date.UTC(2026, 3, 16, 12, 0, 0);
+  assert.ok(calMonitor.windowStartFor('30d', endMs));
+  assert.ok(calMonitor.windowStartFor('90d', endMs));
+  assert.ok(calMonitor.windowStartFor('365d', endMs));
+  assert.strictEqual(calMonitor.windowStartFor('lifetime', endMs), null);
+});
+
+test('buildCalibrationRows: schrijft probability_source=ep_proxy en expliciete window_start', () => {
+  const aggregates = new Map([[
+    'form|football|1x2|30d',
+    {
+      signalName: 'form',
+      sport: 'football',
+      marketType: '1x2',
+      windowKey: '30d',
+      n: 2,
+      nEffective: 1.5,
+      brierScore: 0.123456,
+      logLoss: 0.54321,
+      avgProb: 0.61,
+      actualRate: 0.5,
+      bins: [{ bin: 0, n: 1, weightSum: 1, avgProb: 0.6, actualRate: 1.0 }],
+      attributionMode: 'mixed',
+    },
+  ]]);
+  const rows = calMonitor.buildCalibrationRows(aggregates, {
+    windowEndMs: Date.UTC(2026, 3, 16, 12, 0, 0),
+    probabilitySource: 'ep_proxy',
+  });
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].probability_source, 'ep_proxy');
+  assert.ok(rows[0].window_start, '30d krijgt expliciete start');
+  assert.ok(rows[0].window_end);
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────

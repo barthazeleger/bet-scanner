@@ -2,6 +2,30 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.16] - 2026-04-16
+
+Slice 2: calibration-monitor (sectie 14.R2.A doctrine). Meten of onze signaal-voorspellingen écht gekalibreerd zijn, niet of we gewoon mooi lijken. Codex × Claude ontwerp, Claude codet, Codex reviewt.
+
+### Added
+- **[claude] `lib/calibration-monitor.js` pure compute-laag**. Brier-score, log-loss, calibration-bins, en per-signaal attributie. Gewichten beïnvloeden nu ook de hoofdmetrics zelf (niet alleen `n_effective`). Parseable percentages in `pick.signals[]` zoals `form:+2.5%` geven weighted attribution; uniform fallback blijft actief wanneer geen percentages beschikbaar zijn. Aggregate mode wordt expliciet opgeslagen als `weighted` / `uniform` / `mixed`.
+- **[claude] Vaste windows `30d` / `90d` / `365d` / `lifetime`**. Voorspelbare storage + vergelijkbaarheid, geen arbitrary ranges — Codex-kalibratie.
+- **[claude] Aggregatie-sleutel `(signal_name, sport, market_type, window_key)`**. Een signaal dat werkt voor voetbal-BTTS zegt niets over hockey-ML.
+- **[claude] Supabase migratie `docs/migrations-archive/v10.10.16_signal_calibration.sql`**. Nieuwe tabel met `(signal_name, sport, market_type, window_key, window_start, window_end, n, brier_score, log_loss, avg_prob, actual_rate, bin_payload, attribution_mode, probability_source)`. Separate van `signal_stats` (lifetime summary); `signal_calibration` is de evaluatielaag — Codex-schema-keuze v10.10.15.
+- **[claude] Daily job `updateCalibrationMonitor()`** in `server.js` — aangeroepen na `autoTuneSignalsByClv`. Leest settled bets van laatste 400d, aggregeert via `calibration-monitor`, en upsert expliciet `probability_source='ep_proxy'` zodat v1-data niet als canonical `pick.ep` gelezen wordt. Niet-fataal bij ontbrekende migratie (graceful skip).
+- **[claude] Read-endpoint `GET /api/admin/v2/calibration-monitor`** met filters op `window` / `sport` / `market_type`. Rows bevatten ook `probability_source`; `ready: false` response als tabel nog niet gemigreerd.
+- **[claude] regressietests uitgebreid**. Weighted Brier/log-loss/bins, window-start derivatie, row-building met `probability_source`, plus eerdere calibration edge-cases.
+
+### Bewust niet
+- **Autotune-integratie.** Calibration-monitor staat los van signal-weight autotune. Eerst enkele weken data verzamelen, dán beslissen of Brier-score in autotune-loop moet — Codex-scope-beperking.
+- **Echte model-ep in pick_candidates.** v1 gebruikt bewust `ep_proxy = 1/odds + Σsignal_contribution%` op de `bets`-tabel. De canonical `pick_candidates.fair_prob = adjHome` (model's adjusted prob) vereist een bet↔pick_candidate join-layer die in aparte slice komt. Daarom labelt opslag/endpoint deze rows expliciet als `probability_source='ep_proxy'`.
+
+### Tests
+- `npm test` groen: `427 passed, 0 failed`.
+
+### Follow-up
+- Volgende slice kan de bet↔pick_candidate join leggen zodat `probability_source='pick_ep'` geschreven wordt in plaats van `ep_proxy`.
+- Autotune blijft bewust los tot er genoeg echte calibration-data in `signal_calibration` zit.
+
 ## [10.10.15] - 2026-04-16
 
 Codex-review fixes op v10.10.14 playability. Hotfix, geen nieuwe features.
