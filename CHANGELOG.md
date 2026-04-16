@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.9.8] - 2026-04-16
+
+### Security / single-operator hardening
+Externe code review noemde expliciet: "de app moet niet aanvoelen als een platform, maar als persoonlijke trading terminal". Scope van deze release: gewone-user attack surface dichtschroeven + canonieke state strikt op admin's profiel houden.
+
+- **`/api/prematch` admin-only**. Voorheen kon elke ingelogde user de scan triggeren → vervuilde `lastPrematchPicks` + scan_history met `user_id=null`. Nu: requireAdmin.
+- **`/api/live` admin-only**. Route streamde picks met `reason` (model-IP) naar iedereen. Nu admin-only.
+- **Inbox global-row mutaties alleen door admin**. PUT `/api/inbox-notifications/read` en DELETE `/api/inbox-notifications` wisten/markeerden ook `user_id=null` rows voor niet-admins — één user kon global notificaties voor iedereen wissen. Nu: non-admin raakt alleen z'n eigen rows.
+- **`/api/notifications` bankroll/ROI-advies op admin's bets**. Voorheen `readBets()` zonder userId → globale aggregaat van alle user-bets. Nu scoped op admin via nieuwe `getAdminUserId()` helper (gememorized). Alle interne background-jobs (drawdown-alert, odds-drift-alert, pre-kickoff scheduler, dagelijkse resultaten-check, upgrade-check-na-scan, inbox-entries, portfolio-analyse) idem scoped.
+
+### Niet-fixed (bewust uitgesteld)
+- UNIT_EUR = 25 is nog globale constant in pick-ranking (buildPickFactory, modal-advice). Voor nu klopt het met admin's actuele unit; bij compounding-upgrade (unit €25→€50) komt dit terug in v10.10.0 als dynamic-unit-engine.
+- Source-toggles blijven runtime-only (reset bij restart). Persistence naar calib in v10.9.9 gepland.
+
 ## [10.9.7] - 2026-04-16
 
 ### Added

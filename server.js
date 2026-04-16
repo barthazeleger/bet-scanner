@@ -387,7 +387,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const APP_VERSION    = '10.9.7';
+const APP_VERSION    = '10.9.8';
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
 const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -413,6 +413,20 @@ function defaultSettings() {
     telegramEnabled: false,
     preferredBookies: ['Bet365', 'Unibet'],
   };
+}
+
+// v10.9.8: helper voor single-operator scoping. Alle bankroll/ROI-adviezen
+// gebruiken admin's bets zodat niet-admin-data nooit in beslissingen meeweegt.
+// Gememorized per-proces (admin-id verandert zelden).
+let _cachedAdminUserId = null;
+async function getAdminUserId() {
+  if (_cachedAdminUserId) return _cachedAdminUserId;
+  try {
+    const users = await loadUsers().catch(() => []);
+    const admin = users.find(u => u.role === 'admin');
+    if (admin?.id) _cachedAdminUserId = admin.id;
+    return _cachedAdminUserId || null;
+  } catch { return null; }
 }
 
 async function loadUsers(force = false) {
@@ -902,7 +916,10 @@ async function autoTuneSignals() {
 // ── PORTFOLIO ANALYSE & UPGRADE AANBEVELINGEN ─────────────────────────────────
 async function runPortfolioAnalysis() {
   const c    = loadCalib();
-  const { stats: s } = await readBets();
+  // v10.9.8: admin-scoped. Portfolio-analyse advies is persoonlijk voor de
+  // operator, geen globale aggregaat over meerdere user-bets.
+  const adminUserId = await getAdminUserId();
+  const { stats: s } = await readBets(adminUserId);
   if (c.totalSettled < 5) return; // te weinig data
 
   const roi      = s.roi ?? 0;
@@ -996,7 +1013,7 @@ async function runPortfolioAnalysis() {
   }
   // Timing inzicht
   if (s.clvTotal >= 10) {
-    const { bets } = await readBets();
+    const { bets } = await readBets(await getAdminUserId());
     const early = bets.filter(b => b.clvPct > 0 && b.clvPct != null);
     const late = bets.filter(b => b.clvPct < 0 && b.clvPct != null);
     if (early.length > late.length * 1.5) {
@@ -6401,7 +6418,9 @@ async function runPrematch(emit) {
   // ── Upgrade / unit-size check na scan ────────────────────────────────────
   try {
     const cs = loadCalib();
-    const { stats } = await readBets().catch(() => ({ stats: {} }));
+    // v10.9.8: admin-scoped, geen globale readBets.
+    const adminUserId = await getAdminUserId();
+    const { stats } = await readBets(adminUserId).catch(() => ({ stats: {} }));
     const bkr = stats.bankroll ?? START_BANKROLL;
     const bkrGrowth = bkr - START_BANKROLL;
     const roi2 = stats.roi ?? 0;
@@ -7917,11 +7936,15 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
   }
 }
 
-app.post('/api/prematch', (req, res) => {
+// v10.9.8: scan-triggering is single-operator. Niet-admin kan geen scan
+// starten want dat vervuilt lastPrematchPicks + scan_history met globale
+// user_id=null. Voor een private bankroll-tool moet alleen admin de
+// canonieke scan-state voeden.
+app.post('/api/prematch', requireAdmin, (req, res) => {
   if (!OPERATOR.master_scan_enabled) return res.status(503).json({ error: 'Scans uitgeschakeld via operator failsafe' });
   if (scanRunning) return res.status(429).json({ error: 'Scan al bezig · wacht tot de huidige scan klaar is' });
   scanRunning = true;
-  const isAdmin = req.user?.role === 'admin';
+  const isAdmin = true;  // route is admin-only sinds v10.9.8
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -7960,8 +7983,11 @@ app.post('/api/prematch', (req, res) => {
   });
 });
 
+// v10.9.8: live scan admin-only. Route streamde picks met `reason` veld (model-
+// IP / rationale) naar elke ingelogde user. Voor private tool + model-IP
+// bescherming: alleen admin.
 // Live scan · SSE streaming
-app.post('/api/live', (req, res) => {
+app.post('/api/live', requireAdmin, (req, res) => {
   const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
   if (rateLimit('live:' + ip, 5, 10 * 60 * 1000)) return res.status(429).json({ error: 'Te veel live scans · wacht even' });
   res.setHeader('Content-Type', 'text/event-stream');
@@ -9644,19 +9670,30 @@ app.get('/api/inbox-notifications', async (req, res) => {
   } catch { res.status(500).json({ error: 'Interne fout' }); }
 });
 
+// v10.9.8: mark-as-read werkte ook op global rows (user_id=null) vanuit
+// iedere user → iemand kon "Overweeg API-upgrade" weg-marken voor iedereen.
+// Nu: global rows alleen door admin muteerbaar; users markeren alleen hun eigen.
 app.put('/api/inbox-notifications/read', async (req, res) => {
   try {
+    const isAdmin = req.user?.role === 'admin';
+    const scope = isAdmin
+      ? `user_id.eq.${req.user.id},user_id.is.null`
+      : `user_id.eq.${req.user.id}`;
     await supabase.from('notifications').update({ read: true })
-      .eq('read', false).or(`user_id.eq.${req.user.id},user_id.is.null`);
+      .eq('read', false).or(scope);
     res.json({ ok: true });
   } catch { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Clear (delete) all notifications for current user + global notifications
+// v10.9.8: delete-all global rows alleen door admin — voorheen kon elke user
+// global notifications verwijderen voor iedereen.
 app.delete('/api/inbox-notifications', async (req, res) => {
   try {
-    await supabase.from('notifications').delete()
-      .or(`user_id.eq.${req.user.id},user_id.is.null`);
+    const isAdmin = req.user?.role === 'admin';
+    const scope = isAdmin
+      ? `user_id.eq.${req.user.id},user_id.is.null`
+      : `user_id.eq.${req.user.id}`;
+    await supabase.from('notifications').delete().or(scope);
     res.json({ ok: true });
   } catch { res.status(500).json({ error: 'Interne fout' }); }
 });
@@ -9666,7 +9703,10 @@ app.get('/api/notifications', async (req, res) => {
     const alerts = [];
     const c = loadCalib();
 
-    const { stats } = await readBets().catch(() => ({ stats: {} }));
+    // v10.9.8: single-operator. Bankroll/ROI-adviezen altijd op admin's bets,
+    // niet globale aggregatie. Voorheen: readBets() zonder userId → global mix.
+    const adminUserId = await getAdminUserId();
+    const { stats } = await readBets(adminUserId).catch(() => ({ stats: {} }));
     const roi = stats.roi ?? 0;
     const bankroll = stats.bankroll ?? START_BANKROLL;
     const bankrollGrowth = bankroll - START_BANKROLL;
@@ -10671,7 +10711,7 @@ function scheduleHealthAlerts() {
 
       // Drawdown soft alert (alleen warn, geen pause)
       if (Date.now() - _lastDdAlertAt > DD_ALERT_COOLDOWN_MS) {
-        const { bets, stats } = await readBets();
+        const { bets, stats } = await readBets(await getAdminUserId());
         if (stats?.bankroll != null && stats?.startBankroll != null) {
           const sevenDaysAgo = Date.now() - 7 * 86400000;
           const recentSettled = (bets || []).filter(b => {
@@ -10934,7 +10974,7 @@ function scheduleOddsMonitor() {
       if (!calib || typeof calib !== 'object') return; // fail-safe
       calib.oddsAlerts = calib.oddsAlerts || {};
 
-      const { bets } = await readBets();
+      const { bets } = await readBets(await getAdminUserId());
       const openBets = bets.filter(b => b.uitkomst === 'Open' && b.tijd);
       if (!openBets.length) return;
 
@@ -11275,8 +11315,9 @@ app.listen(PORT, () => {
     if (id) { _currentModelVersionId = id; console.log(`📐 Model version ${APP_VERSION} geregistreerd (id=${id})`); }
   }).catch(() => {});
 
-  // Herplan pre-kickoff checks en CLV checks voor alle open bets bij herstart
-  readBets().then(({ bets }) => {
+  // Herplan pre-kickoff checks en CLV checks voor alle open bets bij herstart.
+  // v10.9.8: admin-scoped — alleen admin's bets krijgen scheduler.
+  getAdminUserId().then(uid => readBets(uid)).then(({ bets }) => {
     const openWithTime = bets.filter(b => b.uitkomst === 'Open' && b.tijd);
     openWithTime.forEach(b => {
       schedulePreKickoffCheck(b).catch(() => {});
@@ -11454,7 +11495,7 @@ function scheduleDailyResultsCheck() {
     console.log('⏰ Dagelijkse uitslag check gestart...');
     try {
       const { checked, updated, results } = await checkOpenBetResults();
-      const { bets, stats } = await readBets();
+      const { bets, stats } = await readBets(await getAdminUserId());
 
       // Overzicht ook settled bets van afgelopen 24h meenemen (niet alleen
       // wat nu nog open was). Hierdoor zie je de volledige nacht + gister.
