@@ -37,12 +37,12 @@ worden.
   - `calibration-store.js`
 
 - App/runtime support:
-  - `auth.js`
   - `config.js`
   - `db.js`
   - `app-meta.js`
-  - `leagues.js`
   - `modal-advice.js`
+  - `stake-regime.js`
+  - `walk-forward.js`
 
 ### `lib/integrations/`
 Alles wat primair gaat over externe providers, scrapers of bronaggregatie.

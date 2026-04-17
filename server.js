@@ -896,86 +896,20 @@ const SIGNAL_KILL_MIN_N = 50;        // minimum samples voor kill-besluit
 const SIGNAL_KILL_CLV_PCT = -3.0;    // gemiddelde CLV onder -3% → mute
 
 // ── Kelly-fraction auto-stepup ───────────────────────────────────────────────
-// Verhoogt KELLY_FRACTION (bv. 0.50 → 0.55 → 0.60 ... → 0.75 cap) als bewezen
-// edge over voldoende bets. Stapsgewijs (max 1 stap/dag), nooit naar full Kelly
-// automatisch (handmatige override vereist via setKellyFraction).
-const KELLY_STEPUP_MIN_TOTAL_BETS = 200;  // start pas na 200 settled bets totaal
-const KELLY_STEPUP_RECENT_WINDOW  = 200;  // criterium over laatste N bets
-const KELLY_STEPUP_MIN_AVG_CLV    = 2.0;  // gem. CLV > 2% over recent window
-const KELLY_STEPUP_MIN_ROI        = 5.0;  // ROI > 5% over recent window
-const KELLY_STEPUP_COOLDOWN_DAYS  = 30;   // min 30 dagen tussen stappen
+// v10.12.25 DEPRECATED · De stake-regime engine (lib/stake-regime.js, wired
+// in v10.12.23) vervangt deze functie. `scale_up` regime triggert nu op
+// dezelfde criteria (200+ settled, CLV ≥2%, ROI ≥5%) én weegt drawdown /
+// regime-shift / consecutive-L tegelijk. Deze function blijft hier als
+// no-op-met-log zodat bestaande callers (scheduleAutoRetraining +
+// /api/admin/v2/auto-retrain) niet crashen — ze krijgen voortaan
+// `{ stepped: false, reason: 'deprecated_use_stake_regime' }`.
+//
+// Wordt verwijderd in een toekomstige commit zodra alle callers zijn
+// opgeschoond.
 
 async function evaluateKellyAutoStepup() {
-  const c = loadCalib();
-  const cur = getKellyFraction();
-  if (cur >= KELLY_FRACTION_MAX) return { stepped: false, reason: 'at_max' };
-  if ((c.totalSettled || 0) < KELLY_STEPUP_MIN_TOTAL_BETS) {
-    return { stepped: false, reason: 'insufficient_total_bets' };
-  }
-  // Cooldown check
-  const lastStep = c.kellyHistory?.[0]?.date ? new Date(c.kellyHistory[0].date).getTime() : 0;
-  if (lastStep && (Date.now() - lastStep) < KELLY_STEPUP_COOLDOWN_DAYS * 86400000) {
-    return { stepped: false, reason: 'cooldown' };
-  }
-  // Recent CLV + ROI check via Supabase
-  let recentBets;
-  try {
-    const r = await supabase.from('bets')
-      .select('clv_pct,wl,inzet,uitkomst')
-      .in('uitkomst', ['W','L'])
-      .order('datum', { ascending: false })
-      .limit(KELLY_STEPUP_RECENT_WINDOW);
-    if (r.error) throw new Error(r.error.message);
-    recentBets = r.data || [];
-  } catch (e) {
-    return { stepped: false, reason: `bets_fetch_failed:${e.message}` };
-  }
-  if (recentBets.length < KELLY_STEPUP_RECENT_WINDOW) {
-    return { stepped: false, reason: 'insufficient_recent_bets' };
-  }
-  const clvVals = recentBets.map(b => parseFloat(b.clv_pct)).filter(v => isFinite(v));
-  const avgClv = clvVals.length ? clvVals.reduce((a,b) => a+b, 0) / clvVals.length : null;
-  const totalStake = recentBets.reduce((a,b) => a + (parseFloat(b.inzet) || 0), 0);
-  const totalPnl   = recentBets.reduce((a,b) => a + (parseFloat(b.wl)    || 0), 0);
-  const roi = totalStake > 0 ? (totalPnl / totalStake) * 100 : 0;
-  // Kill-switch check: als markten gekild zijn afgelopen 30 dagen → niet stepup
-  const killedRecently = (c.modelLog || []).some(e =>
-    e.type === 'kill_switch' &&
-    new Date(e.date).getTime() > Date.now() - 30 * 86400000);
-  if (killedRecently) return { stepped: false, reason: 'kill_switch_active' };
-  if (avgClv === null || avgClv < KELLY_STEPUP_MIN_AVG_CLV) {
-    return { stepped: false, reason: `avg_clv_${avgClv?.toFixed(2)}` };
-  }
-  if (roi < KELLY_STEPUP_MIN_ROI) {
-    return { stepped: false, reason: `roi_${roi.toFixed(2)}` };
-  }
-  // Alle criteria gehaald → step up
-  const next = Math.min(KELLY_FRACTION_MAX, cur + KELLY_FRACTION_STEP);
-  setKellyFraction(next);
-  c.kellyFraction = next;
-  c.kellyHistory = [{
-    date: new Date().toISOString(), from: cur, to: next,
-    avgClv: +avgClv.toFixed(2), roi: +roi.toFixed(2), totalSettled: c.totalSettled
-  }, ...(c.kellyHistory || [])].slice(0, 20);
-  c.modelLog = [{
-    date: new Date().toISOString(), type: 'kelly_stepup',
-    note: `🚀 Kelly-fraction verhoogd: ${cur.toFixed(2)} → ${next.toFixed(2)} (avg CLV ${avgClv.toFixed(2)}%, ROI ${roi.toFixed(2)}% over ${recentBets.length} bets)`
-  }, ...(c.modelLog || [])].slice(0, 50);
-  await saveCalib(c);
-  // Notifications
-  const msg = `🚀 KELLY-FRACTION VERHOOGD\n${cur.toFixed(2)} → ${next.toFixed(2)}\n📈 Avg CLV: ${avgClv.toFixed(2)}% · ROI: ${roi.toFixed(2)}%\n📊 Over ${recentBets.length} bets · totaal ${c.totalSettled}`;
-  await notify(msg).catch(() => {});
-  try {
-    await supabase.from('notifications').insert({
-      type: 'kelly_stepup',
-      title: `🚀 Kelly-fraction: ${cur.toFixed(2)} → ${next.toFixed(2)}`,
-      body: `Bewezen edge over ${recentBets.length} bets (CLV ${avgClv.toFixed(2)}%, ROI ${roi.toFixed(2)}%). Cap: ${KELLY_FRACTION_MAX}.`,
-      read: false, user_id: null,
-    });
-  } catch (e) {
-    console.error('Kelly stepup notification insert failed:', e.message);
-  }
-  return { stepped: true, from: cur, to: next, avgClv, roi };
+  console.info('[kelly-stepup] deprecated — stake-regime engine handles this now (v10.12.23+)');
+  return { stepped: false, reason: 'deprecated_use_stake_regime' };
 }
 
 // v10.12.3 (Phase A.3): Brier feedback loop. Aggregeert signal_calibration
@@ -1495,8 +1429,15 @@ const HANDBALL_LEAGUES = [
 ];
 
 // ── LAST PICKS (in-memory voor analyse tab) ──────────────────────────────────
-let lastPrematchPicks = [];
-let lastLivePicks = [];
+// v10.12.25 race-fix: gebruik frozen immutable arrays met atomic reference
+// swap. Helpers gedefinieerd als locale bindings zodat bestaande references
+// blijven werken; setters doen een atomic Object.freeze swap. Voorkomt dat
+// een concurrent GET /api/picks een halverwege gevulde array ziet tijdens
+// een lange scan.
+let lastPrematchPicks = Object.freeze([]);
+let lastLivePicks = Object.freeze([]);
+function _atomicSetPrematch(v) { lastPrematchPicks = Object.freeze(Array.isArray(v) ? [...v] : []); }
+function _atomicSetLive(v)     { lastLivePicks     = Object.freeze(Array.isArray(v) ? [...v] : []); }
 
 // ── SCAN HISTORY ─────────────────────────────────────────────────────────────
 const SCAN_HISTORY_MAX  = 10;
@@ -6473,7 +6414,7 @@ async function runPrematch(emit) {
   ];
   emit({ log: telLines.join('\n') });
 
-  lastPrematchPicks = finalPicks;
+  _atomicSetPrematch(finalPicks);
   // Web-push wordt gestuurd NA multi-sport merge in POST /api/prematch
   emit({ log: `✅ Voetbal scan klaar.`, picks: finalPicks });
 
@@ -6686,7 +6627,7 @@ async function runLive(emit) {
   }
   for (const msg of msgs) if (msg.trim()) await notify(msg).catch(()=>{});
 
-  lastLivePicks = livePicks;
+  _atomicSetLive(livePicks);
   emit({ log: `✅ ${livePicks.length} live pick(s) gestuurd.`, picks: livePicks });
   return livePicks;
 }
@@ -8811,8 +8752,10 @@ app.post('/api/bets', async (req, res) => {
     const nextId = bets.length > 0 ? Math.max(...bets.map(b => b.id)) + 1 : 1;
     const newBet = { ...body, id: nextId, odds, units, uitkomst: body.uitkomst || 'Open' };
     await writeBet(newBet, userId);
-    schedulePreKickoffCheck(newBet).catch(() => {}); // niet-blokkerend
-    scheduleCLVCheck(newBet).catch(() => {}); // niet-blokkerend
+    // v10.12.25: log crashes in background-schedulers zodat silent-failure
+    // niet betekent "bet heeft geen CLV-tracking en niemand merkt het".
+    schedulePreKickoffCheck(newBet).catch(e => console.warn(`[pre-kickoff] schedule failed voor bet ${newBet?.id}:`, e?.message || e));
+    scheduleCLVCheck(newBet).catch(e => console.warn(`[CLV] schedule failed voor bet ${newBet?.id}:`, e?.message || e));
     const result = await readBets(userId);
     // Check for correlated bets on the same match
     const newMatch = (newBet.wedstrijd || '').toLowerCase().trim();
@@ -12170,8 +12113,8 @@ app.listen(PORT, () => {
   getAdminUserId().then(uid => readBets(uid)).then(({ bets }) => {
     const openWithTime = bets.filter(b => b.uitkomst === 'Open' && b.tijd);
     openWithTime.forEach(b => {
-      schedulePreKickoffCheck(b).catch(() => {});
-      scheduleCLVCheck(b).catch(() => {});
+      schedulePreKickoffCheck(b).catch(e => console.warn(`[pre-kickoff] re-schedule failed voor bet ${b?.id}:`, e?.message || e));
+      scheduleCLVCheck(b).catch(e => console.warn(`[CLV] re-schedule failed voor bet ${b?.id}:`, e?.message || e));
     });
     console.log(`⏱  Pre-kickoff + CLV checks herplanned voor ${openWithTime.length} open bet(s)`);
   }).catch(() => {});

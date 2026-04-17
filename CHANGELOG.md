@@ -2,6 +2,46 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.25] - 2026-04-17
+
+Code-review prep · P0 race-condition fix + 4 dead-code files deleted + dead-path opgeschoond + reviewer-onboarding doc geschreven. Gedreven door een pre-review audit-agent die concrete findings opleverde.
+
+### Security / correctness fixes
+
+**[P0] `lastPrematchPicks` / `lastLivePicks` race condition** (`server.js:1432-1440` + `lib/config.js:126-135`). Globals werden direct herschreven tijdens lange scans; concurrent `GET /api/picks` kon een half-gevulde array zien. Fix: atomic reference-swap met `Object.freeze([...arr])`. Node.js' single-thread garandeert dat reference-writes atomic zijn, dus readers zien altijd complete prior OR complete new state. Helpers `_atomicSetPrematch` / `_atomicSetLive` in server.js + matching update in `lib/config.js`.
+
+**[P1] `api-sports.js:112` zero-games data-corruptie**. `games.points.for / 1` bij 0-games teams gaf `undefined/1 = NaN` → stille vervuiling van `teamStats`. Fix: expliciete guards (`Math.max(1, rawPlayed)` + `Number.isFinite` checks) + `totalGames` exposed voor downstream "trust this stat?" gates. Eerlijk returnt `null` voor winPct/goalsFor/goalsAgainst als geen games zijn gespeeld.
+
+**[P1] Silent-catch op pre-kickoff + CLV scheduler** (`server.js:8814-8815` + `12173-12176`). `.catch(() => {})` swallowde alle errors → CLV-tracking kon stil falen zonder detectie. Fix: `.catch(e => console.warn(...))` met bet-id context.
+
+### Dead code geruimd (4 files gedelete)
+
+Alle 4 files waren orphaned — **geen enkele andere file importeerde ze** — en hadden volledig gedupliceerde implementaties in `server.js`:
+
+- **`lib/auth.js`** · legacy JWT middleware ZONDER DB-backed status check (de server.js versie heeft dat wél sinds v10.10.22). Veiligheidsrisico als iemand in de toekomst per ongeluk deze versie zou importeren — blocked/demoted users zouden gewoon door komen. Delete.
+- **`lib/weather.js`** · `fetchMatchWeather` + `getVenueCoords` zitten identiek in server.js.
+- **`lib/api-sports.js`** · enrichmentslogica zit in server.js.
+- **`lib/leagues.js`** · `AF_FOOTBALL_LEAGUES` / `NBA_LEAGUES` / etc. alle gedupliceerd in server.js.
+
+Totaal **~700 regels dead code verwijderd**. Code-review oppervlak kleiner. Git-history bevat originele code als ooit nodig.
+
+**Ook gedeprecateerd**: `evaluateKellyAutoStepup()` in server.js teruggebracht tot 2-regel stub (`{stepped: false, reason: 'deprecated_use_stake_regime'}`). Stake-regime engine doet dit nu. Origineel ~90-regel functie-body weg.
+
+### Added
+- **[claude] `docs/CODE_REVIEW_PREP.md`** · onboarding-document voor externe reviewers. 10 secties met: wat EdgePickr is, architectuur, doctrine-keuzes die eruit kunnen zien als bugs, scan/stake/learn flows, per-onderwerp startpunten, bekende tech debt (vooraf erkend), hot spots voor reviewer-aandacht, runbook, validation commands, specifieke open vragen voor reviewers.
+- **[claude] `docs/REPO_STRUCTURE.md`** bijgewerkt: dode files verwijderd uit indeling, `stake-regime.js` + `walk-forward.js` toegevoegd aan "App/runtime support".
+
+### Not fixed (uit pre-review audit, toegelicht in prep-doc)
+
+- **P1 multi-user scoping op `lastPrematchPicks`** — single-operator doctrine staat dit toe (alleen admin kan scan triggeren). Multi-user scoping is Phase C/D item als dat ooit relevant wordt.
+- **P2 `execution-gate` thresholds niet empirisch gevalideerd** — doctrine-vraag die externe reviewer moet beantwoorden (backtest tegen historische CLV).
+- **P2 `_scanHistoryCache` invalidation unclear** — bestaand patroon, low risk, upgrade-path ligt vast.
+- **P3 Bet365-limit reminder 2026-04-26 hardcoded** — self-cleaning, safe.
+- **P3 regime_at_time niet gepersisteerd per bet** — post-hoc regime-cohort analyse vereist schema-update (bets.regime_at_time kolom). Phase C-backlog.
+
+### Tests
+- `npm test`: 523 passed, 0 failed.
+
 ## [10.12.24] - 2026-04-17
 
 UX batch · huidige-odds refresh op bet-tracker + stake-regime visible in Status page.
