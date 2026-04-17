@@ -2305,7 +2305,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.10.22');
+  assert.strictEqual(appMeta.APP_VERSION, '10.11.0');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4657,6 +4657,29 @@ test('operator-actions: CLV recompute target kan op één bet focussen', () => {
   assert.strictEqual(operatorActions.matchesClvRecomputeTarget(row, { betId: 42 }), true);
   assert.strictEqual(operatorActions.matchesClvRecomputeTarget(row, { betId: 41 }), false);
   assert.strictEqual(operatorActions.matchesClvRecomputeTarget(row, {}), true);
+});
+
+test('operator-actions: live over/btts kunnen vroegtijdig beslissen', () => {
+  assert.strictEqual(
+    operatorActions.resolveEarlyLiveOutcome('Over 2.5', { scoreH: 2, scoreA: 1 }),
+    'W'
+  );
+  assert.strictEqual(
+    operatorActions.resolveEarlyLiveOutcome('Under 2.5', { scoreH: 2, scoreA: 1 }),
+    'L'
+  );
+  assert.strictEqual(
+    operatorActions.resolveEarlyLiveOutcome('⚽ BTTS Nee', { scoreH: 1, scoreA: 1 }),
+    'L'
+  );
+  assert.strictEqual(
+    operatorActions.resolveEarlyLiveOutcome('⚽ BTTS Ja', { scoreH: 1, scoreA: 1 }),
+    'W'
+  );
+  assert.strictEqual(
+    operatorActions.resolveEarlyLiveOutcome('Under 2.5', { scoreH: 1, scoreA: 0 }),
+    null
+  );
 });
 
 // ── PRICE-MEMORY: line-timeline (v10.10.9, fundament 2 uit Bouwvolgorde) ─────

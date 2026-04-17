@@ -2,6 +2,30 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.11.0] - 2026-04-17
+
+Milestone release. Security-review afgerond, 6-punts EV-roadmap compleet, operator-hardening live.
+
+### Highlights sinds v10.10.0
+- **Security review**: gezamenlijke Claude × Codex deep audit → 19-punts action-list, 17/19 doorgevoerd
+- **DB-backed auth**: blocked/demoted users worden direct geweigerd (geen 30d JWT-window meer)
+- **RLS op alle 18 Supabase tabellen**: defense-in-depth, anon key kan geen data meer lezen
+- **Push per-user**: geen cross-user notificatie-leak meer
+- **XSS-class gesloten**: inline-handler patterns → data-attributes, escHtml quote-safe
+- **Execution-gate live**: stake auto-gedempt bij dunne markten/stale prices
+- **Calibration-monitor**: Brier/log-loss per signaal × sport × markt × window
+- **Sharp reference**: Pinnacle/Betfair als aparte truth-laag, sharp-CLV per bet
+- **Correlated-bet Kelly**: zelfde league/dag → quarter-Kelly op extra picks
+- **Bayesian form-shrinkage**: extreme streaks gedempt in alle 6 sporten
+- **Playability matrix**: per (sport, markt) drie aparte assen
+- **Line-timeline**: volledige prijsgeschiedenis per fixture opvraagbaar
+- **Unit-at-time**: eerlijke bet-historie over unit-wisselingen heen
+- **MLB F5 diagnostiek**: waarom picks niet surfacen
+- **Drift-checker fix**: geen handicap-prijs meer als ML
+- **Operator-fixes**: scheduler-gate, MLB live-score, tracker auto-sync, CLV per betId
+- **Performance**: 3 bets-queries → 1, saveAfUsage debounced, rateLimitMap cleanup
+- **469 tests** (was 337 bij start van deze sprint)
+
 ## [10.10.21] - 2026-04-17
 
 CLV-meting tegen Pinnacle closing line als ground truth (Codex' eerste post-roadmap voorkeur).

@@ -40,7 +40,7 @@ const { applyCorrelationDamp } = require('./lib/correlation-damp');
 const { supportsApiSportsInjuries } = require('./lib/api-sports-capabilities');
 const { shouldRunPostResultsModelJobs } = require('./lib/daily-results');
 const { isV1LiveStatus, shouldIncludeDatedV1Game } = require('./lib/live-board');
-const { matchesClvRecomputeTarget } = require('./lib/operator-actions');
+const { matchesClvRecomputeTarget, resolveEarlyLiveOutcome } = require('./lib/operator-actions');
 
 // Snapshot layer (v2 foundation): point-in-time logging voor learning + backtesting
 const snap = require('./lib/snapshots');
@@ -9600,6 +9600,7 @@ async function checkOpenBetResults(userId = null) {
 
   // Football finished
   const FINISHED_STATUSES = new Set(['FT','AET','PEN']);
+  const FOOTBALL_LIVE_STATUSES = new Set(['1H','HT','2H','ET','BT','P','INT','LIVE']);
   const footballFinished = [...(todayFixtures || []), ...(yesterdayFixtures || [])]
     .filter(f => FINISHED_STATUSES.has(f.fixture?.status?.short))
     .map(f => ({
@@ -9608,6 +9609,16 @@ async function checkOpenBetResults(userId = null) {
       scoreH: f.goals?.home ?? 0,
       scoreA: f.goals?.away ?? 0,
       sport:  'football',
+    }));
+  const footballCurrent = [...(todayFixtures || []), ...(yesterdayFixtures || [])]
+    .filter(f => FOOTBALL_LIVE_STATUSES.has(f.fixture?.status?.short))
+    .map(f => ({
+      home:   f.teams?.home?.name || '',
+      away:   f.teams?.away?.name || '',
+      scoreH: f.goals?.home ?? 0,
+      scoreA: f.goals?.away ?? 0,
+      sport:  'football',
+      live:   true,
     }));
 
   // Basketball finished games (include halftime scores for 1H market resolution)
@@ -9621,6 +9632,17 @@ async function checkOpenBetResults(userId = null) {
     halfH: (g.scores?.home?.quarter_1 ?? 0) + (g.scores?.home?.quarter_2 ?? 0),
     halfA: (g.scores?.away?.quarter_1 ?? 0) + (g.scores?.away?.quarter_2 ?? 0),
     sport: 'basketball',
+  }));
+  const bbCurrent = [...(bbToday || []), ...(bbYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return isV1LiveStatus(status);
+  }).map(g => ({
+    home: g.teams?.home?.name || '',
+    away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home?.total ?? 0,
+    scoreA: g.scores?.away?.total ?? 0,
+    sport: 'basketball',
+    live: true,
   }));
 
   // Hockey finished games (include 1st period + regulation score voor 3-weg)
@@ -9661,6 +9683,17 @@ async function checkOpenBetResults(userId = null) {
       sport: 'hockey',
     };
   });
+  const hkCurrent = [...(hkToday || []), ...(hkYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return isV1LiveStatus(status);
+  }).map(g => ({
+    home: g.teams?.home?.name || '',
+    away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home ?? 0,
+    scoreA: g.scores?.away ?? 0,
+    sport: 'hockey',
+    live: true,
+  }));
 
   // Baseball finished games (include 1st inning for NRFI resolution)
   const baseballFinished = [...(baToday || []), ...(baYesterday || [])].filter(g => {
@@ -9674,6 +9707,19 @@ async function checkOpenBetResults(userId = null) {
     inn1A: g.scores?.away?.innings?.['1'] ?? g.scores?.away?.inning_1 ?? null,
     sport: 'baseball',
   }));
+  const baseballCurrent = [...(baToday || []), ...(baYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return isV1LiveStatus(status);
+  }).map(g => ({
+    home: g.teams?.home?.name || '',
+    away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home?.total ?? 0,
+    scoreA: g.scores?.away?.total ?? 0,
+    inn1H: g.scores?.home?.innings?.['1'] ?? g.scores?.home?.inning_1 ?? null,
+    inn1A: g.scores?.away?.innings?.['1'] ?? g.scores?.away?.inning_1 ?? null,
+    sport: 'baseball',
+    live: true,
+  }));
 
   // NFL (American Football) finished games (include 1st half scores)
   const nflFinished = [...(nflToday || []), ...(nflYesterday || [])].filter(g => {
@@ -9686,6 +9732,17 @@ async function checkOpenBetResults(userId = null) {
     halfH: (g.scores?.home?.quarter_1 ?? 0) + (g.scores?.home?.quarter_2 ?? 0),
     halfA: (g.scores?.away?.quarter_1 ?? 0) + (g.scores?.away?.quarter_2 ?? 0),
     sport: 'american-football',
+  }));
+  const nflCurrent = [...(nflToday || []), ...(nflYesterday || [])].filter(g => {
+    const status = (g.game?.status?.short || '').toUpperCase();
+    return isV1LiveStatus(status);
+  }).map(g => ({
+    home: g.teams?.home?.name || '',
+    away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home?.total ?? 0,
+    scoreA: g.scores?.away?.total ?? 0,
+    sport: 'american-football',
+    live: true,
   }));
 
   // Handball finished games
@@ -9704,27 +9761,47 @@ async function checkOpenBetResults(userId = null) {
   });
 
   const allFinished = [...footballFinished, ...bbFinished, ...hkFinished, ...baseballFinished, ...nflFinished, ...handballFinished];
+  const handballCurrent = [...(hbToday || []), ...(hbYesterday || [])].filter(g => {
+    const status = (g.status?.short || '').toUpperCase();
+    return isV1LiveStatus(status);
+  }).map(g => ({
+    home: g.teams?.home?.name || '',
+    away: g.teams?.away?.name || '',
+    scoreH: g.scores?.home ?? 0,
+    scoreA: g.scores?.away ?? 0,
+    sport: 'handball',
+    live: true,
+  }));
+
+  const allCurrent = [...footballCurrent, ...bbCurrent, ...hkCurrent, ...baseballCurrent, ...nflCurrent, ...handballCurrent];
+  const matchEventForBet = (events, hmQ, awQ) => events.find(e => {
+    const h = e.home.toLowerCase(), a = e.away.toLowerCase();
+    return (h.includes(hmQ) || hmQ.includes(h.split(' ').pop())) &&
+           (a.includes(awQ) || awQ.includes(a.split(' ').pop()));
+  });
 
   const results = [];
   for (const bet of openBets) {
     const parts = (bet.wedstrijd||'').split(' vs ').map(s => s.trim().toLowerCase());
     if (parts.length < 2) continue;
     const [hmQ, awQ] = parts;
-    const ev = allFinished.find(e => {
-      const h = e.home.toLowerCase(), a = e.away.toLowerCase();
-      return (h.includes(hmQ) || hmQ.includes(h.split(' ').pop())) &&
-             (a.includes(awQ) || awQ.includes(a.split(' ').pop()));
-    });
+    const finishedEv = matchEventForBet(allFinished, hmQ, awQ);
+    const liveEv = finishedEv ? null : matchEventForBet(allCurrent, hmQ, awQ);
+    const ev = finishedEv || liveEv;
     if (!ev) continue;
 
     const markt = (bet.markt||'').toLowerCase();
     const total = ev.scoreH + ev.scoreA;
     let uitkomst = null;
 
+    if (liveEv) {
+      uitkomst = resolveEarlyLiveOutcome(markt, ev);
+    }
+
     // ── 3-weg 60-min markten (hockey/handbal regulation) ──
     // Gebruikt regScoreH/regScoreA (na 60 min, excl OT/SO). Bij AOT/AP was reg score gelijk.
     const is60min = markt.includes('60-min') || markt.includes('60 min') || markt.includes('🕐');
-    if (is60min && ev.regScoreH != null && ev.regScoreA != null) {
+    if (!uitkomst && is60min && ev.regScoreH != null && ev.regScoreA != null) {
       if (markt.includes('gelijkspel') || markt.includes('draw')) {
         uitkomst = ev.regScoreH === ev.regScoreA ? 'W' : 'L';
       } else {
@@ -9740,7 +9817,7 @@ async function checkOpenBetResults(userId = null) {
       }
     }
     // ── NRFI / YRFI (baseball 1st inning) ──
-    else if (markt.includes('nrfi') || markt.includes('yrfi') || markt.includes('no run 1st') || markt.includes('yes run 1st') || markt.includes('no run first') || markt.includes('yes run first')) {
+    else if (!uitkomst && (markt.includes('nrfi') || markt.includes('yrfi') || markt.includes('no run 1st') || markt.includes('yes run 1st') || markt.includes('no run first') || markt.includes('yes run first'))) {
       if (ev.inn1H !== null && ev.inn1H !== undefined && ev.inn1A !== null && ev.inn1A !== undefined) {
         const firstInningRuns = (ev.inn1H || 0) + (ev.inn1A || 0);
         const isNRFI = markt.includes('nrfi') || markt.includes('no run');
@@ -9749,7 +9826,7 @@ async function checkOpenBetResults(userId = null) {
       }
     }
     // ── 1st Half Over/Under (basketball, NFL) ──
-    else if ((markt.includes('1h ') || markt.includes('1st half')) && (markt.includes('over') || markt.includes('under'))) {
+    else if (!uitkomst && (markt.includes('1h ') || markt.includes('1st half')) && (markt.includes('over') || markt.includes('under'))) {
       const halfTotal = (ev.halfH ?? null) !== null && (ev.halfA ?? null) !== null ? ev.halfH + ev.halfA : null;
       if (halfTotal !== null) {
         const h1OverMatch = markt.match(/over\s*(\d+\.?\d*)/i);
@@ -9764,7 +9841,7 @@ async function checkOpenBetResults(userId = null) {
       }
     }
     // ── 1st Half Spread (basketball, NFL) ──
-    else if ((markt.includes('1h ') || markt.includes('1st half')) && (markt.includes('spread') || markt.match(/[+-]\d/))) {
+    else if (!uitkomst && (markt.includes('1h ') || markt.includes('1st half')) && (markt.includes('spread') || markt.match(/[+-]\d/))) {
       const halfH = ev.halfH ?? null;
       const halfA = ev.halfA ?? null;
       if (halfH !== null && halfA !== null) {
@@ -9780,7 +9857,7 @@ async function checkOpenBetResults(userId = null) {
       }
     }
     // ── 1st Period Over/Under (hockey) ──
-    else if ((markt.includes('p1 ') || markt.includes('1st period')) && (markt.includes('over') || markt.includes('under'))) {
+    else if (!uitkomst && (markt.includes('p1 ') || markt.includes('1st period')) && (markt.includes('over') || markt.includes('under'))) {
       const p1Total = (ev.p1H ?? null) !== null && (ev.p1A ?? null) !== null ? ev.p1H + ev.p1A : null;
       if (p1Total !== null) {
         const p1OverMatch = markt.match(/over\s*(\d+\.?\d*)/i);
@@ -9795,28 +9872,28 @@ async function checkOpenBetResults(userId = null) {
       }
     }
     // ── Odd/Even total ──
-    else if (markt.includes('odd total') || markt.includes('even total') || markt.includes('🎲')) {
+    else if (!uitkomst && (markt.includes('odd total') || markt.includes('even total') || markt.includes('🎲'))) {
       const isOdd = markt.includes('odd');
       uitkomst = (total % 2 === 1) === isOdd ? 'W' : 'L';
     }
     // Generic over/under detection (works for all sports: goals, points, runs, etc.)
-    else if (markt.match(/over\s*(\d+\.?\d*)/i)) {
+    else if (!uitkomst && markt.match(/over\s*(\d+\.?\d*)/i)) {
       const ouMatch = markt.match(/over\s*(\d+\.?\d*)/i);
       const line = parseFloat(ouMatch[1]);
       uitkomst = total > line ? 'W' : total < line ? 'L' : null; // exact = push
     }
-    else if (markt.match(/under\s*(\d+\.?\d*)/i) && !markt.match(/over\s*(\d+\.?\d*)/i)) {
+    else if (!uitkomst && markt.match(/under\s*(\d+\.?\d*)/i) && !markt.match(/over\s*(\d+\.?\d*)/i)) {
       const ouMatch = markt.match(/under\s*(\d+\.?\d*)/i);
       const line = parseFloat(ouMatch[1]);
       uitkomst = total < line ? 'W' : total > line ? 'L' : null;
     }
-    else if (markt.includes('btts ja') || markt.includes('btts yes') || (markt.includes('btts') && !markt.includes('nee') && !markt.includes('no'))) {
+    else if (!uitkomst && (markt.includes('btts ja') || markt.includes('btts yes') || (markt.includes('btts') && !markt.includes('nee') && !markt.includes('no')))) {
       uitkomst = (ev.scoreH > 0 && ev.scoreA > 0) ? 'W' : 'L';
     }
-    else if (markt.includes('btts nee') || markt.includes('btts no')) {
+    else if (!uitkomst && (markt.includes('btts nee') || markt.includes('btts no'))) {
       uitkomst = (ev.scoreH === 0 || ev.scoreA === 0) ? 'W' : 'L';
     }
-    else if (markt.includes('dnb ') || markt.includes('draw no bet')) {
+    else if (!uitkomst && (markt.includes('dnb ') || markt.includes('draw no bet'))) {
       // Draw No Bet: draw = void (no result)
       if (ev.scoreH === ev.scoreA) {
         uitkomst = null; // void / push · skip
