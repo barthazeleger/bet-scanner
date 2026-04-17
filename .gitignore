@@ -10,5 +10,9 @@ af-usage.json
 push-subs.json
 scan-history.json
 
+# Coverage
+coverage/
+.nyc_output/
+
 # OS
 .DS_Store

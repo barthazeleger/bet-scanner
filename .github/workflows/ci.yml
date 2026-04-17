@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [master, '**']
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: Test + Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (high+ blocks)
+        run: npm run audit:high
+
+      - name: Run tests
+        run: npm test
+
+      - name: Coverage report (informational)
+        run: npm run test:coverage
+        continue-on-error: true

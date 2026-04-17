@@ -2,6 +2,41 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.5] - 2026-04-17
+
+Phase E.19 · Test discipline: coverage-rapportage + GitHub Actions CI-gate. Elke push/PR draait nu automatisch `npm audit --audit-level=high`, `npm test`, en coverage-report. Voorkomt de "ik vergat lokaal te testen" fout-modus die eerder de `d5aff8e` hotfix nodig maakte.
+
+### Added
+- **[claude] `c8@^10.1.2` devDependency** voor line/branch/function coverage.
+- **[claude] `.c8rc.json` config** — include `lib/**` + `server.js`, exclude tests/docs/scripts/node_modules. Thresholds ingesteld maar NIET enforced (`check-coverage: false`) zodat eerste runs rapporteren zonder te blokkeren. Richtlijn: lines ≥ 70, branches ≥ 50, functions ≥ 60.
+- **[claude] `npm run test:coverage`** — genereert text + text-summary + lcov rapporten.
+- **[claude] `npm run audit:high`** — convenience voor `npm audit --audit-level=high`. Gebruikt door CI.
+- **[claude] `.github/workflows/ci.yml`** — GitHub Actions workflow op push + PR:
+  1. Node 20 setup, npm ci
+  2. `npm audit --audit-level=high` (high+ blockt)
+  3. `npm test`
+  4. `npm run test:coverage` (informational, continue-on-error)
+- **[claude] `.gitignore`** — `coverage/` + `.nyc_output/` toegevoegd.
+
+### Huidige coverage-nulmeting (v10.12.5)
+Over de hele repo: 30.68% statements/lines. Dit wordt massaal omlaag getrokken door `server.js` (~12k regels, grotendeels niet direct unit-tested). Per-module is `lib/*` in betere shape:
+- `lib/runtime/*`: 100% lines
+- `lib/model-math.js`: 95.14% lines, 80% branches
+- `lib/playability.js`: 95.81% lines
+- `lib/walk-forward.js`: 99.5% lines
+- `lib/line-timeline.js`: 93.8% lines
+- `lib/execution-gate.js` + `lib/calibration-monitor.js`: 90+% lines
+- `lib/weather.js`: 0% — orphaned module (Codex eerder gevlagd, niet geïmporteerd)
+- `lib/nhl-goalie-preview.js`: 69% — rafelige error-paden onbereikt
+
+### Non-goals this commit
+- **server.js tests**: monoliet opsplitsen is een eigen Phase (§14.R2.C + punt 16b in Open items). Tests voor uitgestukte routes komen naturlijk mee als server.js collapsed wordt.
+- **Enforce coverage threshold**: `check-coverage: false` staat nu; zodra we de baseline kennen (meer dan één run) kan ik dit op `true` zetten met realistische cut-offs.
+- **Mutation testing / property-based**: Phase E.21 (fast-check) + Phase E.22 (Stryker).
+
+### Rationale
+Doctrine §14.R2.C: "333+ tests is veel, maar bijna alles in één test.js en overwegend unit. Coverage- en kwaliteitsgaten zijn niet zichtbaar." CI-gate voorkomt dat bugs silently landen. Coverage-tool maakt blinde vlekken zichtbaar zodat we ze kunnen prioriteren.
+
 ## [10.12.4] - 2026-04-17
 
 Phase B.4 · Walk-forward validator. Fundering voor eerlijke edge-claims: elke backtest of signal-validatie moet nu op een time-aware split draaien. Zonder dit lekken random splits toekomst-info in trainingsdata en overschat de tool zijn eigen edge.
