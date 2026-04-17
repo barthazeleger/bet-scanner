@@ -1540,27 +1540,16 @@ function getDrawdownMultiplier() {
   return 1.0;
 }
 
-function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'football', options = {}) {
-  // v10.12.6 Phase A.1b: optional timelineMap voor execution-gate wiring.
-  // Shape: Map<"${fixtureId}|${marketType}|${selectionKey}|${line}", entry>
-  // zoals gebouwd door lineTimelineLib.buildScanTimelineMap(). Als null:
-  // gate blijft no-op (backwards-compat voor sporten die nog niet gewired zijn).
-  const timelineMap = options && options.timelineMap instanceof Map ? options.timelineMap : null;
-  const resolver = timelineMap ? (({ fixtureMeta, label }) => {
-    if (!fixtureMeta) return null;
-    const entry = lineTimelineLib.lookupTimeline(timelineMap, fixtureMeta);
-    if (!entry) return null;
-    // 1X2 is 3-way; O/U + BTTS + DNB zijn 2-way. Infer uit label als heuristiek.
-    const lbl = (label || '').toLowerCase();
-    const twoWayMarket = /over\s|under\s|btts|dnb|team\s+total/.test(lbl);
-    return lineTimelineLib.deriveExecutionMetrics(entry.timeline, { twoWayMarket });
-  }) : null;
+function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'football') {
+  // v10.12.8: execution-gate draait nu als post-scan pass
+  // (lib/runtime/scan-gate.js). buildPickFactory blijft daarom lean en
+  // aan mkP-kant: fixtureMeta wordt alleen doorgegeven + opgeslagen op de
+  // pick. Geen resolveExecutionMetrics meer hier.
   const ctx = createPickContext({
     sport,
     drawdownMultiplier: getDrawdownMultiplier,
     activeUnitEur: getActiveUnitEur(),
     adaptiveMinEdge,
-    resolveExecutionMetrics: resolver,
   });
   return createPickFactory(MIN_ODDS, calibEpBuckets, ctx);
 }
@@ -2881,16 +2870,19 @@ async function runBasketball(emit) {
           }).catch(() => {});
         }
 
+        // v10.12.8 Phase A.1b basketball: ML is 2-way (geen draw)
+        const fxMetaBbH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
+        const fxMetaBbA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
+            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaBbH);
 
         if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
+            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaBbA);
 
         // Over/Under total points
         const overOdds = parsed.totals.filter(o => o.side === 'over');
@@ -3017,12 +3009,35 @@ async function runBasketball(emit) {
   for (const p of picks)     { p.scanType = 'nba'; p.sport = 'basketball'; }
   for (const p of combiPool) { p.scanType = 'nba'; p.sport = 'basketball'; }
 
-  emit({ log: `🏀 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} basketball picks` });
+  // v10.12.8 Phase A.1b: post-scan execution-gate pass (basketball ML).
+  let gatedPicks = picks;
+  try {
+    const { applyPostScanGate } = require('./lib/runtime/scan-gate');
+    const { kellyToUnits } = require('./lib/model-math');
+    const preferredBookies = (getPreferredBookies() && getPreferredBookies().length)
+      ? getPreferredBookies() : ['Bet365', 'Unibet'];
+    const before = gatedPicks.length;
+    const res = await applyPostScanGate(gatedPicks, supabase, {
+      preferredBookies,
+      scanAnchorMs: Date.now(),
+      activeUnitEur: getActiveUnitEur(),
+      marketTypes: ['moneyline'],
+      kellyToUnits,
+    });
+    gatedPicks = res.picks;
+    if (res.stats.dampened || res.stats.skipped) {
+      emit({ log: `🏀 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
+    }
+  } catch (err) {
+    emit({ log: `⚠️ Basketball execution-gate mislukt: ${err.message}` });
+  }
+
+  emit({ log: `🏀 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedPicks.length} basketball picks` });
 
   // Save scan entry
-  if (picks.length) saveScanEntry(picks, 'nba', totalEvents);
+  if (gatedPicks.length) saveScanEntry(gatedPicks, 'nba', totalEvents);
 
-  return picks;
+  return gatedPicks;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5218,46 +5233,19 @@ async function runPrematch(emit) {
   }
   emit({ log: `🧠 Calibratie: thuis×${mm('home').toFixed(2)} uit×${mm('away').toFixed(2)} draw×${mm('draw').toFixed(2)} over×${mm('over').toFixed(2)}` });
 
-  // v10.12.6 Phase A.1b: pre-load line-timelines voor alle pre-fetched fixtures.
-  // Gebruikt historische odds_snapshots (pre-scan state) zodat de gate het
-  // huidige scan niet tegen zichzelf meet. Bulk query (één call) i.p.v. per-pick.
-  const _scanFixtureIds = [];
+  // v10.12.8 Phase A.1b: kickoff map wordt verderop in het scan-gate
+  // post-process gebruikt. Bouwen zodra fixtures pre-fetched zijn.
   const _scanKickoffByFixture = new Map();
   for (const leagueKey of Object.keys(_footballFixturesCache)) {
     for (const f of (_footballFixturesCache[leagueKey] || [])) {
       const fid = f?.fixture?.id;
       if (!fid) continue;
-      _scanFixtureIds.push(fid);
       const kMs = Date.parse(f?.fixture?.date || '');
       if (Number.isFinite(kMs)) _scanKickoffByFixture.set(fid, kMs);
     }
   }
-  let _scanTimelineMap = null;
-  if (_scanFixtureIds.length) {
-    try {
-      const preferredBookies = getPreferredBookies() && getPreferredBookies().length
-        ? getPreferredBookies()
-        : ['Bet365', 'Unibet'];
-      _scanTimelineMap = await lineTimelineLib.buildScanTimelineMap(supabase, {
-        fixtureIds: _scanFixtureIds,
-        // v10.12.7 Phase A.1b expansion: 1X2 + totals + BTTS + DNB zijn nu
-        // gewired in mkP. Exotische (AH, 1H, correct score) volgen als
-        // odds_snapshots ze consistent loggen.
-        marketTypes: ['1x2', 'totals', 'btts', 'dnb'],
-        preferredBookies,
-        kickoffByFixtureId: _scanKickoffByFixture,
-        scanAnchorMs: Date.now(),
-      });
-      emit({ log: `📈 Line-timelines geladen: ${_scanTimelineMap.size} bucket(s) over ${_scanFixtureIds.length} fixture(s)` });
-    } catch (err) {
-      emit({ log: `⚠️ Line-timeline load mislukt (gate blijft no-op): ${err.message}` });
-      _scanTimelineMap = null;
-    }
-  }
 
-  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'football', {
-    timelineMap: _scanTimelineMap,
-  });
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'football');
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = AF_FOOTBALL_LEAGUES.length; // 1 call/league gebruikt in pre-fetch
@@ -6108,10 +6096,37 @@ async function runPrematch(emit) {
   const MIN_CONFIDENCE = 0.025;
 
   const seen2 = new Set();
-  const allCandidates = picks
+  let allCandidates = picks
     .filter(p => { const k=p.match+'|'+p.label; if(seen2.has(k)) return false; seen2.add(k); return true; })
     .filter(p => p.strength >= MIN_CONFIDENCE)
     .sort((a,b) => b.expectedEur - a.expectedEur || b.ep - a.ep); // meeste verwachte winst bovenaan
+
+  // v10.12.8 Phase A.1b: post-scan execution-gate pass. Alle football picks
+  // die `_fixtureMeta` dragen (1X2 + totals + BTTS + DNB) krijgen hun kelly
+  // gedempt / worden geskipt op basis van de line-timeline metrics.
+  try {
+    const { applyPostScanGate } = require('./lib/runtime/scan-gate');
+    const { kellyToUnits } = require('./lib/model-math');
+    const preferredBookies = (getPreferredBookies() && getPreferredBookies().length)
+      ? getPreferredBookies() : ['Bet365', 'Unibet'];
+    const before = allCandidates.length;
+    const res = await applyPostScanGate(allCandidates, supabase, {
+      preferredBookies,
+      kickoffByFixtureId: _scanKickoffByFixture,
+      scanAnchorMs: Date.now(),
+      activeUnitEur: getActiveUnitEur(),
+      marketTypes: ['1x2', 'totals', 'btts', 'dnb'],
+      kellyToUnits,
+    });
+    allCandidates = res.picks;
+    // Re-sort na mutatie (expectedEur kan zijn veranderd bij gedempte picks)
+    allCandidates.sort((a,b) => b.expectedEur - a.expectedEur || b.ep - a.ep);
+    if (res.stats.dampened || res.stats.skipped) {
+      emit({ log: `📉 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
+    }
+  } catch (err) {
+    emit({ log: `⚠️ Execution-gate pass mislukt (picks ongewijzigd): ${err.message}` });
+  }
 
   const finalPicks = allCandidates.slice(0, 5);
 

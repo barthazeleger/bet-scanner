@@ -2,6 +2,35 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.8] - 2026-04-17
+
+Phase A.1b unificatie · Post-scan execution-gate pattern + Basketball wired. Eén canonieke gate-flow voor alle sporten i.p.v. per-sport ad-hoc pre-loads.
+
+### Architectuur-shift
+- **Post-process pattern** (nieuw): pick-creatie + ranking gebeurt normaal, DAARNA draait `applyPostScanGate()` één keer over het hele kandidaten-lijst. Een-bulk-query naar odds_snapshots → timelines → derived metrics → `applyExecutionGate` per pick → kelly/units/expectedEur bijgewerkt, skipped picks gefilterd.
+- **Pre-load pattern** (gepensioneerd): het `options.timelineMap` pad in `buildPickFactory` + de pre-scan `buildScanTimelineMap` aanroep in `runPrematch` zijn verwijderd. Te specifiek voor football (waar fixtures pre-fetched worden); andere sporten fetchen fixtures in-loop waardoor pre-load niet bruikbaar was.
+
+### Added
+- **[claude] `lib/runtime/scan-gate.js`** — `applyPostScanGate(picks, supabase, opts)`. Pure post-process helper. Bulk-queryt timelines per unieke fixtureId, past `applyExecutionGate` toe, muteert kelly/units/expectedEur in-place, filtert skipped picks, returnt `{picks, stats: {total, gated, skipped, dampened}}`. Backwards-compat: picks zonder `_fixtureMeta` → ongewijzigd; lege timelineMap → gate no-op.
+- **[claude] Football runPrematch** gebruikt post-scan gate na candidate-sortering maar vóór top-5-slice. Scan-log toont "📉 Execution-gate: N gedempt · M geskipt (van K)".
+- **[claude] Basketball runBasketball** krijgt zelfde post-scan gate voor ML picks (`marketType='moneyline'`). Eerste sport-wire-up buiten football.
+
+### Wired picks (gate live)
+- **Football**: 1X2 + totals 2.5 + BTTS + DNB (van v10.12.6-7, nu via post-process)
+- **Basketball**: moneyline (nieuw in .8)
+
+### Not yet wired
+- Football exotische markten (AH, 1H, correct score)
+- Basketball spread + totals
+- Hockey / Baseball / NFL / Handball scans
+
+### Tests
+- 3 nieuwe `applyPostScanGate` tests: lege input, geen _fixtureMeta, lege timelineMap (alle gate-no-op paden).
+- `npm test`: 492 passed, 0 failed.
+
+### Rationale
+Pre-load werkte alleen in football dankzij `_footballFixturesCache`. Andere sporten fetchen fixtures in-loop, wat pre-load onpraktisch maakte. Post-process is uniform: elke sport plaatst `_fixtureMeta` op zijn picks, dan roept `applyPostScanGate` aan de einde. Één pattern, één helper, één test.
+
 ## [10.12.7] - 2026-04-17
 
 Phase A.1b vervolg · Football totals + BTTS + DNB wire-up. Uitbreiding van de v10.12.6 gate-wiring: over de volle markt-breedte die EdgePickr op dit moment voor football scant, draait de execution-gate nu live.

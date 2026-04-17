@@ -35,6 +35,7 @@ const playability = require('./lib/playability');
 const calMonitor = require('./lib/calibration-monitor');
 const corrDamp = require('./lib/correlation-damp');
 const walkForward = require('./lib/walk-forward');
+const scanGate = require('./lib/runtime/scan-gate');
 const { supportsApiSportsInjuries } = require('./lib/integrations/api-sports-capabilities');
 const dailyResults = require('./lib/runtime/daily-results');
 const liveBoard = require('./lib/runtime/live-board');
@@ -2339,7 +2340,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.12.7');
+  assert.strictEqual(appMeta.APP_VERSION, '10.12.8');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -5764,6 +5765,42 @@ test('computeLogLoss: perfect voorspeld → 0', () => {
 test('computeClvAvg: mean over records', () => {
   const recs = [{ clv_pct: 2.0 }, { clv_pct: -1.0 }, { clv_pct: 0.5 }];
   assert.strictEqual(walkForward.computeClvAvg(recs).avg, 0.5);
+});
+
+// ── SCAN-GATE POST-PROCESS (v10.12.8 Phase A.1b) ─────────────────────────────
+console.log('\n  Scan-gate post-process:');
+
+test('applyPostScanGate: lege picks → geen DB call', async () => {
+  let called = false;
+  const fakeSupabase = { from: () => { called = true; return {}; } };
+  const r = await scanGate.applyPostScanGate([], fakeSupabase, {});
+  assert.strictEqual(r.picks.length, 0);
+  assert.strictEqual(called, false, 'geen supabase query voor lege picks');
+});
+
+test('applyPostScanGate: picks zonder _fixtureMeta → ongewijzigd terug', async () => {
+  const picks = [{ match: 'A vs B', kelly: 0.05, units: '1.0U', expectedEur: 5, edge: 10, _fixtureMeta: null }];
+  const r = await scanGate.applyPostScanGate(picks, {}, {});
+  assert.strictEqual(r.picks.length, 1);
+  assert.strictEqual(r.stats.gated, 0, 'geen gate fired');
+});
+
+test('applyPostScanGate: pick met _fixtureMeta maar lege timelineMap → pick survivest', async () => {
+  // Builder returns an empty row set → buildScanTimelineMap returnt lege Map → gate no-op
+  const builder = {};
+  builder.select = () => builder;
+  builder.in = () => builder;
+  builder.order = () => builder;
+  builder.then = (resolve) => resolve({ data: [], error: null });
+  const fakeSupabase = { from: () => builder };
+  const picks = [{
+    match: 'A vs B', label: '🏠 A wint', kelly: 0.05, units: '1.0U',
+    expectedEur: 5, edge: 10, dataConfidence: 1,
+    _fixtureMeta: { fixtureId: 1, marketType: '1x2', selectionKey: 'home', line: null },
+  }];
+  const r = await scanGate.applyPostScanGate(picks, fakeSupabase, { marketTypes: ['1x2'] });
+  assert.strictEqual(r.picks.length, 1);
+  assert.strictEqual(r.stats.skipped, 0);
 });
 
 test('walkForwardBrier: integratie met mock dataset', () => {
