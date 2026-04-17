@@ -17,7 +17,7 @@ Object.assign(LANG.nl, {
   prof_start_bankroll: 'Start bankroll (€)',
   prof_unit_size: 'Unit grootte (€)',
   prof_scan_times: 'Dagelijkse scan-tijden',
-  prof_scan_times_desc: 'Selecteer uren waarop de scan automatisch draait en picks naar Telegram stuurt',
+  prof_scan_times_desc: 'Selecteer uren waarop de scan automatisch draait en picks naar je toestel stuurt (web-push + inbox)',
   prof_scan_enabled: 'Automatische scans ingeschakeld',
   prof_lang_region: 'Taal & regio',
   prof_language: 'Taal',
@@ -80,7 +80,7 @@ Object.assign(LANG.nl, {
   card_per_sport_sub: 'Win rate en P/L per sport, gebaseerd op settled bets.',
   card_model_updates: '🧠 Model updates',
   card_experimental: '🧪 Experimentele signalen',
-  card_experimental_sub: 'Worden verzameld bij elke scan maar staan op weight=0 (geen scoring impact). Auto-activeren naar 0.5 zodra n≥50 picks + avg CLV > 0%. Telegram + inbox melding bij activatie.',
+  card_experimental_sub: 'Worden verzameld bij elke scan maar staan op weight=0 (geen scoring impact). Auto-activeren naar 0.5 zodra n≥50 picks + avg CLV > 0%. Web-push + inbox melding bij activatie.',
   card_v2_health: '🧪 v2 Pipeline Health',
   card_service_status: '🟢 Service Status',
   card_api_budget: '📊 API Budget',
@@ -125,7 +125,7 @@ Object.assign(LANG.nl, {
     <div style="margin-bottom:10px"><strong style="color:var(--text)">6. Point-in-time logging (v2 pipeline)</strong><br>
     12 Supabase tabellen voor reproduceerbaarheid: fixtures, odds_snapshots (90-min polling + kickoff windows), feature_snapshots, market_consensus, model_runs, pick_candidates (incl. rejected_reason), signal_stats, training_examples. Walk-forward backtest endpoint actief.</div>
     <div><strong style="color:var(--text)">7. Experimentele signalen (logged-only, auto-activate)</strong><br>
-    Sommige signalen worden verzameld maar staan op weight=0 (geen scoring impact). Zodra n≥50 picks met dat signaal én avg CLV > 0%, wordt het automatisch geactiveerd op weight 0.5. Telegram/inbox melding bij activatie.<br>
+    Sommige signalen worden verzameld maar staan op weight=0 (geen scoring impact). Zodra n≥50 picks met dat signaal én avg CLV > 0%, wordt het automatisch geactiveerd op weight 0.5. Web-push/inbox melding bij activatie.<br>
     • <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">nba_rest_days_diff</code> — rest-days verschil home vs away (NBA, sinds v10.4.1)<br>
     • <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">nfl_injury_diff</code> — blessure-aantal verschil home vs away (NFL, sinds v10.4.1)<br>
     Status zichtbaar op Model-tab onder "Huidige Signal Gewichten".</div>
@@ -217,7 +217,7 @@ Object.assign(LANG.en, {
   prof_start_bankroll: 'Start bankroll (€)',
   prof_unit_size: 'Unit size (€)',
   prof_scan_times: 'Daily scan times',
-  prof_scan_times_desc: 'Select hours when the scan runs automatically and sends picks to Telegram',
+  prof_scan_times_desc: 'Select hours when the scan runs automatically and sends picks to your device (web-push + inbox)',
   prof_scan_enabled: 'Automatic scans enabled',
   prof_lang_region: 'Language & region',
   prof_language: 'Language',
@@ -280,7 +280,7 @@ Object.assign(LANG.en, {
   card_per_sport_sub: 'Win rate and P/L per sport, based on settled bets.',
   card_model_updates: '🧠 Model updates',
   card_experimental: '🧪 Experimental signals',
-  card_experimental_sub: 'Collected on every scan but kept at weight=0 (no scoring impact). Auto-activate to 0.5 once n≥50 picks + avg CLV > 0%. Telegram + inbox notification on activation.',
+  card_experimental_sub: 'Collected on every scan but kept at weight=0 (no scoring impact). Auto-activate to 0.5 once n≥50 picks + avg CLV > 0%. Web-push + inbox notification on activation.',
   card_v2_health: '🧪 v2 Pipeline Health',
   card_service_status: '🟢 Service status',
   card_api_budget: '📊 API budget',
@@ -325,7 +325,7 @@ Object.assign(LANG.en, {
     <div style="margin-bottom:10px"><strong style="color:var(--text)">6. Point-in-time logging (v2 pipeline)</strong><br>
     12 Supabase tables for reproducibility: fixtures, odds_snapshots (90-min polling + kickoff windows), feature_snapshots, market_consensus, model_runs, pick_candidates (incl. rejected_reason), signal_stats, training_examples. Walk-forward backtest endpoint active.</div>
     <div><strong style="color:var(--text)">7. Experimental signals (logged-only, auto-activate)</strong><br>
-    Some signals are collected but kept at weight=0 (no scoring impact). Once n≥50 picks with that signal plus avg CLV > 0%, it auto-activates at weight 0.5. Telegram/inbox notification on activation.<br>
+    Some signals are collected but kept at weight=0 (no scoring impact). Once n≥50 picks with that signal plus avg CLV > 0%, it auto-activates at weight 0.5. Web-push/inbox notification on activation.<br>
     • <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">nba_rest_days_diff</code> — rest-days difference home vs away (NBA, since v10.4.1)<br>
     • <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11.5px">nfl_injury_diff</code> — injury count difference home vs away (NFL, since v10.4.1)<br>
     Status visible on Model tab under "Current signal weights".</div>

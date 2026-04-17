@@ -1,6 +1,6 @@
 # EdgePickr Private Operating Model
 
-Laatste update: 2026-04-17 (v10.11.0)
+Laatste update: 2026-04-17 (v10.12.0)
 
 Dit document is de actieve productdoctrine voor EdgePickr. Niet het oude
 SaaS-plan, maar de private operator-workflow is leidend.
@@ -473,7 +473,7 @@ is geen actieve monitoring-laag voor wat wél nog mis kan gaan.
   ongeluk vergeten wordt, lekt dan alles? RLS hoort defense-in-depth te
   zijn.
 - **Secret rotation cadence** — JWT secret, Supabase service-role key,
-  api-football key, Telegram bot token, Resend key. Geen
+  api-football key, Resend key, VAPID private key. Geen
   rotation-discipline is op zichzelf een breach-multiplier.
 - **Audit-log van admin-actions** — welke endpoints loggen "who did what
   when"? Voor forensics en regret-recovery (per ongeluk een bet verkeerd

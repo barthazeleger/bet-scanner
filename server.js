@@ -492,9 +492,6 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname)));
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
-const TOKEN      = process.env.TELEGRAM_BOT_TOKEN || '';
-const CHAT       = process.env.TELEGRAM_CHAT_ID || '';
-const TG_URL     = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
 const UNIT_EUR   = 25;
 const START_BANKROLL = 250;
 // (calibration + signal weights stored in Supabase)
@@ -636,8 +633,8 @@ async function updateCalibration(bet, userId = null) {
     };
     c.modelLog = [entry, ...(c.modelLog || [])].slice(0, 50);
     c.modelLastUpdated = entry.date;
-    // Telegram notificatie
-    tg(`🧠 MODEL UPDATE\n📊 ${mKey} multiplier: ${oldMult.toFixed(2)} → ${mk.multiplier.toFixed(2)}\n📈 Win rate: ${(wr*100).toFixed(0)}% (${mk.n} bets)\n${dir}`).catch(() => {});
+    // Web-push notificatie
+    notify(`🧠 MODEL UPDATE\n📊 ${mKey} multiplier: ${oldMult.toFixed(2)} → ${mk.multiplier.toFixed(2)}\n📈 Win rate: ${(wr*100).toFixed(0)}% (${mk.n} bets)\n${dir}`).catch(() => {});
   }
 
   // ── ep-bucket tracking (voor dynamische epW kalibratie) ──────────────────
@@ -675,7 +672,7 @@ async function updateCalibration(bet, userId = null) {
         };
         c.modelLog = [entry, ...(c.modelLog || [])].slice(0, 50);
         c.modelLastUpdated = entry.date;
-        tg(`🧠 MODEL UPDATE\n🎯 EP bucket [${bk}+] gewicht: ${oldW.toFixed(2)} → ${eb.weight.toFixed(2)}\n📈 Hit rate: ${(actualWr*100).toFixed(0)}% vs verwacht ${(expectedWr*100).toFixed(0)}% (${eb.n} bets)`).catch(() => {});
+        notify(`🧠 MODEL UPDATE\n🎯 EP bucket [${bk}+] gewicht: ${oldW.toFixed(2)} → ${eb.weight.toFixed(2)}\n📈 Hit rate: ${(actualWr*100).toFixed(0)}% vs verwacht ${(expectedWr*100).toFixed(0)}% (${eb.n} bets)`).catch(() => {});
       }
     }
     c.epBuckets[bk] = eb;
@@ -714,7 +711,7 @@ async function updateCalibration(bet, userId = null) {
     } else if (c.totalSettled === 50 && roi < 0) {
       msg += `\n\n⚠️ Negatieve ROI · model review aanbevolen. Check signal attribution.`;
     }
-    tg(msg).catch(() => {});
+    notify(msg).catch(() => {});
   }
 
   saveCalib(c);
@@ -829,7 +826,7 @@ async function evaluateKellyAutoStepup() {
   await saveCalib(c);
   // Notifications
   const msg = `🚀 KELLY-FRACTION VERHOOGD\n${cur.toFixed(2)} → ${next.toFixed(2)}\n📈 Avg CLV: ${avgClv.toFixed(2)}% · ROI: ${roi.toFixed(2)}%\n📊 Over ${recentBets.length} bets · totaal ${c.totalSettled}`;
-  await tg(msg).catch(() => {});
+  await notify(msg).catch(() => {});
   try {
     await supabase.from('notifications').insert({
       type: 'kelly_stepup',
@@ -949,7 +946,7 @@ async function autoTuneSignals() {
         };
         c.modelLog = [entry, ...(c.modelLog || [])].slice(0, 50);
         c.modelLastUpdated = entry.date;
-        tg(`🧠 SIGNAL TUNING\n🔧 "${name}" gewicht: ${old.toFixed(2)} → ${newW.toFixed(2)}\n📈 Hit rate: ${(hitRate*100).toFixed(0)}% (${stats.n} bets)\n${dir}`).catch(() => {});
+        notify(`🧠 SIGNAL TUNING\n🔧 "${name}" gewicht: ${old.toFixed(2)} → ${newW.toFixed(2)}\n📈 Hit rate: ${(hitRate*100).toFixed(0)}% (${stats.n} bets)\n${dir}`).catch(() => {});
       }
     }
 
@@ -1025,7 +1022,7 @@ async function runPortfolioAnalysis() {
     lines.push(`💰 Unit verhoging mogelijk: Bankroll +50% (€${bankroll.toFixed(0)}) → overweeg €${currentUnit} → €${Math.round(currentUnit*1.5)}`);
   }
 
-  await tg(lines.join('\n')).catch(() => {});
+  await notify(lines.join('\n')).catch(() => {});
 
   // Log inzichten naar inbox
   const inboxEntries = [];
@@ -1296,28 +1293,24 @@ const get    = (url) => fetch(url, { headers: H }).then(r => r.json()).catch(() 
 const toD    = f => { if (!f || !f.includes('/')) return null; const [n,d] = f.split('/').map(Number); return +(1 + n/d).toFixed(2); };
 const clamp  = (v, lo, hi) => Math.round(Math.min(hi, Math.max(lo, v)));
 const sleep  = ms => new Promise(r => setTimeout(r, ms));
-const tgRaw  = async (text) => fetch(TG_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ chat_id: CHAT, text }) }).catch(() => {});
 
-// Stuur naar Telegram EN sla op in Supabase notifications tabel
-const tg = async (text, type = 'info', userId = null) => {
-  tgRaw(text).catch(() => {});
+// Operator alert channel (v10.12.0: Telegram removed — Web Push + inbox only).
+// Schrijft naar Supabase notifications (PWA-inbox) én stuurt een web-push.
+// userId=null → broadcast (admin-scoped in practice: single operator).
+const notify = async (text, type = 'info', userId = null) => {
   const lines = text.split('\n');
   const title = lines[0].replace(/[^\w\s€%·:→←↑↓+\-.,!?()]/g, '').trim().slice(0, 100);
   const body = lines.slice(1).join('\n').slice(0, 200);
   supabase.from('notifications').insert({
     type, title, body: text, read: false, user_id: userId
   }).then(() => {}).catch(() => {});
-  // Ook push notificatie sturen
-  sendPushToAll({
-    title: title || 'EdgePickr',
-    body: body || 'Nieuwe update',
-    tag: type,
-    url: '/',
-  }).catch(() => {});
+  const pushPayload = { title: title || 'EdgePickr', body: body || 'Nieuwe update', tag: type, url: '/' };
+  const pushPromise = userId ? sendPushToUser(userId, pushPayload) : sendPushToAll(pushPayload);
+  pushPromise.catch(() => {});
 };
 
 // Log een gefaalde pre-match/CLV check naar de notifications tabel,
-// zodat de user het in de 🔔 dropdown ziet (niet alleen op Telegram).
+// zodat de user het in de 🔔 dropdown ziet.
 async function logCheckFailure(type, wedstrijd, reason) {
   try {
     const label = type === 'clv' ? 'CLV check' : 'Pre-match check';
@@ -1380,7 +1373,7 @@ function getDrawdownMultiplier() {
     // Als we meer dan 20% van startbankroll verloren hebben: halveer stakes
     if (recentProfit < -(START_BANKROLL * 0.20)) {
       console.log('⚠️ Drawdown protection: stakes gehalveerd (>20% loss)');
-      tg(`🛡️ DRAWDOWN PROTECTION\nStakes gehalveerd · bankroll >20% onder start.\nHuidige P/L: €${recentProfit.toFixed(2)}`).catch(() => {});
+      notify(`🛡️ DRAWDOWN PROTECTION\nStakes gehalveerd · bankroll >20% onder start.\nHuidige P/L: €${recentProfit.toFixed(2)}`).catch(() => {});
       return 0.5;
     }
     // Als win rate onder 30% na 10+ bets: verlaag stakes met 30%
@@ -5923,7 +5916,7 @@ async function runPrematch(emit) {
     const noMsg = allCandidates.length > 0
       ? `🌅 Dagelijkse Pre-Match Scan\n\n🚫 Geen overtuigde picks.\n${allCandidates.length} kandidaat(en) gevonden maar te zwak (min. confidence niet gehaald).\nGeanalyseerd: ${totalEvents} wedstrijden`
       : `🌅 Dagelijkse Pre-Match Scan\n\nGeen kwalificerende picks gevonden.\nGeanalyseerd: ${totalEvents} wedstrijden | Min. odds: 1.60`;
-    // Telegram wordt gestuurd NA multi-sport merge
+    // Web-push wordt gestuurd NA multi-sport merge
     emit({ log: `📭 Geen voetbal picks (${allCandidates.length} kandidaten te zwak).`, picks: [] });
     return [];
   }
@@ -5943,7 +5936,7 @@ async function runPrematch(emit) {
   emit({ log: telLines.join('\n') });
 
   lastPrematchPicks = finalPicks;
-  // Telegram wordt gestuurd NA multi-sport merge in POST /api/prematch
+  // Web-push wordt gestuurd NA multi-sport merge in POST /api/prematch
   emit({ log: `✅ Voetbal scan klaar.`, picks: finalPicks });
 
   // ── Upgrade / unit-size check na scan ────────────────────────────────────
@@ -5957,8 +5950,8 @@ async function runPrematch(emit) {
     const bkrGrowth = bkr - money.startBankroll;
     const roi2 = stats.roi ?? 0;
     // v10.9.5: upgrade-aanbevelingen ook naar inbox (Supabase notifications),
-    // niet alleen Telegram. Telegram kan user missen of niet checken; inbox is
-    // het permanente logboek van beslissingen. Plus: sommige aanbevelingen
+    // niet alleen web-push. Push kan gemist worden; inbox is het permanente
+    // logboek van beslissingen. Plus: sommige aanbevelingen
     // (zoals All-Sports upgrade) zijn al uitgevoerd — zonder inbox-geschiedenis
     // weet je niet of je een oude of nieuwe prompt krijgt.
     // v10.9.6: dedup-guard. User meldde dat API-upgrade-notif elke scan kwam,
@@ -5978,7 +5971,7 @@ async function runPrematch(emit) {
     if (bkrGrowth >= money.startBankroll && canFire('upgrade_unit')) {
       const title = `💰 Unit-verhoging aanbevolen`;
       const body = `Bankroll: €${bkr.toFixed(0)} (+100% sinds start). Overweeg unit van €${money.unitEur} → €${money.unitEur * 2}. Accepteer via Instellingen. (Wordt pas over 7 dagen opnieuw getoond; dismiss permanent via admin.)`;
-      await tg(`💰 UNIT VERHOGING AANBEVOLEN\nBankroll: €${bkr.toFixed(0)} (+100%)\nOverweeg unit van €${money.unitEur} → €${money.unitEur*2}\n\nAccepteer via de instellingen.`).catch(() => {});
+      await notify(`💰 UNIT VERHOGING AANBEVOLEN\nBankroll: €${bkr.toFixed(0)} (+100%)\nOverweeg unit van €${money.unitEur} → €${money.unitEur*2}\n\nAccepteer via de instellingen.`).catch(() => {});
       await supabase.from('notifications').insert({
         type: 'upgrade_unit', title, body, read: false, user_id: null,
       }).then(() => {}, () => {});
@@ -5987,7 +5980,7 @@ async function runPrematch(emit) {
     } else if (cs.totalSettled >= 30 && roi2 > 0.10 && canFire('upgrade_api')) {
       const title = `🚀 API-upgrade overweging`;
       const body = `ROI ${(roi2 * 100).toFixed(1)}% over ${cs.totalSettled} bets · overweeg api-sports All Sports upgrade ($99/mnd). (Negeer als al gedaan. Wordt pas over 7d opnieuw getoond; dismiss permanent via admin.)`;
-      await tg(`🚀 ROI ${(roi2*100).toFixed(1)}% over ${cs.totalSettled} bets.\nOverweeg All Sports upgrade ($99/mnd) voor meer markten.`).catch(() => {});
+      await notify(`🚀 ROI ${(roi2*100).toFixed(1)}% over ${cs.totalSettled} bets.\nOverweeg All Sports upgrade ($99/mnd) voor meer markten.`).catch(() => {});
       await supabase.from('notifications').insert({
         type: 'upgrade_api', title, body, read: false, user_id: null,
       }).then(() => {}, () => {});
@@ -5995,7 +5988,7 @@ async function runPrematch(emit) {
       await saveCalib(cs).catch(() => {});
     }
   } catch (e) {
-    console.warn('Unit uplevel / ROI-milestone Telegram notification failed:', e.message);
+    console.warn('Unit uplevel / ROI-milestone notification failed:', e.message);
   }
 
 
@@ -6012,7 +6005,7 @@ async function runPrematch(emit) {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LIVE PICKS HELPER · haalt live wedstrijden op + analyseert met xG + live odds
-// Stille functie: geen eigen Telegram. Geeft picks terug getagd als scanType:'live'.
+// Stille functie: geen eigen push. Geeft picks terug getagd als scanType:'live'.
 // Wordt aangeroepen vanuit runPrematch (gecombineerde scan) én vanuit runLive (dagelijks).
 // ═══════════════════════════════════════════════════════════════════════════════
 async function getLivePicks(emit, calibEpBuckets = {}) {
@@ -6153,7 +6146,7 @@ async function runLive(emit) {
     if ((msgs[cur]||'').length + line.length > 3900) { cur++; msgs.push(''); }
     msgs[cur] = (msgs[cur]||'') + line;
   }
-  for (const msg of msgs) if (msg.trim()) await tg(msg).catch(()=>{});
+  for (const msg of msgs) if (msg.trim()) await notify(msg).catch(()=>{});
 
   lastLivePicks = livePicks;
   emit({ log: `✅ ${livePicks.length} live pick(s) gestuurd.`, picks: livePicks });
@@ -6398,7 +6391,7 @@ app.post('/api/auth/register', async (req, res) => {
       role: 'user', status: 'pending',
       settings: defaultSettings(), createdAt: new Date().toISOString()
     });
-    tg(`🆕 Nieuwe registratie: ${email}\nGoedkeuren via Admin-panel`).catch(() => {});
+    notify(`🆕 Nieuwe registratie: ${email}\nGoedkeuren via Admin-panel`).catch(() => {});
     res.json({ message: 'Registratie ontvangen. Je krijgt een email zodra je account is goedgekeurd.' });
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
@@ -7397,7 +7390,7 @@ app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
     if (req.body.role)   user.role   = req.body.role;
     await saveUser(user);
     if (req.body.status === 'approved') {
-      tg(`✅ Account goedgekeurd: ${user.email}`).catch(() => {});
+      notify(`✅ Account goedgekeurd: ${user.email}`).catch(() => {});
       sendEmail(user.email, 'Je EdgePickr account is goedgekeurd!',
         '<h2>Hey!</h2><p>Je account is goedgekeurd. Je kunt nu inloggen op <a href="https://edgepickr.com">https://edgepickr.com</a></p>'
       ).catch(() => {});
@@ -7444,7 +7437,7 @@ app.delete('/api/push/subscribe', async (req, res) => {
 // ── v10.8.13: shared multi-sport scan pipeline ──────────────────────────────
 // Extractie uit de /api/prematch route zodat zowel de handmatige trigger
 // (SSE streaming) als de cron-scheduler exact dezelfde pipeline draaien,
-// INCLUSIEF de multi-sport scans en de tg() notificatie. Voorheen deed de
+// INCLUSIEF de multi-sport scans en de notify() notificatie. Voorheen deed de
 // cron alleen runPrematch() (football, geen notificatie) — verklaarde de
 // missende 14:00 push.
 async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, triggerLabel = 'manual' } = {}) {
@@ -7572,20 +7565,20 @@ async function runFullScan({ emit = () => {}, prefs = null, isAdmin = true, trig
     // Pick met damping = lagere stake + lagere score, user ziet het direct
     // zonder dat inbox-flag tegenstrijdig voelt met de 1.5U badge.
 
-    // Telegram + push notificatie
+    // Web-push + inbox notificatie
     if (topPicks.length > 0) {
       const sportEmoji = { football: '⚽', basketball: '🏀', hockey: '🏒', baseball: '⚾', 'american-football': '🏈', handball: '🤾' };
       const todayLabel = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: 'long', year: 'numeric' });
-      let tgMsg = `🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n📊 ${allPicks.length} kandidaten uit 6 sporten\n✅ TOP ${topPicks.length} PICKS\n\n`;
+      let msg = `🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n📊 ${allPicks.length} kandidaten uit 6 sporten\n✅ TOP ${topPicks.length} PICKS\n\n`;
       topPicks.forEach((p, i) => {
         const icon = sportEmoji[p.sport] || '🏆';
         const star = i === 0 ? '⭐' : i === 1 ? '🔵' : '•';
-        tgMsg += `${star} ${icon} ${p.match}\n${p.league}\n📌 ${p.label}\n💰 Odds: ${p.odd} | ${p.units}\n📈 Kans: ${p.prob}%\n\n`;
+        msg += `${star} ${icon} ${p.match}\n${p.league}\n📌 ${p.label}\n💰 Odds: ${p.odd} | ${p.units}\n📈 Kans: ${p.prob}%\n\n`;
       });
-      tg(tgMsg).catch(() => {});
+      notify(msg).catch(() => {});
     } else {
       const todayLabel = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: 'long', year: 'numeric' });
-      tg(`🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n\n🚫 Geen picks met voldoende edge gevonden.`).catch(() => {});
+      notify(`🎯 EDGEPICKR DAILY SCAN\n📅 ${todayLabel}\n\n🚫 Geen picks met voldoende edge gevonden.`).catch(() => {});
     }
 
     const toSafe = (p) => {
@@ -7717,7 +7710,7 @@ app.get('/api/bets/correlations', async (req, res) => {
 // Bet toevoegen
 // ── PRE-KICKOFF CHECK · 30 min voor aftrap ───────────────────────────────────
 // Haalt huidige odds op voor het specifieke event en vergelijkt met gelogde odds.
-// Stuurt Telegram ping als: odds gedrift >8%, of als aftrap veranderd is.
+// Stuurt web-push alert als: odds gedrift >8%, of als aftrap veranderd is.
 // ── SPORT-AWARE API HELPERS ──────────────────────────────────────────────────
 // normalizeSport() komt uit lib/model-math.js
 
@@ -7946,7 +7939,7 @@ async function schedulePreKickoffCheck(bet) {
       }
 
       lines.push(`\n🟢 Succes! (automatische check 30 min voor aftrap)`);
-      await tg(lines.join('\n'));
+      await notify(lines.join('\n'));
     } catch (err) {
       console.error('Pre-kickoff check error:', err.message);
     }
@@ -8017,7 +8010,7 @@ async function scheduleCLVCheck(bet) {
       // Schrijf CLV naar Supabase
       await supabase.from('bets').update({ clv_odds: closingOdds, clv_pct: clvPct }).eq('bet_id', bet.id);
 
-      await tg(`📊 CLV: ${matchName}\n🏦 ${usedBookie} | Gelogd: ${loggedOdds} → Slotlijn: ${closingOdds} | CLV: ${clvPct > 0 ? '+' : ''}${clvPct}% ${clvIcon}`).catch(() => {});
+      await notify(`📊 CLV: ${matchName}\n🏦 ${usedBookie} | Gelogd: ${loggedOdds} → Slotlijn: ${closingOdds} | CLV: ${clvPct > 0 ? '+' : ''}${clvPct}% ${clvIcon}`).catch(() => {});
     } catch (err) {
       console.error('CLV check error:', err.message);
     }
@@ -9024,8 +9017,7 @@ app.get('/api/status', (req, res) => {
       },
       espn: { status: 'active', plan: 'Free', unlimited: true, note: 'Live scores auto-refresh' },
       supabase: { status: 'active', plan: 'Free', unlimited: true, note: 'PostgreSQL · 500MB · bets/users/calibratie/snapshots' },
-      telegram: { status: (TOKEN || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || process.env.TG_TOKEN) ? 'active' : 'no token', plan: 'Free', unlimited: true, note: 'Picks, alerts, model updates' },
-      webPush: { status: (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) ? 'active' : 'no key', plan: 'Free', unlimited: true, note: 'PWA browser push (VAPID)' },
+      webPush: { status: (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) ? 'active' : 'no key', plan: 'Free', unlimited: true, note: 'Operator alerts · picks · model updates (VAPID)' },
       render: { status: 'active', plan: 'Free', unlimited: true, note: 'Hosting + keep-alive elke 14 min' },
       mlbStats: { status: 'active', plan: 'Free', unlimited: true, note: 'MLB pitcher stats (api.mlb.com/api/v1)' },
       nhlPublic: { status: 'active', plan: 'Free', unlimited: true, note: 'NHL shots-differential + lineups' },
@@ -10346,7 +10338,7 @@ function scheduleKickoffWindowPolling() {
 }
 
 // ── CLV HEALTH ALERTS + DRAWDOWN WATCHER (v10.1.0) ──────────────────────────
-// Telegram-pings bij milestones zodat we sneller weten of model gezond is.
+// Web-push alerts bij milestones zodat we sneller weten of model gezond is.
 // Geen automatisch ingrijpen — alleen observeren (per reviewer-advies).
 let _lastClvAlertN = 0;     // bet count bij laatste CLV alert
 let _lastDdAlertAt = 0;     // timestamp laatste drawdown alert
@@ -10445,7 +10437,7 @@ function scheduleHealthAlerts() {
           .sort()
           .join('\n');
         const marketSummary = marketLines || '(nog geen markt met ≥10 samples)';
-        await tg(`📊 CLV Milestone\n${all.length} settled bets met CLV data\nGemiddelde CLV: ${avgClv > 0 ? '+' : ''}${avgClv.toFixed(2)}%\n${positive}/${all.length} positief (${posPct}%)\n${verdict}\n\nPer markt (≥10 bets):\n${marketSummary}`).catch(() => {});
+        await notify(`📊 CLV Milestone\n${all.length} settled bets met CLV data\nGemiddelde CLV: ${avgClv > 0 ? '+' : ''}${avgClv.toFixed(2)}%\n${positive}/${all.length} positief (${posPct}%)\n${verdict}\n\nPer markt (≥10 bets):\n${marketSummary}`).catch(() => {});
         // v10.9.5: ook in inbox als permanent logboek.
         await supabase.from('notifications').insert({
           type: 'clv_milestone',
@@ -10516,7 +10508,7 @@ function scheduleHealthAlerts() {
           const recent7dPnl = recentSettled.reduce((s, b) => s + parseFloat(b.wl || 0), 0);
           const recent7dPct = stats.startBankroll > 0 ? recent7dPnl / stats.startBankroll : 0;
           if (recent7dPct < DD_ALERT_THRESHOLD) {
-            await tg(`⚠️ DRAWDOWN ALERT (soft)\nLaatste 7 dagen: ${(recent7dPct * 100).toFixed(1)}% (€${recent7dPnl.toFixed(2)})\nBankroll: €${stats.bankroll}\n\nGeen automatische pause. Overweeg unit-grootte verlagen of stop manueel.`).catch(() => {});
+            await notify(`⚠️ DRAWDOWN ALERT (soft)\nLaatste 7 dagen: ${(recent7dPct * 100).toFixed(1)}% (€${recent7dPnl.toFixed(2)})\nBankroll: €${stats.bankroll}\n\nGeen automatische pause. Overweeg unit-grootte verlagen of stop manueel.`).catch(() => {});
             // v10.9.5: ook in inbox.
             await supabase.from('notifications').insert({
               type: 'drawdown_alert',
@@ -10881,7 +10873,7 @@ function scheduleOddsMonitor() {
             const alertBody = direction === 'sharp'
               ? `${bet.wedstrijd} · ${bet.markt}\nGelogd: ${loggedOdds} → nu: ${currentOdds} (${driftPct}%)\nScherp geld bevestigt jouw kant.`
               : `${bet.wedstrijd} · ${bet.markt}\nGelogd: ${loggedOdds} → nu: ${currentOdds} (+${driftPct}%)\nMarkt draait van je af — overweeg cashout.`;
-            await tg((direction === 'sharp'
+            await notify((direction === 'sharp'
               ? `📉 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (${driftPct}%) | Scherp geld bevestigt jouw kant`
               : `📈 ODDS ALERT: ${bet.wedstrijd} ${bet.markt} | ${loggedOdds} → ${currentOdds} (+${driftPct}%) | Markt draait · overweeg cashout`
             )).catch(() => {});
@@ -11011,20 +11003,20 @@ async function checkUnitSizeChange() {
       .eq('type', 'unit_change').order('created_at', { ascending: false }).limit(1).single();
     const lastUnit = lastSetting?.body?.match(/(\d+)/)?.[1];
     if (lastUnit && parseInt(lastUnit) !== UNIT_EUR) {
-      await tg(`💰 Unit size gewijzigd: €${lastUnit} → €${UNIT_EUR} op ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
+      await notify(`💰 Unit size gewijzigd: €${lastUnit} → €${UNIT_EUR} op ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
       console.log(`💰 Unit size wijziging gelogd: €${lastUnit} → €${UNIT_EUR}`);
     } else if (!lastUnit) {
       // Geen eerdere setting: sla huidige waarde op als baseline
-      await tg(`💰 Unit baseline: €${UNIT_EUR} vanaf ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
+      await notify(`💰 Unit baseline: €${UNIT_EUR} vanaf ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
       console.log(`💰 Unit baseline gelogd: €${UNIT_EUR}`);
     }
   } catch (e) {
     // Bij 'no rows' van single() komt hier ook een error – dan baseline schrijven
     try {
-      await tg(`💰 Unit baseline: €${UNIT_EUR} vanaf ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
+      await notify(`💰 Unit baseline: €${UNIT_EUR} vanaf ${new Date().toLocaleDateString('nl-NL')}`, 'unit_change');
       console.log(`💰 Unit baseline gelogd: €${UNIT_EUR}`);
-    } catch (tgErr) {
-      console.warn('Unit baseline Telegram send failed:', tgErr.message);
+    } catch (notifyErr) {
+      console.warn('Unit baseline notify failed:', notifyErr.message);
     }
   }
 }
@@ -11175,10 +11167,10 @@ function scheduleScanAtHour(timeInput) {
     console.log(`📡 Scan om ${label} gestart...`);
     // v10.8.13: cron-scan draait nu de VOLLE pipeline (multi-sport +
     // notificatie) ipv alleen football via runPrematch. Verklaart waarom
-    // je voorheen geen push/Telegram op scheduled scans kreeg.
+    // je voorheen geen push op scheduled scans kreeg.
     // v10.8.15: altijd een start-heartbeat naar notifications tabel, zodat
     // user achteraf kan zien of de cron-tik überhaupt vuurde (onderscheidt
-    // "scheduler stilstand" vs "scan draait maar tg/push faalt").
+    // "scheduler stilstand" vs "scan draait maar push faalt").
     try {
       await supabase.from('notifications').insert({
         type: 'cron_tick',
@@ -11213,7 +11205,7 @@ function scheduleScanAtHour(timeInput) {
       }
     } catch (e) {
       console.error(`Scan om ${label} fout:`, e.message);
-      await tg(`⚠️ Scan om ${label} mislukt: ${e.message}`).catch(() => {});
+      await notify(`⚠️ Scan om ${label} mislukt: ${e.message}`).catch(() => {});
     }
     scheduleScanAtHour(timeInput);
   }, delay);
@@ -11343,7 +11335,7 @@ function scheduleDailyResultsCheck() {
       if (!results.length && !recentExtra.length) lines.push('Geen afgeronde wedstrijden in laatste 24h.');
 
       lines.push(`\n💰 Bankroll: €${stats.bankroll} | ROI: ${(stats.roi*100).toFixed(1)}%`);
-      await tg(lines.join('\n')).catch(() => {});
+      await notify(lines.join('\n')).catch(() => {});
 
       // Push notificatie met dagelijks overzicht (volledige 24h)
       const wCount = recent.filter(r => r.uitkomst === 'W').length;
@@ -11359,7 +11351,7 @@ function scheduleDailyResultsCheck() {
       }).catch(() => {});
     } catch (e) {
       console.error('Daily check fout:', e);
-      await tg(`⚠️ Dagelijkse check mislukt: ${e.message}`).catch(() => {});
+      await notify(`⚠️ Dagelijkse check mislukt: ${e.message}`).catch(() => {});
     }
 
     const postResultsDecision = shouldRunPostResultsModelJobs(updated);

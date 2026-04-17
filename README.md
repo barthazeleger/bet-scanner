@@ -1,4 +1,4 @@
-# EdgePickr v10.11.0
+# EdgePickr v10.12.0
 
 **Private operator betting terminal** voor een single bankroll, een canonieke
 scan-state en een CLV-first workflow. Markt = baseline truth, model = residual
@@ -53,8 +53,7 @@ Node.js 20 + Express          Backend
 Supabase (PostgreSQL)          Bets, users, scan history, notifications, calibratie
 api-sports.io All Sports       6 sporten · 7500 calls/dag/sport
 ESPN Scoreboard API            Live scores (gratis, onbeperkt)
-Telegram Bot API               Picks, pre-kickoff, CLV, milestones
-Web Push (VAPID)               PWA push notificaties
+Web Push (VAPID)               Operator alerts · picks · CLV · milestones (PWA + inbox)
 Render.com                     Hosting + keep-alive (14 min)
 ```
 
@@ -83,12 +82,13 @@ JWT_SECRET=<random 64 hex>
 ADMIN_EMAIL=...
 ADMIN_PASSWORD=...
 
-# Notificaties (optioneel)
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
+# Notificaties (Web Push / PWA)
 VAPID_PUBLIC_KEY=...
 VAPID_PRIVATE_KEY=...
 VAPID_CONTACT=mailto:admin@example.com
+
+# Email (2FA login codes)
+RESEND_KEY=...
 ```
 
 ### Deploy op Render

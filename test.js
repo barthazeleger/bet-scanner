@@ -1046,7 +1046,7 @@ test('settings whitelist includes v2 toggles maar geen dangerous keys', () => {
   // Whitelist moet behouden worden bij elke v2 toevoeging
   const ALLOWED_SETTINGS = new Set([
     'startBankroll','unitEur','language','timezone','scanTimes','scanEnabled',
-    'twoFactorEnabled','telegramChatId','telegramEnabled','preferredBookies',
+    'twoFactorEnabled','preferredBookies',
   ]);
   assert.ok(ALLOWED_SETTINGS.has('preferredBookies'));
   // Dangerous prototype-keys mogen NIET in whitelist
@@ -1074,7 +1074,7 @@ test('PUBLIC_PATHS only contains safe endpoints', () => {
 });
 
 test('settings whitelist blocks dangerous keys', () => {
-  const ALLOWED_SETTINGS = new Set(['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled','twoFactorEnabled','telegramChatId','telegramEnabled']);
+  const ALLOWED_SETTINGS = new Set(['startBankroll','unitEur','language','timezone','scanTimes','scanEnabled','twoFactorEnabled']);
   const dangerousKeys = ['__proto__', 'constructor', 'prototype', 'toString', 'valueOf',
     '__defineGetter__', '__defineSetter__', 'hasOwnProperty'];
   for (const key of dangerousKeys) {
@@ -2305,7 +2305,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.11.0');
+  assert.strictEqual(appMeta.APP_VERSION, '10.12.0');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);

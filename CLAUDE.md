@@ -9,7 +9,7 @@ EdgePickr is een private betting terminal voor één operator (Bart). Data-drive
 - **Frontend**: Monolitisch `index.html` met inline JS
 - **APIs**: api-football.com Pro, ESPN live scores, MLB StatsAPI, NHL API, Open-Meteo weer
 - **Hosting**: Render.com (free tier)
-- **Notificaties**: Telegram Bot + Web Push (per-user scoped)
+- **Notificaties**: Web Push (VAPID, per-user scoped) + Supabase `notifications` inbox — sinds v10.12.0. Telegram verwijderd.
 
 ## Repo-structuur
 Zie `docs/REPO_STRUCTURE.md` voor de volledige indeling. Kernpunten:
@@ -81,7 +81,7 @@ Zie `docs/REPO_STRUCTURE.md` voor de volledige indeling. Kernpunten:
 - `.env` moet lokaal bestaan met SUPABASE_URL + SUPABASE_KEY + JWT_SECRET.
 
 ## Huidige versie
-v10.11.0 — security-review afgerond, 6-punts EV-roadmap compleet, 469 tests.
+v10.12.0 — Telegram verwijderd, web-push + inbox enige operator-alert-kanaal.
 
 ## Open items voor volgende sprint
 - Punt 16b: data-layer collapse (calcStats/readBets/writeBet → lib/db.js, vereist supabase-client unificatie)

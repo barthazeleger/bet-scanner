@@ -2,6 +2,35 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.0] - 2026-04-17
+
+**Telegram volledig verwijderd** — operator-alerts lopen nu alleen via Web Push (VAPID) + Supabase `notifications` inbox. Bart gebruikt uitsluitend de PWA; Telegram was dead weight én een extra secret-rotation oppervlak.
+
+### Removed
+- **[claude] `lib/telegram.js`** (orphaned module — nergens meer geïmporteerd).
+- **[claude] `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` env reads** uit `lib/config.js` + `server.js`.
+- **[claude] `TG_URL`, `TOKEN`, `CHAT` constanten** en `tgRaw(...)` raw-fetch helper.
+- **[claude] `telegramChatId` / `telegramEnabled` user settings** uit `defaultSettings()` + ALLOWED_SETTINGS whitelist (legacy, server-side nergens gebruikt).
+- **[claude] `telegram:` entry uit `/api/status` services-response** + bijhorende UI-icoon mapping.
+
+### Changed
+- **[claude] `tg(text, type, userId)` → `notify(text, type, userId)`** in server.js. Alle 27 call sites mee-gerenamed. Gedrag:
+  - `userId` null → `sendPushToAll()` (operator broadcast)
+  - `userId` gezet → `sendPushToUser(userId, ...)` (user-scoped)
+  - Altijd: Supabase `notifications` insert voor inbox-persist.
+- **[claude] README / CLAUDE.md / PRIVATE_OPERATING_MODEL.md** stack-overzichten tonen nu Web Push als enige notificatie-kanaal; secret-rotation lijst mist Telegram, heeft VAPID private key.
+- **[claude] Lang strings (NL + EN)** in `js/lang.js` + `index.html` — "Telegram" → "Web Push" / "web-push + inbox".
+- **[claude] Historische CHANGELOG / release-note entries in index.html blijven ongewijzigd** (v10.4.0 / v10.1.3 notes verwijzen naar Telegram omdat die release dát echt deed — revisionisme is oneerlijk).
+
+### Rationale
+Single channel = lagere cognitive load (doctrine §5 Fase 5 "minder handwerk"). Telegram bot-token was ook een secret zonder rotation-cadence en een web-hook surface voor zero-value features. Web Push + PWA inbox dekt alle operator-alerts en is al per-user scoped (v10.10.22 fix).
+
+### Migration note
+`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` kunnen uit Render env dashboard verwijderd worden. Bart handelt dit af na deploy.
+
+### Tests
+- `npm test` groen (469 tests).
+
 ## [10.11.0] - 2026-04-17
 
 Milestone release. Security-review afgerond, 6-punts EV-roadmap compleet, operator-hardening live.
