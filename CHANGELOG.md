@@ -2,6 +2,21 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.21] - 2026-04-17
+
+CLV-meting tegen Pinnacle closing line als ground truth (Codex' eerste post-roadmap voorkeur).
+
+### Added
+- **[claude] Sharp CLV: `bets.sharp_clv_pct` + `bets.sharp_clv_odds`**. Aparte CLV-meting naast bestaande execution-CLV (`clv_pct`). Industry-standard: positieve sharp-CLV = betere odds dan Pinnacle's sluitkoers = bewijs dat het model de markt verslaat. Execution-CLV blijft ongewijzigd.
+- **[claude] `marketKeyFromBetMarkt(markt)` helper** in `lib/clv-match.js`. Mapt bet-markt-strings (`🏠 Ajax wint`, `Over 2.5`, `BTTS Ja`, etc.) naar canonical `(market_type, selection_key)` voor odds_snapshots lookup. Dekt ML, totals, BTTS, NRFI, F5 ML/totals, 3-way. Exotische markten → null (graceful skip).
+- **[claude] CLV-recompute schrijft nu sharp-CLV mee** uit odds_snapshots Pinnacle closing. Query: laatste Pinnacle-snapshot vóór kickoff per fixture/markt/selectie. Niet-fataal bij ontbreken (Pinnacle niet in snapshot → sharp-CLV blijft null, execution-CLV ongestoord).
+- **[claude] readBets output bevat `sharpClvOdds` + `sharpClvPct`** in zowel `lib/db.js` als `server.js` readBets-mapping.
+- **[claude] Migratie `docs/migrations-archive/v10.10.21_sharp_clv.sql`**: additive kolommen op bets tabel.
+- **[claude] +8 regressietests** voor `marketKeyFromBetMarkt`: ML/away/BTTS/Over/NRFI/F5/3-way/null-fallback.
+
+### Tests
+- `npm test` groen: `462 passed, 0 failed`.
+
 ## [10.10.20] - 2026-04-17
 
 Sharp reference integratie v1 (roadmap punt 6). Pinnacle/Betfair/Circa als apart gescheiden "true price" referentie in de line-timeline.

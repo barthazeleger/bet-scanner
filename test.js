@@ -2302,7 +2302,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.10.20');
+  assert.strictEqual(appMeta.APP_VERSION, '10.10.21');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -5518,6 +5518,51 @@ test('shrinkFormScore: formAdj-verschil wordt kleiner na shrinkage', () => {
 
 // ── SHARP REFERENCE (v10.10.20, roadmap punt 6) ─────────────────────────────
 console.log('\n  Sharp reference (Pinnacle/Betfair):');
+
+// ── CLV SHARP REFERENCE (v10.10.21) ──────────────────────────────────────────
+console.log('\n  CLV sharp reference (Pinnacle closing):');
+
+const { marketKeyFromBetMarkt } = require('./lib/clv-match');
+
+test('marketKeyFromBetMarkt: ML wint → moneyline/home', () => {
+  const r = marketKeyFromBetMarkt('🏠 Ajax wint');
+  assert.deepStrictEqual(r, { market_type: 'moneyline', selection_key: 'home' });
+});
+
+test('marketKeyFromBetMarkt: away wint → moneyline/away', () => {
+  const r = marketKeyFromBetMarkt('✈️ PSV wint');
+  assert.deepStrictEqual(r, { market_type: 'moneyline', selection_key: 'away' });
+});
+
+test('marketKeyFromBetMarkt: BTTS Ja → btts/yes', () => {
+  const r = marketKeyFromBetMarkt('⚽ BTTS Ja');
+  assert.deepStrictEqual(r, { market_type: 'btts', selection_key: 'yes' });
+});
+
+test('marketKeyFromBetMarkt: Over 2.5 → total/over', () => {
+  const r = marketKeyFromBetMarkt('Over 2.5');
+  assert.deepStrictEqual(r, { market_type: 'total', selection_key: 'over' });
+});
+
+test('marketKeyFromBetMarkt: NRFI → nrfi/no', () => {
+  const r = marketKeyFromBetMarkt('⚾ NRFI (No Run 1st Inning)');
+  assert.deepStrictEqual(r, { market_type: 'nrfi', selection_key: 'no' });
+});
+
+test('marketKeyFromBetMarkt: F5 team → f5_ml/home', () => {
+  const r = marketKeyFromBetMarkt('⚾ F5 Detroit Tigers');
+  assert.deepStrictEqual(r, { market_type: 'f5_ml', selection_key: 'home' });
+});
+
+test('marketKeyFromBetMarkt: 60-min draw → threeway/draw', () => {
+  const r = marketKeyFromBetMarkt('🕐 Gelijkspel (60-min)');
+  assert.deepStrictEqual(r, { market_type: 'threeway', selection_key: 'draw' });
+});
+
+test('marketKeyFromBetMarkt: onbekende markt → null (graceful)', () => {
+  assert.strictEqual(marketKeyFromBetMarkt('Exotic Player Prop'), null);
+  assert.strictEqual(marketKeyFromBetMarkt(null), null);
+});
 
 test('lineTimeline.isSharpBookie: detecteert Pinnacle/Betfair als sharp', () => {
   assert.strictEqual(lineTimeline.isSharpBookie('Pinnacle'), true);

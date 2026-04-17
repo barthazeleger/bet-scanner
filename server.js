@@ -6205,7 +6205,7 @@ async function readBets(userId = null, money = null) {
       inzet: r.inzet != null ? r.inzet : +(r.units * ueForInzet).toFixed(2),
       tip: r.tip || 'Bet365', uitkomst: r.uitkomst || 'Open', wl: r.wl || 0,
       tijd: r.tijd || '', score: r.score || null,
-      signals: r.signals || '', clvOdds: r.clv_odds || null, clvPct: r.clv_pct || null,
+      signals: r.signals || '', clvOdds: r.clv_odds || null, clvPct: r.clv_pct || null, sharpClvOdds: r.sharp_clv_odds || null, sharpClvPct: r.sharp_clv_pct || null,
       fixtureId: r.fixture_id || null,
       unitAtTime,
     };
@@ -7818,7 +7818,7 @@ async function findGameIdVerbose(sport, matchName, anchorDate = null, windowDays
 // Haalt de slotlijn (of huidige odds) op voor EXACT de markt waar de bet in staat.
 // Pure resolver (resolveOddFromBookie) zit in lib/clv-match.js zodat tests het
 // zonder API kunnen draaien.
-const { resolveOddFromBookie } = require('./lib/clv-match');
+const { resolveOddFromBookie, marketKeyFromBetMarkt } = require('./lib/clv-match');
 
 async function fetchCurrentOdds(sport, gameId, markt, bookmaker, opts = {}) {
   if (!gameId) return null;
@@ -8288,11 +8288,42 @@ app.post('/api/clv/recompute', requireAdmin, async (req, res) => {
           await new Promise(rs => setTimeout(rs, 150));
           continue;
         }
+        // v10.10.21: sharp CLV — Pinnacle closing line uit odds_snapshots.
+        // Aparte meting van execution-CLV: positieve sharp-CLV = betere prijs
+        // dan Pinnacle's sluitkoers = bewijs van model-edge (industrie-standaard).
+        let sharpClvOdds = null;
+        let sharpClvPct = null;
+        if (fxId) {
+          const mapped = marketKeyFromBetMarkt(markt);
+          if (mapped) {
+            try {
+              const { data: snapRows } = await supabase.from('odds_snapshots')
+                .select('odds')
+                .eq('fixture_id', fxId)
+                .eq('market_type', mapped.market_type)
+                .eq('selection_key', mapped.selection_key)
+                .ilike('bookmaker', '%pinnacle%')
+                .order('captured_at', { ascending: false })
+                .limit(1);
+              if (snapRows?.[0]?.odds) {
+                sharpClvOdds = parseFloat(snapRows[0].odds);
+                if (Number.isFinite(sharpClvOdds) && sharpClvOdds > 1 && loggedOdds > 0) {
+                  sharpClvPct = +((loggedOdds - sharpClvOdds) / sharpClvOdds * 100).toFixed(2);
+                }
+              }
+            } catch (e) {
+              // Graceful: sharp CLV is nice-to-have, execution CLV is canonical.
+            }
+          }
+        }
+        const updatePayload = { clv_odds: closingOdds, clv_pct: newClv };
+        if (sharpClvOdds !== null) updatePayload.sharp_clv_odds = sharpClvOdds;
+        if (sharpClvPct !== null) updatePayload.sharp_clv_pct = sharpClvPct;
         if (!dryRun) {
-          await supabase.from('bets').update({ clv_odds: closingOdds, clv_pct: newClv }).eq('bet_id', id);
+          await supabase.from('bets').update(updatePayload).eq('bet_id', id);
         }
         updated++;
-        details.push({ id, wedstrijd, markt, bookie: r.tip, oldClv, newClv, delta: oldClv === null ? null : +delta.toFixed(2), action: dryRun ? 'would-update' : 'updated' });
+        details.push({ id, wedstrijd, markt, bookie: r.tip, oldClv, newClv, sharpClvPct, delta: oldClv === null ? null : +delta.toFixed(2), action: dryRun ? 'would-update' : 'updated' });
       } catch (e) {
         failed++;
         details.push({ id, wedstrijd, reason: (e && e.message) || 'error' });
