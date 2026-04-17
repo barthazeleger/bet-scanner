@@ -2166,6 +2166,39 @@ test('buildPickFactory: resolveExecutionMetrics throw → fallback naar ctx.exec
   assert.strictEqual(picks.length, 1, 'crash in resolver → pick komt door via ctx-fallback');
 });
 
+test('buildPickFactory: fixtureMeta wordt doorgegeven aan resolveExecutionMetrics + opgeslagen op pick._fixtureMeta', () => {
+  // v10.12.6 Phase A.1b: verifieer dat de 12e positional arg op mkP
+  // (fixtureMeta) correct door de factory stroomt.
+  let receivedMeta = null;
+  const { picks, mkP } = buildPickFactory(1.6, {}, {
+    sport: 'football',
+    resolveExecutionMetrics: (args) => {
+      receivedMeta = args.fixtureMeta;
+      return { targetPresent: true, preferredGap: 0 }; // niet skippen
+    },
+  });
+  const meta = { fixtureId: 12345, marketType: '1x2', selectionKey: 'home', line: null };
+  mkP('Ajax vs PSV', 'Eredivisie', '🏠 Ajax wint', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%'], null, meta);
+  assert.deepStrictEqual(receivedMeta, meta, 'resolver ontvangt fixtureMeta');
+  assert.strictEqual(picks.length, 1);
+  assert.deepStrictEqual(picks[0]._fixtureMeta, meta, 'pick bewaart fixtureMeta voor downstream audits');
+});
+
+test('buildPickFactory: geen fixtureMeta → resolver krijgt null (backwards-compat)', () => {
+  let receivedMeta = 'NOT_CALLED';
+  const { picks, mkP } = buildPickFactory(1.6, {}, {
+    sport: 'football',
+    resolveExecutionMetrics: (args) => {
+      receivedMeta = args.fixtureMeta;
+      return null; // geen metrics → gate no-op
+    },
+  });
+  mkP('Ajax vs PSV', 'Eredivisie', '🏠 Ajax wint', 2.0, 'test', 62, 0.10, null, 'Bet365', ['form:+2.0%']);
+  assert.strictEqual(receivedMeta, null, 'fixtureMeta default is null');
+  assert.strictEqual(picks.length, 1, 'pick komt door (gate no-op)');
+  assert.strictEqual(picks[0]._fixtureMeta, null);
+});
+
 test('buildPickFactory: adaptiveMinEdge kan pick uit singles en combiPool weren', () => {
   const { picks, combiPool, mkP } = buildPickFactory(1.6, {}, {
     sport: 'football',
@@ -2306,7 +2339,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.12.5');
+  assert.strictEqual(appMeta.APP_VERSION, '10.12.6');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);

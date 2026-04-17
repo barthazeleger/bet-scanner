@@ -1540,12 +1540,27 @@ function getDrawdownMultiplier() {
   return 1.0;
 }
 
-function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'football') {
+function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'football', options = {}) {
+  // v10.12.6 Phase A.1b: optional timelineMap voor execution-gate wiring.
+  // Shape: Map<"${fixtureId}|${marketType}|${selectionKey}|${line}", entry>
+  // zoals gebouwd door lineTimelineLib.buildScanTimelineMap(). Als null:
+  // gate blijft no-op (backwards-compat voor sporten die nog niet gewired zijn).
+  const timelineMap = options && options.timelineMap instanceof Map ? options.timelineMap : null;
+  const resolver = timelineMap ? (({ fixtureMeta, label }) => {
+    if (!fixtureMeta) return null;
+    const entry = lineTimelineLib.lookupTimeline(timelineMap, fixtureMeta);
+    if (!entry) return null;
+    // 1X2 is 3-way; O/U + BTTS + DNB zijn 2-way. Infer uit label als heuristiek.
+    const lbl = (label || '').toLowerCase();
+    const twoWayMarket = /over\s|under\s|btts|dnb|team\s+total/.test(lbl);
+    return lineTimelineLib.deriveExecutionMetrics(entry.timeline, { twoWayMarket });
+  }) : null;
   const ctx = createPickContext({
     sport,
     drawdownMultiplier: getDrawdownMultiplier,
     activeUnitEur: getActiveUnitEur(),
     adaptiveMinEdge,
+    resolveExecutionMetrics: resolver,
   });
   return createPickFactory(MIN_ODDS, calibEpBuckets, ctx);
 }
@@ -5203,7 +5218,43 @@ async function runPrematch(emit) {
   }
   emit({ log: `🧠 Calibratie: thuis×${mm('home').toFixed(2)} uit×${mm('away').toFixed(2)} draw×${mm('draw').toFixed(2)} over×${mm('over').toFixed(2)}` });
 
-  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {});
+  // v10.12.6 Phase A.1b: pre-load line-timelines voor alle pre-fetched fixtures.
+  // Gebruikt historische odds_snapshots (pre-scan state) zodat de gate het
+  // huidige scan niet tegen zichzelf meet. Bulk query (één call) i.p.v. per-pick.
+  const _scanFixtureIds = [];
+  const _scanKickoffByFixture = new Map();
+  for (const leagueKey of Object.keys(_footballFixturesCache)) {
+    for (const f of (_footballFixturesCache[leagueKey] || [])) {
+      const fid = f?.fixture?.id;
+      if (!fid) continue;
+      _scanFixtureIds.push(fid);
+      const kMs = Date.parse(f?.fixture?.date || '');
+      if (Number.isFinite(kMs)) _scanKickoffByFixture.set(fid, kMs);
+    }
+  }
+  let _scanTimelineMap = null;
+  if (_scanFixtureIds.length) {
+    try {
+      const preferredBookies = getPreferredBookies() && getPreferredBookies().length
+        ? getPreferredBookies()
+        : ['Bet365', 'Unibet'];
+      _scanTimelineMap = await lineTimelineLib.buildScanTimelineMap(supabase, {
+        fixtureIds: _scanFixtureIds,
+        marketTypes: ['1x2'], // Phase A.1b: alleen 1X2 (MVP); O/U + BTTS + DNB volgen in vervolg-slice
+        preferredBookies,
+        kickoffByFixtureId: _scanKickoffByFixture,
+        scanAnchorMs: Date.now(),
+      });
+      emit({ log: `📈 Line-timelines geladen: ${_scanTimelineMap.size} bucket(s) over ${_scanFixtureIds.length} fixture(s)` });
+    } catch (err) {
+      emit({ log: `⚠️ Line-timeline load mislukt (gate blijft no-op): ${err.message}` });
+      _scanTimelineMap = null;
+    }
+  }
+
+  const { picks, combiPool, mkP } = buildPickFactory(1.60, calib.epBuckets || {}, 'football', {
+    timelineMap: _scanTimelineMap,
+  });
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = AF_FOOTBALL_LEAGUES.length; // 1 call/league gebruikt in pre-fetch
@@ -5639,14 +5690,20 @@ async function runPrematch(emit) {
           })();
         }
 
+        // v10.12.6 Phase A.1b: thread fixtureMeta voor de football 1X2 markt
+        // door. Market-type '1x2' komt overeen met de schrijf-zijde in
+        // snap.writeMarketConsensus (zie scan-snapshot code hierboven).
+        const fxMetaH = { fixtureId: fid, marketType: '1x2', selectionKey: 'home', line: null };
+        const fxMetaA = { fixtureId: fid, marketType: '1x2', selectionKey: 'away', line: null };
+        const fxMetaD = { fixtureId: fid, marketType: '1x2', selectionKey: 'draw', line: null };
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && bA.price > BLOWOUT_OPP_MAX)
-          mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price, reasonH, Math.round(adjHome2*100), homeEdge * 0.28 * (cm.home?.multiplier ?? 1), kickoffTime, bH.bookie, matchSignals, refereeName);
+          mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price, reasonH, Math.round(adjHome2*100), homeEdge * 0.28 * (cm.home?.multiplier ?? 1), kickoffTime, bH.bookie, matchSignals, refereeName, fxMetaH);
 
         if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && bH.price > BLOWOUT_OPP_MAX)
-          mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price, reasonA, Math.round(adjAway2*100), awayEdge * 0.28 * (cm.away?.multiplier ?? 1), kickoffTime, bA.bookie, matchSignals, refereeName);
+          mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price, reasonA, Math.round(adjAway2*100), awayEdge * 0.28 * (cm.away?.multiplier ?? 1), kickoffTime, bA.bookie, matchSignals, refereeName, fxMetaA);
 
         if (drawEdge >= MIN_EDGE + 0.01 && bD?.price >= 1.60)
-          mkP(`${hm} vs ${aw}`, league.name, `🤝 Gelijkspel`, bD.price, reasonD, Math.round((adjDraw||0)*100), drawEdge * 0.22 * (cm.draw?.multiplier ?? 1), kickoffTime, bD?.bookie, matchSignals, refereeName);
+          mkP(`${hm} vs ${aw}`, league.name, `🤝 Gelijkspel`, bD.price, reasonD, Math.round((adjDraw||0)*100), drawEdge * 0.22 * (cm.draw?.multiplier ?? 1), kickoffTime, bD?.bookie, matchSignals, refereeName, fxMetaD);
 
         // ── O/U Goals 2.5 ─────────────────────────────────────────────
         const over  = analyseTotal(bookies, 'Over',  2.5);

@@ -2,6 +2,36 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.6] - 2026-04-17
+
+Phase A.1b · Football wire-up van de execution-gate. De price-memory primitives uit v10.12.2 worden nu geconsumeerd door de live scan: football 1X2 picks (home / away / draw) krijgen hun kelly daadwerkelijk gedempt op stale preferred prices, te groot preferred-gap, thin markets, of ontbrekende target-bookie.
+
+### Added
+- **[claude] `mkP` 12e positional arg `fixtureMeta`** in `lib/picks.js` — shape `{fixtureId, marketType, selectionKey, line}`. Wordt doorgegeven aan `resolveExecutionMetrics()` EN opgeslagen op de pick als `_fixtureMeta`. Default null → backwards-compat (geen gate).
+- **[claude] `buildPickFactory(..., options)` in server.js accepteert nu `options.timelineMap`** — als een `Map<"${fixtureId}|${marketType}|${selectionKey}|${line}", entry>` (zoals `buildScanTimelineMap` produceert) aan deze optie wordt meegegeven, bouwt de factory automatisch een `resolveExecutionMetrics` die per pick de timeline opzoekt + `deriveExecutionMetrics` aanroept. Inference van `twoWayMarket` uit het label (O/U / BTTS / DNB / team totals = 2-way, anders 3-way).
+- **[claude] `runPrematch` pre-laadt timelines** voor alle pre-fetched fixtures, bulk-queried via `buildScanTimelineMap(supabase, { fixtureIds, marketTypes: ['1x2'], preferredBookies, kickoffByFixtureId })`. Scan-log toont "📈 Line-timelines geladen: N bucket(s) over M fixture(s)".
+- **[claude] 3 football 1X2 `mkP` calls (home / away / draw) in `runPrematch`** passen nu `fixtureMeta` door. Gate fires per pick.
+
+### Wired
+- **Football 1X2** (home / away / draw) — eerste sport + markt met live gate-consumptie.
+
+### Not yet wired (queued, separate slices)
+- Football O/U (totals), BTTS, DNB, Asian Handicap, 1st Half markten — blijft `fixtureMeta=null` (gate no-op).
+- Basketball / Hockey / Baseball / NFL / Handball scans — allemaal nog geen `fixtureMeta`.
+- Elk toekomstig slice: 1 sport × 1 markt per commit. Geen bulk-refactor.
+
+### Tests
+- 2 nieuwe unit tests (`buildPickFactory` fixtureMeta plumbing + backwards-compat null-case).
+- `npm test`: 489 passed, 0 failed.
+
+### Operational notes
+- Eerste runs hebben waarschijnlijk LEGE timeline-maps omdat `odds_snapshots` nog onvoldoende historie heeft voor de gekozen fixtures. Gate blijft dan no-op — geen regressie vs v10.12.5.
+- Zodra historische snapshots ≥ 2 clusters per (fixture, market) omvatten, begint de gate te firen. Observability via nieuwe scan-log regel + via `GET /api/admin/v2/line-timeline-preview` (v10.12.2).
+- Verwachte eerste zichtbare effect: picks waarvan de preferred bookie 3.5%+ achterloopt op market-best krijgen kelly × 0.6, en picks zonder target-bookie quote worden volledig geskipt.
+
+### Rationale
+Doctrine §6 Bouwvolgorde punt 3: "Execution-quality als Kelly-gate — market-quality moet stake beïnvloeden, niet alleen UI rendering." Tot nu toe had `applyExecutionGate` geen metrics-input in de football scan → gate was stil aanwezig maar onzichtbaar. Met deze slice landt de eerste echte stake-modification op runtime pick-output.
+
 ## [10.12.5] - 2026-04-17
 
 Phase E.19 · Test discipline: coverage-rapportage + GitHub Actions CI-gate. Elke push/PR draait nu automatisch `npm audit --audit-level=high`, `npm test`, en coverage-report. Voorkomt de "ik vergat lokaal te testen" fout-modus die eerder de `d5aff8e` hotfix nodig maakte.
