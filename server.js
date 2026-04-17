@@ -4050,6 +4050,12 @@ async function runBaseball(emit) {
         const f5Totals = (parsed.halfTotals || []).filter(o => o.market === 'f5');
         const f5Spreads = (parsed.halfSpreads || []).filter(o => o.market === 'f5');
 
+        // v10.10.17: F5 diagnostiek — waarom picks niet surfacen.
+        const f5Diag = [];
+        if (!pitcherSig.valid) f5Diag.push('F5-ML skip: pitcher data niet valid');
+        if (!f5ML.length) f5Diag.push('F5-ML skip: geen F5 ML odds in payload');
+        if (!f5Totals.length) f5Diag.push('F5-Total skip: geen F5 totals odds in payload');
+
         if (pitcherSig.valid && f5ML.length) {
           // F5 probability: Gebruik fpHome/fpAway als baseline + pitcher × 3
           const f5PitcherAdj = Math.max(-0.12, Math.min(0.12, pitcherSig.adj * 3 * starterReliability.factor));
@@ -4063,6 +4069,11 @@ async function runBaseball(emit) {
           const eF5H = bF5H.price > 0 ? f5Home * bF5H.price - 1 : -1;
           const eF5A = bF5A.price > 0 ? f5Away * bF5A.price - 1 : -1;
           const f5MinEdge = starterReliability.factor < 0.8 ? MIN_EDGE + 0.015 : MIN_EDGE;
+          // v10.10.17: F5 ML preferred-coverage diagnostiek
+          const f5HDiag = diagBestPrice('F5-ML home', bF5H, f5Home, f5MinEdge);
+          const f5ADiag = diagBestPrice('F5-ML away', bF5A, f5Away, f5MinEdge);
+          if (f5HDiag) f5Diag.push(f5HDiag);
+          if (f5ADiag) f5Diag.push(f5ADiag);
 
           if (eF5H >= f5MinEdge && bF5H.price >= 1.60 && bF5H.price <= MAX_WINNER_ODDS)
             mkP(`${hm} vs ${aw}`, league.name, `⚾ F5 ${hm}`, bF5H.price,
@@ -4108,6 +4119,8 @@ async function runBaseball(emit) {
           }
         }
       }
+      // v10.10.17: per-match F5 diagnostiek in scan-output
+      if (f5Diag.length) emit({ log: `  └─ F5 ${hm} vs ${aw}: ${f5Diag.slice(0, 3).join(' · ')}` });
       await sleep(200);
     } catch (err) {
       emit({ log: `⚠️ ⚾ ${league.name}: ${err.message}` });

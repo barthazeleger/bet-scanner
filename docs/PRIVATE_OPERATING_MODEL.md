@@ -1,6 +1,6 @@
 # EdgePickr Private Operating Model
 
-Laatste update: 2026-04-16 (v10.10.16)
+Laatste update: 2026-04-16 (v10.10.17)
 
 Dit document is de actieve productdoctrine voor EdgePickr. Niet het oude
 SaaS-plan, maar de private operator-workflow is leidend.
@@ -452,7 +452,7 @@ eerste stap. Wat erop ontbreekt is de monitoring-laag.
 - `lib/calibration-monitor.js` bovenop `calibration-store`: Brier/log-loss
   per `(signal, sport, market, window)`, output naar Supabase
   `signal_calibration` tabel.
-- Slice `v10.10.16` schrijft voorlopig expliciet `probability_source='ep_proxy'`
+- Slice `v10.10.17` schrijft voorlopig expliciet `probability_source='ep_proxy'`
   weg; canonical `pick.ep`-calibratie volgt pas na een bet↔pick join-layer.
 - `lib/walk-forward.js`: time-aware split-helper voor backtest endpoints.
 - Engineering-standaard regel: elke nieuwe signal-claim vereist minimaal

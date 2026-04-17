@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.17] - 2026-04-17
+
+MLB F5 hardening/visibility (slice 3, rescoped na Codex-review: geen greenfield maar diagnose waarom bestaande F5-flow niet surfacet).
+
+### Added
+- **[claude] Per-match F5 diagnostiek in MLB scan-output.** Logt nu per wedstrijd exact waarom F5 picks niet verschijnen: `pitcher data niet valid`, `geen F5 ML/totals odds in payload`, preferred-coverage issues via `diagBestPrice`. Formaat: `└─ F5 Detroit vs Kansas City: F5-ML skip: pitcher data niet valid · F5-Total skip: geen F5 totals odds`. Cap op 3 diag-items per match.
+- **[claude] `diagBestPrice` op F5 ML calls**: consistent met hockey 2-way/3-way (v10.10.12-13). Preferred-bookie ontbreekt → echte market-edge zichtbaar i.p.v. stille skip.
+
+### Note
+- Bestaande F5-flow (server.js:4046-4120) was al functioneel maar produceerde geen picks. Deze slice voegt alleen diagnostiek toe om de oorzaak per scan zichtbaar te maken. Volgende stap: op basis van scan-output de echte bottleneck fixen (waarschijnlijk pitcher-validation of preferred-coverage).
+
+### Tests
+- `npm test` groen: `433 passed, 0 failed`.
+
 ## [10.10.16] - 2026-04-16
 
 Slice 2: calibration-monitor (sectie 14.R2.A doctrine). Meten of onze signaal-voorspellingen écht gekalibreerd zijn, niet of we gewoon mooi lijken. Codex × Claude ontwerp, Claude codet, Codex reviewt.
