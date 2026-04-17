@@ -2,6 +2,40 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.16] - 2026-04-17
+
+Phase C.9 · Per-bookie volume-concentration watcher. Sluit het grootste onopgeloste operator-survivability risico uit de audit (§14.R2.E "survival > peak EV").
+
+### Added
+- **[claude] `computeBookieConcentration(bets, windowDays, nowMs)`** — pure helper. Parseert `bets.datum` (dd-mm-yyyy), telt stake per bookie over last N dagen, returnt `{total, perBookie[{bookie, stake, share}], maxShare, maxBookie}`. Sort desc by share.
+- **[claude] `runBookieConcentrationCheck()`** — scheduled watcher. Queryt alle bets, berekent 7d concentratie. Fireert web-push alert als `maxShare > 60%` EN `total > €50` (drempel tegen triviaal-volume false positives). De-spam: max 1 alert per 24u.
+- **[claude] `scheduleBookieConcentrationWatcher()`** — boot + 1u delay, daarna elke 6u.
+- **[claude] `GET /api/admin/v2/bookie-concentration?days=7`** (requireAdmin) — exposed helper voor on-demand inspection. Returnt ranking + `aboveThreshold` flag.
+
+### Waarom
+Soft-book closure bij concentratie is voor een private operator het grootste unmitigated loss-vector (van audit): bookie ziet hoge winst/volume uit één richting, limiet omlaag of account dicht. Zonder tracking merkt operator het pas na het feit. Nu: proactive alert bij 60% concentratie, ruim vóór het closure-punt.
+
+### Alert-shape
+```
+🏦 BOOKIE CONCENTRATIE HOOG
+Bet365: 73% van €240 7d volume.
+Spreid risico vóór soft-book limits/closure.
+bet365 73% (€175) · unibet 18% (€43) · pinnacle 9% (€22)
+```
+
+### Rationale voor 60% threshold
+- 50% = grens tussen majority + minority. Twee bookies 50/50 is geen concentratie-risico.
+- 70% = een boek pakt 2/3 van alle volume, al een duidelijk patroon.
+- 60% = middenweg: vroeg genoeg om te diversifiëren, laat genoeg om false positives te voorkomen. Kan later per operator-setting configureerbaar als data dat vereist.
+
+### Non-goals
+- **Automatische bookie-priority degradatie** (next sprint). Nu alleen alert; operator kiest zelf actie. Automatische "geen Bet365 picks meer tot share < 40%" logica vereist interactie met `setPreferredBookies` en bookie-filter; eigen slice.
+- **Per-sport breakdown** (volgende slice). Nu aggregated over alle sporten.
+
+### Tests
+- 5 nieuwe unit tests voor `computeBookieConcentration`.
+- `npm test`: 512 passed, 0 failed.
+
 ## [10.12.15] - 2026-04-17
 
 Phase B.8 · Scheduled autotune. `autoTuneSignalsByClv` was manual-only; nu draait het autonoom elke 6 uur met een sample-size gate + sanity-rail alert.

@@ -2340,7 +2340,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.12.15');
+  assert.strictEqual(appMeta.APP_VERSION, '10.12.16');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -5738,6 +5738,90 @@ test('benjaminiHochbergFDR: strengere q blokkeert meer', () => {
 });
 
 // ── WALK-FORWARD VALIDATOR (v10.12.4, Phase B.4, doctrine §14.R2.A) ──────────
+// ── BOOKIE CONCENTRATION (v10.12.16 Phase C.9) ────────────────────────────
+console.log('\n  Bookie concentration (operator survivability):');
+
+function __computeBookieConcentration(bets, windowDays = 7, nowMs = Date.now()) {
+  if (!Array.isArray(bets) || bets.length === 0) return { total: 0, perBookie: [], maxShare: 0, maxBookie: null };
+  const msPerDay = 86400000;
+  const cutoff = nowMs - windowDays * msPerDay;
+  const byBookie = new Map();
+  let total = 0;
+  for (const b of bets) {
+    if (!b || !b.bookie || !Number.isFinite(b.inzet) || b.inzet <= 0) continue;
+    let ms = null;
+    if (b.datum && typeof b.datum === 'string') {
+      const dm = b.datum.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (dm) ms = Date.parse(`${dm[3]}-${dm[2]}-${dm[1]}T12:00:00Z`);
+    } else if (Number.isFinite(b.timestamp_ms)) {
+      ms = b.timestamp_ms;
+    }
+    if (!Number.isFinite(ms) || ms < cutoff) continue;
+    const key = String(b.bookie).toLowerCase();
+    byBookie.set(key, (byBookie.get(key) || 0) + b.inzet);
+    total += b.inzet;
+  }
+  const perBookie = [...byBookie.entries()]
+    .map(([bookie, stake]) => ({ bookie, stake: +stake.toFixed(2), share: total > 0 ? +(stake / total).toFixed(4) : 0 }))
+    .sort((a, b) => b.share - a.share);
+  const top = perBookie[0] || { share: 0, bookie: null };
+  return { total: +total.toFixed(2), perBookie, maxShare: top.share, maxBookie: top.bookie };
+}
+
+test('computeBookieConcentration: lege bets → total=0', () => {
+  const r = __computeBookieConcentration([], 7);
+  assert.strictEqual(r.total, 0);
+  assert.strictEqual(r.maxShare, 0);
+  assert.strictEqual(r.maxBookie, null);
+});
+
+test('computeBookieConcentration: 3 bookies gelijk verdeeld → 33%', () => {
+  const now = Date.parse('2026-04-17T12:00:00Z');
+  const bets = [
+    { bookie: 'Bet365', inzet: 10, datum: '15-04-2026' },
+    { bookie: 'Unibet', inzet: 10, datum: '16-04-2026' },
+    { bookie: 'Pinnacle', inzet: 10, datum: '17-04-2026' },
+  ];
+  const r = __computeBookieConcentration(bets, 7, now);
+  assert.strictEqual(r.total, 30);
+  assert.ok(Math.abs(r.maxShare - 0.3333) < 0.001, `verwacht ~0.33, kreeg ${r.maxShare}`);
+  assert.strictEqual(r.perBookie.length, 3);
+});
+
+test('computeBookieConcentration: dominante bookie triggert threshold', () => {
+  const now = Date.parse('2026-04-17T12:00:00Z');
+  const bets = [
+    { bookie: 'Bet365', inzet: 80, datum: '15-04-2026' },
+    { bookie: 'Unibet', inzet: 20, datum: '16-04-2026' },
+  ];
+  const r = __computeBookieConcentration(bets, 7, now);
+  assert.strictEqual(r.total, 100);
+  assert.strictEqual(r.maxBookie, 'bet365');
+  assert.ok(r.maxShare > 0.60);
+});
+
+test('computeBookieConcentration: bets buiten window → genegeerd', () => {
+  const now = Date.parse('2026-04-17T12:00:00Z');
+  const bets = [
+    { bookie: 'Bet365', inzet: 100, datum: '01-01-2026' },
+    { bookie: 'Unibet', inzet: 50,  datum: '16-04-2026' },
+  ];
+  const r = __computeBookieConcentration(bets, 7, now);
+  assert.strictEqual(r.total, 50);
+  assert.strictEqual(r.maxBookie, 'unibet');
+});
+
+test('computeBookieConcentration: null bookie + zero inzet → skip', () => {
+  const now = Date.parse('2026-04-17T12:00:00Z');
+  const bets = [
+    { bookie: null, inzet: 50, datum: '16-04-2026' },
+    { bookie: 'Bet365', inzet: 0, datum: '16-04-2026' },
+    { bookie: 'Unibet', inzet: 25, datum: '16-04-2026' },
+  ];
+  const r = __computeBookieConcentration(bets, 7, now);
+  assert.strictEqual(r.total, 25);
+});
+
 // ── FIXTURE CONGESTION (v10.12.14 Phase D.13) ─────────────────────────────
 console.log('\n  Fixture congestion (shadow-mode signal):');
 

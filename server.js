@@ -7016,6 +7016,29 @@ app.get('/api/admin/v2/line-timeline-preview', requireAdmin, async (req, res) =>
   }
 });
 
+// ── v2 Admin: bookie-concentration (Phase C.9) ───────────────────────────────
+// GET /api/admin/v2/bookie-concentration?days=7
+// Laat per-bookie stake-share over laatste N dagen zien. Helpt soft-book
+// closure-risico spotten vóór de alert-drempel (>60%) fireert.
+app.get('/api/admin/v2/bookie-concentration', requireAdmin, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(60, parseInt(req.query.days, 10) || 7));
+    const { data: bets, error } = await supabase.from('bets')
+      .select('bookie, inzet, datum').not('bookie', 'is', null);
+    if (error) return res.status(500).json({ error: error.message });
+    const conc = computeBookieConcentration(bets || [], days, Date.now());
+    return res.json({
+      windowDays: days,
+      ...conc,
+      alertThreshold: 0.60,
+      aboveThreshold: conc.maxShare > 0.60,
+    });
+  } catch (e) {
+    console.error('bookie-concentration error:', e.message);
+    res.status(500).json({ error: 'Interne fout · check server logs' });
+  }
+});
+
 // ── v2 Admin: pick_candidates analytics ─────────────────────────────────────
 // GET /api/admin/v2/pick-candidates-summary?hours=24
 // Toont aggregaties: totaal kandidaten, accepted ratio, top reject reasons,
@@ -11018,6 +11041,73 @@ function scheduleAutotune() {
   }, 4 * 60 * 60 * 1000);
 }
 
+// v10.12.16 Phase C.9: per-bookie volume-concentration watcher. Doctrine
+// §14.R2.E ("survival > peak EV"): soft-book closure is het grootste
+// onopgeloste loss-vector voor een private operator. Rolling 7d stake-share
+// per bookie. Als één bookie > 60% van het totale stake pakt, operator
+// krijgt web-push alert om de concentratie proactief te spreiden.
+//
+// Pure helper voor testability.
+function computeBookieConcentration(bets, windowDays = 7, nowMs = Date.now()) {
+  if (!Array.isArray(bets) || bets.length === 0) return { total: 0, perBookie: [], maxShare: 0, maxBookie: null };
+  const msPerDay = 86400000;
+  const cutoff = nowMs - windowDays * msPerDay;
+  const byBookie = new Map();
+  let total = 0;
+  for (const b of bets) {
+    if (!b || !b.bookie || !Number.isFinite(b.inzet) || b.inzet <= 0) continue;
+    // Timestamp: use datum (dd-mm-yyyy) — bets.datum format.
+    let ms = null;
+    if (b.datum && typeof b.datum === 'string') {
+      const dm = b.datum.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (dm) ms = Date.parse(`${dm[3]}-${dm[2]}-${dm[1]}T12:00:00Z`);
+    } else if (Number.isFinite(b.timestamp_ms)) {
+      ms = b.timestamp_ms;
+    }
+    if (!Number.isFinite(ms) || ms < cutoff) continue;
+    const key = String(b.bookie).toLowerCase();
+    byBookie.set(key, (byBookie.get(key) || 0) + b.inzet);
+    total += b.inzet;
+  }
+  const perBookie = [...byBookie.entries()]
+    .map(([bookie, stake]) => ({ bookie, stake: +stake.toFixed(2), share: total > 0 ? +(stake / total).toFixed(4) : 0 }))
+    .sort((a, b) => b.share - a.share);
+  const top = perBookie[0] || { share: 0, bookie: null };
+  return { total: +total.toFixed(2), perBookie, maxShare: top.share, maxBookie: top.bookie };
+}
+
+let _lastBookieConcAlertAt = 0;
+async function runBookieConcentrationCheck() {
+  try {
+    const { data: bets } = await supabase.from('bets')
+      .select('bookie, inzet, datum').not('bookie', 'is', null);
+    if (!Array.isArray(bets) || bets.length === 0) return;
+    const conc = computeBookieConcentration(bets, 7, Date.now());
+    // Alleen alerten als concentratie > 60% én totaal 7d volume niet triviaal (>€50).
+    if (conc.total < 50) return;
+    if (conc.maxShare <= 0.60) return;
+    const MIN_REALERT_MS = 24 * 60 * 60 * 1000;
+    if (Date.now() - _lastBookieConcAlertAt < MIN_REALERT_MS) return;
+    _lastBookieConcAlertAt = Date.now();
+    const top3 = conc.perBookie.slice(0, 3)
+      .map(b => `${b.bookie} ${(b.share * 100).toFixed(0)}% (€${b.stake})`).join(' · ');
+    notify(
+      `🏦 BOOKIE CONCENTRATIE HOOG\n${conc.maxBookie}: ${(conc.maxShare*100).toFixed(0)}% van €${conc.total} 7d volume.\nSpreid risico vóór soft-book limits/closure.\n${top3}`,
+      'bookie_concentration'
+    ).catch(() => {});
+  } catch (e) {
+    console.warn('[bookie-concentration] check failed:', e.message);
+  }
+}
+function scheduleBookieConcentrationWatcher() {
+  // Eerste check 1u na boot (geeft ruimte voor eerste scan + CLV-update).
+  // Daarna elke 6u. Alert zelf de-spam op 24u interval in runner.
+  setTimeout(() => {
+    runBookieConcentrationCheck();
+    setInterval(runBookieConcentrationCheck, 6 * 60 * 60 * 1000);
+  }, 60 * 60 * 1000);
+}
+
 function scheduleHealthAlerts() {
   const INTERVAL_MS = 60 * 60 * 1000; // hourly check
 
@@ -11684,6 +11774,7 @@ app.listen(PORT, () => {
   scheduleRetentionCleanup();
   scheduleScanHeartbeatWatcher();
   scheduleAutotune();
+  scheduleBookieConcentrationWatcher();
 
   // v10.9.9: herstel persisted scrape-source toggles uit calib. Zonder dit
   // reset elke deploy alle sources naar default off — operationeel irritant.
