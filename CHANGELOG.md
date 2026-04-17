@@ -2,6 +2,30 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.3] - 2026-04-17
+
+Phase A.3 · Brier → autotune feedback loop + concept-drift guard. Voorheen werd `signal_calibration` alleen gelezen voor inspectie; nu overruled het de CLV-gate wanneer een signaal kalibratie-gedrift vertoont (ranking kan correct zijn terwijl probability-output drift — Kelly-sizing gebruikt die probability).
+
+### Added
+- **[claude] `loadSignalBrierDrift()` in server.js** — aggregeert `signal_calibration` rows over sport/market per signal; berekent `brier90d`, `brier365d`, `drift = brier90d - brier365d`, `n90`, `n365`. Weighted-avg op `sample_size`. Null-safe: tabel niet-aanwezig → lege Map → autotune werkt gewoon door (backwards-compat).
+- **[claude] Brier-drift gates in `autoTuneSignalsByClv()`**:
+  1. **Mute-override**: `drift ≥ 0.03` + `n90 ≥ 50` + `brier90 > brier365` → weight = 0, zelfs bij positieve CLV. Reason: `brier_drift_mute`.
+  2. **Soft-dampen**: `0.015 ≤ drift < 0.03` + `n90 ≥ 30` → `weight ×= 0.90`. Reason: `brier_drift_dampen`.
+  3. **Promotion-block**: auto-promote (weight 0→0.5) wordt geblokkeerd als drift ≥ 0.03, ook al zou CLV het toestaan. Signaal blijft shadow tot kalibratie-herstel.
+- **[claude] Web-push alert bij drift-events** (`type='brier_drift'`) — operator ziet direct welke signals zijn gemute + drift-waarde + n90.
+
+### Rationale
+Uit model-integrity-audit (2026-04-17): Brier/log-loss werden dagelijks berekend maar nergens geconsumeerd voor gedragsverandering. Doctrine §14.R2.A ("geen feedback loop = je meet maar stuurt niet") vereist consumption. Drift ≥ 0.03 is doctrine-grade (zie `project_signal_promotion_doctrine.md` memory, demotion gate). Soft-dampen < 0.03 is defense-in-depth tegen langzaam-drift die CLV nog niet doorheeft.
+
+Ranking-correct-maar-probability-gedrift is de klassieke valkuil: signal X ranked goede picks boven slechte (CLV stabiel) terwijl de probability-output drift (Brier stijgt). Kelly-staking gebruikt de probability → stake wordt te groot of te klein voor de werkelijke edge. Brier-gate vangt dit.
+
+### Tests
+- `npm test`: 476 passed, 0 failed (geen nieuwe tests in deze commit — drift-gate is een ruwe-integer-berekening die via load→aggregate→threshold gaat; unit-testing mocket supabase-chained queries waar bestaande tests al dekking op hebben. Integration-test met seeded signal_calibration tabel is Phase A.3b volgende commit.).
+
+### Non-goals this commit
+- Per-sport × per-market drift (nu alleen aggregated-per-signal). Finer granularity = Phase B.6.
+- Bonferroni/FDR op multiple comparisons binnen autotune. = Phase B.5, aparte slice.
+
 ## [10.12.2] - 2026-04-17
 
 Phase A.1 scaffolding · price-memory → execution-gate plumbing. Library primitives toegevoegd + observability endpoint. Per-sport wire-up van getLineTimeline in de scan-flow volgt in A.1b (eigen slice per sport zodat fixture-id threading niet in één grote commit landt).

@@ -885,6 +885,55 @@ async function evaluateKellyAutoStepup() {
   return { stepped: true, from: cur, to: next, avgClv, roi };
 }
 
+// v10.12.3 (Phase A.3): Brier feedback loop. Aggregeert signal_calibration
+// rows per (signal, window) over alle sports/markten. 90d drift = brier90 -
+// brier365. Positief = signal raakt slechter gekalibreerd ook al kan raw
+// CLV nog stabiel zijn (ranking-correct maar probability-gedrift). Wordt
+// binnen autoTuneSignalsByClv als extra gate gebruikt:
+//   drift ≥ 0.03 + n90 ≥ 50 → mute override (ook bij positieve CLV)
+//   drift ≥ 0.015 + n90 ≥ 30 → extra demping × 0.90
+// Concept-drift doctrine uit §14.R2.A.
+async function loadSignalBrierDrift() {
+  try {
+    const { data, error } = await supabase.from('signal_calibration')
+      .select('signal_key, window_key, brier_score, sample_size')
+      .in('window_key', ['90d', '365d']);
+    if (error) {
+      // Tabel bestaat nog niet → drift-monitoring no-op, backwards-compat.
+      if (/relation .* does not exist/i.test(error.message || '')) return new Map();
+      throw error;
+    }
+    // Aggregeer per (signal_key, window_key): weighted-avg brier over sports/markten.
+    const byKey = new Map(); // signalKey → { win90: {sumBn, sumN}, win365: {sumBn, sumN} }
+    for (const row of data || []) {
+      if (!row?.signal_key || !Number.isFinite(row.brier_score) || !Number.isFinite(row.sample_size) || row.sample_size <= 0) continue;
+      if (!byKey.has(row.signal_key)) byKey.set(row.signal_key, { win90: { sumBn: 0, sumN: 0 }, win365: { sumBn: 0, sumN: 0 } });
+      const entry = byKey.get(row.signal_key);
+      const target = row.window_key === '90d' ? entry.win90 : row.window_key === '365d' ? entry.win365 : null;
+      if (!target) continue;
+      target.sumBn += row.brier_score * row.sample_size;
+      target.sumN  += row.sample_size;
+    }
+    const result = new Map();
+    for (const [signalKey, entry] of byKey) {
+      const brier90 = entry.win90.sumN > 0 ? entry.win90.sumBn / entry.win90.sumN : null;
+      const brier365 = entry.win365.sumN > 0 ? entry.win365.sumBn / entry.win365.sumN : null;
+      if (brier90 == null || brier365 == null) continue;
+      result.set(signalKey, {
+        brier90: +brier90.toFixed(4),
+        brier365: +brier365.toFixed(4),
+        drift: +(brier90 - brier365).toFixed(4),
+        n90: entry.win90.sumN,
+        n365: entry.win365.sumN,
+      });
+    }
+    return result;
+  } catch (e) {
+    console.warn('[brier-drift] load failed:', e.message);
+    return new Map();
+  }
+}
+
 async function autoTuneSignalsByClv() {
   // Operator failsafe: signal-kill mode kan worden uitgeschakeld via dashboard.
   // Dan tunet de functie nog wel weights, maar de mute (weight=0) wordt overgeslagen.
@@ -901,43 +950,86 @@ async function autoTuneSignalsByClv() {
       signalNames: parseBetSignals(b.signals).map(s => String(s).split(':')[0]).filter(Boolean),
     }))).signals;
 
+    // v10.12.3 Phase A.3: Brier drift context (90d vs 365d) voor elke signal.
+    // Triggert extra mute/demping ook als CLV niet negatief genoeg is voor
+    // de bestaande gate.
+    const brierDrift = await loadSignalBrierDrift();
+
     const weights = loadSignalWeights();
     const adjustments = [];
-    let tuned = 0, muted = 0;
+    let tuned = 0, muted = 0, drifted = 0;
     for (const [name, s] of Object.entries(signalStats)) {
       if (s.n < 20) continue;
       const avgClv = s.avgClv;
       const edgeClv = s.shrunkExcessClv;
       const old = weights[name] !== undefined ? weights[name] : 1.0;
+      const drift = brierDrift.get(name) || null;
       let newW = old;
       let reason = null;
-      // KILL-SWITCH: structureel negatieve CLV met genoeg samples → mute
-      // (alleen als operator signal_auto_kill_enabled = true)
-      if (muteAllowed && s.n >= SIGNAL_KILL_MIN_N && edgeClv <= -1.5 && avgClv <= -0.5) {
+
+      // Brier-drift override: structurele kalibratie-degradatie → mute zelfs
+      // als CLV nog neutraal/positief is (ranking kan correct zijn terwijl
+      // probability-output drift — Kelly-sizing gebruikt de probability,
+      // dus dit raakt stake-correctness direct).
+      if (muteAllowed && drift && drift.n90 >= 50 && drift.drift >= 0.03 && drift.brier90 > drift.brier365) {
+        newW = 0;
+        reason = `brier_drift_mute (90d Brier ${drift.brier90.toFixed(3)} vs 365d ${drift.brier365.toFixed(3)} · drift +${drift.drift.toFixed(3)} over ${drift.n90} samples)`;
+        muted++;
+        drifted++;
+      }
+      // KILL-SWITCH op CLV (bestaand gedrag)
+      else if (muteAllowed && s.n >= SIGNAL_KILL_MIN_N && edgeClv <= -1.5 && avgClv <= -0.5) {
         newW = 0;
         reason = `auto_disabled (edge_clv ${edgeClv.toFixed(2)}%, raw ${avgClv.toFixed(2)}% over ${s.n} bets)`;
         muted++;
       } else if (old === 0 && s.n >= SIGNAL_KILL_MIN_N && edgeClv >= 0.75 && avgClv > 0) {
-        // AUTO-PROMOTE: signal stond op 0 (logged-only of gemute) maar bewijst nu edge → activeren
-        newW = 0.5;
-        reason = `auto_promoted (edge_clv +${edgeClv.toFixed(2)}%, raw +${avgClv.toFixed(2)}% over ${s.n} bets · weight 0 → 0.5)`;
+        // AUTO-PROMOTE: alleen als er GEEN Brier-drift is (drift < 0.03),
+        // anders blijft het signaal in shadow tot kalibratie-herstel.
+        if (!drift || drift.drift < 0.03) {
+          newW = 0.5;
+          reason = `auto_promoted (edge_clv +${edgeClv.toFixed(2)}%, raw +${avgClv.toFixed(2)}% over ${s.n} bets · weight 0 → 0.5)`;
+        } else {
+          reason = `auto_promote_blocked (edge_clv ok maar Brier drift +${drift.drift.toFixed(3)} — signaal blijft shadow)`;
+        }
       } else if (edgeClv < -1.0) newW = Math.max(0.3, old * 0.92);
       else if (edgeClv > 1.0) newW = Math.min(1.5, old * 1.05);
       else if (edgeClv < -0.25) newW = Math.max(0.3, old * 0.97);
       else if (edgeClv > 0.25) newW = Math.min(1.5, old * 1.02);
       else newW = old * 0.99 + 0.01;
 
+      // Soft-dampen bij matige drift (als we niet al gemute hebben)
+      if (newW > 0 && drift && drift.n90 >= 30 && drift.drift >= 0.015 && drift.drift < 0.03 && drift.brier90 > drift.brier365) {
+        newW = +(newW * 0.90).toFixed(3);
+        reason = (reason ? reason + ' + ' : '') + `brier_drift_dampen (90d Brier +${drift.drift.toFixed(3)}, n=${drift.n90})`;
+        drifted++;
+      }
+
       if (Math.abs(newW - old) >= 0.02 || reason) {
         weights[name] = +newW.toFixed(3);
         adjustments.push({
           name, old: +old.toFixed(3), new: +newW.toFixed(3),
-          avgClv: +avgClv.toFixed(2), edgeClv: +edgeClv.toFixed(2), n: s.n, reason
+          avgClv: +avgClv.toFixed(2), edgeClv: +edgeClv.toFixed(2), n: s.n,
+          brier_drift: drift ? drift.drift : null,
+          brier_n90: drift ? drift.n90 : null,
+          reason
         });
         tuned++;
       }
     }
     if (tuned) await saveSignalWeights(weights);
-    return { tuned, muted, adjustments };
+
+    // Web-push alert als er signals op drift zijn gemute — operator wil dit
+    // weten zonder in admin-panel te gaan kijken.
+    if (drifted > 0) {
+      const driftList = adjustments
+        .filter(a => /brier_drift/.test(a.reason || ''))
+        .slice(0, 5)
+        .map(a => `${a.name} (drift +${(a.brier_drift || 0).toFixed(3)})`)
+        .join(', ');
+      notify(`📉 SIGNAL BRIER DRIFT\n${drifted} signaal(en) kalibratie-gedrift gedetecteerd:\n${driftList}`, 'brier_drift').catch(() => {});
+    }
+
+    return { tuned, muted, drifted, adjustments };
   } catch (e) {
     return { tuned: 0, adjustments: [], error: e.message };
   }
