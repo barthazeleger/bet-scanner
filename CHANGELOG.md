@@ -2,6 +2,38 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.9] - 2026-04-17
+
+Phase A.1b voltooid voor alle 6 sporten. Execution-gate draait nu op elke ML-pick (primair markt) + football's totals/BTTS/DNB. Ook market_type misalignment (`totals` → `total`) gefixt waardoor de lookup daadwerkelijk timelines vindt.
+
+### Wired (gate live)
+- **Football**: 1X2, totals 2.5, BTTS, DNB
+- **Basketball**: moneyline
+- **Hockey**: moneyline (inc-OT 2-way)
+- **Baseball**: moneyline
+- **NFL**: moneyline
+- **Handball**: moneyline
+
+### Fixed
+- **[claude] market_type alignment**: football totals gebruikt nu `'total'` (singular, match met `flattenFootballBookies` row-builder) i.p.v. `'totals'`. Betekent dat de lookup nu daadwerkelijk de odds_snapshots rows vindt. Zonder deze fix was de football gate silently no-op op O/U picks.
+- **`marketTypes` filter in runPrematch post-gate**: `['1x2', 'total', 'btts', 'dnb']` (was `'totals'`).
+
+### Impact
+Alle 6 sport-scans roepen nu `applyPostScanGate` aan. Picks met stale preferred prices / te grote preferred-gap / thin markets krijgen kelly-demping; picks zonder target-bookie worden gefilterd. Elke sport logt "📉 Execution-gate: N gedempt · M geskipt" zichtbaar in scan-log.
+
+### Not yet wired (eigen slices)
+- Football AH / 1H spread + totals / correct score
+- Basketball spread + totals
+- Hockey 3-way ML (60-min) + totals + team totals + puck line + odd/even
+- Baseball totals + run line + F5 + NRFI
+- NFL spread + totals + 1H markten
+- Handball spread + totals + odd/even
+
+Deze markten worden allemaal al in `odds_snapshots` opgeslagen via `flattenParsedOdds` (zie `lib/snapshots.js:82-124`) — dus zodra ik de mkP call-sites wire passen de timelines er vanzelf op.
+
+### Tests
+- `npm test`: 492 passed, 0 failed.
+
 ## [10.12.8] - 2026-04-17
 
 Phase A.1b unificatie · Post-scan execution-gate pattern + Basketball wired. Eén canonieke gate-flow voor alle sporten i.p.v. per-sport ad-hoc pre-loads.

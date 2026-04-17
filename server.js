@@ -3494,17 +3494,20 @@ async function runHockey(emit) {
         if (sanityAway && !sanityAway.agree) diag.push(`2-way away sanity FAIL: model ${(sanityAway.modelProb*100).toFixed(1)}% vs markt ${(sanityAway.marketProb*100).toFixed(1)}% (div ${(sanityAway.divergence*100).toFixed(1)}%)`);
 
         if (marketFairIncOT) {
+          // v10.12.9 Phase A.1b hockey: 2-way ML inc-OT
+          const fxMetaHkH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
+          const fxMetaHkA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
           if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS
               && isOTBookieHockey(bH.bookie) && sanityHome.agree) {
             mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
               `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | Markt-fair: ${(marketFairIncOT.home*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, [...matchSignals, 'sanity_ok']);
+              Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, [...matchSignals, 'sanity_ok'], null, fxMetaHkH);
           }
           if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS
               && isOTBookieHockey(bA.bookie) && sanityAway.agree) {
             mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
               `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | Markt-fair: ${(marketFairIncOT.away*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-              Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, [...matchSignals, 'sanity_ok']);
+              Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, [...matchSignals, 'sanity_ok'], null, fxMetaHkA);
           }
         }
 
@@ -3775,11 +3778,31 @@ async function runHockey(emit) {
   for (const p of picks)     { p.scanType = 'nhl'; p.sport = 'hockey'; }
   for (const p of combiPool) { p.scanType = 'nhl'; p.sport = 'hockey'; }
 
-  emit({ log: `🏒 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} hockey picks` });
+  // v10.12.9 Phase A.1b: post-scan execution-gate pass (hockey ML)
+  let gatedHockeyPicks = picks;
+  try {
+    const { applyPostScanGate } = require('./lib/runtime/scan-gate');
+    const { kellyToUnits } = require('./lib/model-math');
+    const preferredBookies = (getPreferredBookies() && getPreferredBookies().length)
+      ? getPreferredBookies() : ['Bet365', 'Unibet'];
+    const before = gatedHockeyPicks.length;
+    const res = await applyPostScanGate(gatedHockeyPicks, supabase, {
+      preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
+      marketTypes: ['moneyline'], kellyToUnits,
+    });
+    gatedHockeyPicks = res.picks;
+    if (res.stats.dampened || res.stats.skipped) {
+      emit({ log: `🏒 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
+    }
+  } catch (err) {
+    emit({ log: `⚠️ Hockey execution-gate mislukt: ${err.message}` });
+  }
 
-  if (picks.length) saveScanEntry(picks, 'nhl', totalEvents);
+  emit({ log: `🏒 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedHockeyPicks.length} hockey picks` });
 
-  return picks;
+  if (gatedHockeyPicks.length) saveScanEntry(gatedHockeyPicks, 'nhl', totalEvents);
+
+  return gatedHockeyPicks;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4130,16 +4153,19 @@ async function runBaseball(emit) {
           }).catch(() => {});
         }
 
+        // v10.12.9 Phase A.1b baseball: ML 2-way
+        const fxMetaMlbH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
+        const fxMetaMlbA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
+            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaMlbH);
 
         if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
+            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaMlbA);
 
         // Over/Under total runs
         const overOdds = parsed.totals.filter(o => o.side === 'over');
@@ -4341,11 +4367,31 @@ async function runBaseball(emit) {
   for (const p of picks)     { p.scanType = 'mlb'; p.sport = 'baseball'; }
   for (const p of combiPool) { p.scanType = 'mlb'; p.sport = 'baseball'; }
 
-  emit({ log: `⚾ ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} baseball picks` });
+  // v10.12.9 Phase A.1b: baseball execution-gate post-process
+  let gatedMlbPicks = picks;
+  try {
+    const { applyPostScanGate } = require('./lib/runtime/scan-gate');
+    const { kellyToUnits } = require('./lib/model-math');
+    const preferredBookies = (getPreferredBookies() && getPreferredBookies().length)
+      ? getPreferredBookies() : ['Bet365', 'Unibet'];
+    const before = gatedMlbPicks.length;
+    const res = await applyPostScanGate(gatedMlbPicks, supabase, {
+      preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
+      marketTypes: ['moneyline'], kellyToUnits,
+    });
+    gatedMlbPicks = res.picks;
+    if (res.stats.dampened || res.stats.skipped) {
+      emit({ log: `⚾ Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
+    }
+  } catch (err) {
+    emit({ log: `⚠️ Baseball execution-gate mislukt: ${err.message}` });
+  }
 
-  if (picks.length) saveScanEntry(picks, 'mlb', totalEvents);
+  emit({ log: `⚾ ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedMlbPicks.length} baseball picks` });
 
-  return picks;
+  if (gatedMlbPicks.length) saveScanEntry(gatedMlbPicks, 'mlb', totalEvents);
+
+  return gatedMlbPicks;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4632,16 +4678,19 @@ async function runFootballUS(emit) {
           }).catch(() => {});
         }
 
+        // v10.12.9 Phase A.1b NFL: ML 2-way
+        const fxMetaNflH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
+        const fxMetaNflA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
+            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaNflH);
 
         if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
+            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaNflA);
 
         // Over/Under total points
         const overOdds = parsed.totals.filter(o => o.side === 'over');
@@ -4768,11 +4817,31 @@ async function runFootballUS(emit) {
   for (const p of picks)     { p.scanType = 'nfl'; p.sport = 'american-football'; }
   for (const p of combiPool) { p.scanType = 'nfl'; p.sport = 'american-football'; }
 
-  emit({ log: `🏈 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} NFL picks` });
+  // v10.12.9 Phase A.1b: NFL execution-gate post-process
+  let gatedNflPicks = picks;
+  try {
+    const { applyPostScanGate } = require('./lib/runtime/scan-gate');
+    const { kellyToUnits } = require('./lib/model-math');
+    const preferredBookies = (getPreferredBookies() && getPreferredBookies().length)
+      ? getPreferredBookies() : ['Bet365', 'Unibet'];
+    const before = gatedNflPicks.length;
+    const res = await applyPostScanGate(gatedNflPicks, supabase, {
+      preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
+      marketTypes: ['moneyline'], kellyToUnits,
+    });
+    gatedNflPicks = res.picks;
+    if (res.stats.dampened || res.stats.skipped) {
+      emit({ log: `🏈 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
+    }
+  } catch (err) {
+    emit({ log: `⚠️ NFL execution-gate mislukt: ${err.message}` });
+  }
 
-  if (picks.length) saveScanEntry(picks, 'nfl', totalEvents);
+  emit({ log: `🏈 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedNflPicks.length} NFL picks` });
 
-  return picks;
+  if (gatedNflPicks.length) saveScanEntry(gatedNflPicks, 'nfl', totalEvents);
+
+  return gatedNflPicks;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5088,16 +5157,19 @@ async function runHandball(emit) {
           }).catch(() => {});
         }
 
+        // v10.12.9 Phase A.1b handball: ML 2-way
+        const fxMetaHbH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
+        const fxMetaHbA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
         // Moneyline picks
         if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals);
+            Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaHbH);
 
         if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals);
+            Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaHbA);
 
         // Over/Under total goals
         const overOdds = parsed.totals.filter(o => o.side === 'over');
@@ -5167,11 +5239,31 @@ async function runHandball(emit) {
   for (const p of picks)     { p.scanType = 'handball'; p.sport = 'handball'; }
   for (const p of combiPool) { p.scanType = 'handball'; p.sport = 'handball'; }
 
-  emit({ log: `🤾 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${picks.length} handball picks` });
+  // v10.12.9 Phase A.1b: handball execution-gate post-process
+  let gatedHbPicks = picks;
+  try {
+    const { applyPostScanGate } = require('./lib/runtime/scan-gate');
+    const { kellyToUnits } = require('./lib/model-math');
+    const preferredBookies = (getPreferredBookies() && getPreferredBookies().length)
+      ? getPreferredBookies() : ['Bet365', 'Unibet'];
+    const before = gatedHbPicks.length;
+    const res = await applyPostScanGate(gatedHbPicks, supabase, {
+      preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
+      marketTypes: ['moneyline'], kellyToUnits,
+    });
+    gatedHbPicks = res.picks;
+    if (res.stats.dampened || res.stats.skipped) {
+      emit({ log: `🤾 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
+    }
+  } catch (err) {
+    emit({ log: `⚠️ Handball execution-gate mislukt: ${err.message}` });
+  }
 
-  if (picks.length) saveScanEntry(picks, 'handball', totalEvents);
+  emit({ log: `🤾 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedHbPicks.length} handball picks` });
 
-  return picks;
+  if (gatedHbPicks.length) saveScanEntry(gatedHbPicks, 'handball', totalEvents);
+
+  return gatedHbPicks;
 }
 
 // European cup league IDs · teams in these play midweek, risico op vermoeidheid
@@ -5779,8 +5871,8 @@ async function runPrematch(emit) {
           if (Math.abs(poissonOUAdj) >= 0.005) ouSignals.push(`poisson_ou:${poissonOUAdj>0?'+':''}${(poissonOUAdj*100).toFixed(1)}%`);
           if (aggOUAdj !== 0) ouSignals.push(`aggregate_push_ou:+${(aggOUAdj*100).toFixed(1)}%`);
           // v10.12.7 Phase A.1b: totals market is 2-way (over/under), line=2.5
-          const fxMetaOver  = { fixtureId: fid, marketType: 'totals', selectionKey: 'over',  line: 2.5 };
-          const fxMetaUnder = { fixtureId: fid, marketType: 'totals', selectionKey: 'under', line: 2.5 };
+          const fxMetaOver  = { fixtureId: fid, marketType: 'total', selectionKey: 'over',  line: 2.5 };
+          const fxMetaUnder = { fixtureId: fid, marketType: 'total', selectionKey: 'under', line: 2.5 };
           if (overEdge >= MIN_EDGE)
             mkP(`${hm} vs ${aw}`, league.name, `⚽ Over 2.5 goals`, over.best.price,
               `O/U consensus: ${(overP*100).toFixed(1)}% over | ${over.best.bookie}: ${over.best.price}${tsNote}${weatherOUNote}${poissonOUNote}${predNote} | ${ko}`,
@@ -6115,7 +6207,7 @@ async function runPrematch(emit) {
       kickoffByFixtureId: _scanKickoffByFixture,
       scanAnchorMs: Date.now(),
       activeUnitEur: getActiveUnitEur(),
-      marketTypes: ['1x2', 'totals', 'btts', 'dnb'],
+      marketTypes: ['1x2', 'total', 'btts', 'dnb'],
       kellyToUnits,
     });
     allCandidates = res.picks;
