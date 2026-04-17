@@ -8297,7 +8297,7 @@ app.post('/api/clv/recompute', requireAdmin, async (req, res) => {
           const mapped = marketKeyFromBetMarkt(markt);
           if (mapped) {
             try {
-              const { data: snapRows } = await supabase.from('odds_snapshots')
+              let snapQuery = supabase.from('odds_snapshots')
                 .select('odds')
                 .eq('fixture_id', fxId)
                 .eq('market_type', mapped.market_type)
@@ -8305,6 +8305,11 @@ app.post('/api/clv/recompute', requireAdmin, async (req, res) => {
                 .ilike('bookmaker', '%pinnacle%')
                 .order('captured_at', { ascending: false })
                 .limit(1);
+              // v10.10.21 fix: line-based markten exact matchen op gespeelde line
+              if (mapped.line != null && Number.isFinite(mapped.line)) {
+                snapQuery = snapQuery.eq('line', +mapped.line.toFixed(2));
+              }
+              const { data: snapRows } = await snapQuery;
               if (snapRows?.[0]?.odds) {
                 sharpClvOdds = parseFloat(snapRows[0].odds);
                 if (Number.isFinite(sharpClvOdds) && sharpClvOdds > 1 && loggedOdds > 0) {

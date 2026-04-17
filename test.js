@@ -5539,9 +5539,11 @@ test('marketKeyFromBetMarkt: BTTS Ja → btts/yes', () => {
   assert.deepStrictEqual(r, { market_type: 'btts', selection_key: 'yes' });
 });
 
-test('marketKeyFromBetMarkt: Over 2.5 → total/over', () => {
+test('marketKeyFromBetMarkt: Over 2.5 basis → total/over/line', () => {
   const r = marketKeyFromBetMarkt('Over 2.5');
-  assert.deepStrictEqual(r, { market_type: 'total', selection_key: 'over' });
+  assert.strictEqual(r.market_type, 'total');
+  assert.strictEqual(r.selection_key, 'over');
+  assert.strictEqual(r.line, 2.5);
 });
 
 test('marketKeyFromBetMarkt: NRFI → nrfi/no', () => {
@@ -5549,9 +5551,22 @@ test('marketKeyFromBetMarkt: NRFI → nrfi/no', () => {
   assert.deepStrictEqual(r, { market_type: 'nrfi', selection_key: 'no' });
 });
 
-test('marketKeyFromBetMarkt: F5 team → f5_ml/home', () => {
-  const r = marketKeyFromBetMarkt('⚾ F5 Detroit Tigers');
-  assert.deepStrictEqual(r, { market_type: 'f5_ml', selection_key: 'home' });
+test('marketKeyFromBetMarkt: F5 ML → null (home/away niet afleidbaar zonder emoji)', () => {
+  assert.strictEqual(marketKeyFromBetMarkt('⚾ F5 Detroit Tigers'), null, 'geen 🏠/✈️ → graceful null');
+});
+
+test('marketKeyFromBetMarkt: Over 2.5 → total/over met line=2.5', () => {
+  const r = marketKeyFromBetMarkt('Over 2.5');
+  assert.strictEqual(r.market_type, 'total');
+  assert.strictEqual(r.selection_key, 'over');
+  assert.strictEqual(r.line, 2.5, 'line wordt geparsed');
+});
+
+test('marketKeyFromBetMarkt: F5 Over 4.5 → f5_total/over met line=4.5', () => {
+  const r = marketKeyFromBetMarkt('⚾ F5 Over 4.5');
+  assert.strictEqual(r.market_type, 'f5_total');
+  assert.strictEqual(r.selection_key, 'over');
+  assert.strictEqual(r.line, 4.5);
 });
 
 test('marketKeyFromBetMarkt: 60-min draw → threeway/draw', () => {
