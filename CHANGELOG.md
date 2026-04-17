@@ -2,6 +2,39 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.20] - 2026-04-17
+
+Fix · Preferred-bookie lek in football pick-odds voor BTTS + O/U totals. Verklaart waarom operator's pick-cards occasioneel "William Hill" of "Pinnacle" toonden terwijl `preferredBookies = [Bet365, Unibet]`.
+
+### Root cause
+Line 5569-5573 in `runPrematch` voegt `pinnacle` + `william hill` toe aan `filteredBks` voor **consensus-berekening** (sharp-reference probabilities). Dat is correct — fair-prob consensus hoort sharp-books te includeren. MAAR: de BTTS + O/U pick-odds code deed een eigen max-price loop over `filteredBks` / `bookies` ZONDER preferred-filter → non-preferred bookies lekten door naar `pick.bookie`.
+
+### Gefixt in
+1. **`server.js:6020+` (BTTS block)** — `bttsBk` loop filtert nu eerst op `getPreferredBookies()` voordat best-price wordt gekozen. Non-preferred bookies blijven bijdragen aan consensus-model (indirect via fairProbs) maar nooit meer aan de pick-badge.
+2. **`lib/picks.js:218 analyseTotal()`** — zelfde patroon als BTTS. `avgIP` (consensus) berekend over FULL pool, `best` (execution) alleen op preferred. Behoudde backward-compat: als operator geen preferredBookies heeft ingesteld → fallback naar alle bookies (safety net).
+3. **`lib/odds-parser.js`** — nieuwe export `getPreferredBookiesLower()` voor lib/picks.js gebruik.
+
+### Andere markten check
+- **1X2 ML (football)**: gebruikt `bestOdds()` → `bestFromArr()` → respects preferred already (`requirePreferred: true` default). GOED.
+- **DNB (football)**: gebruikt `bestFromArr()` → preferred respecteerd. GOED.
+- **Asian Handicap (football)**: gebruikt `bestSpreadPick()` → let me audit next sprint.
+- **BTTS (football)**: GEFIXT deze commit.
+- **O/U totals (football)**: GEFIXT via analyseTotal.
+- **Hockey/baseball/basketball/NFL/handball**: gebruiken overwegend `bestFromArr()` of `analyseTotal()` — laatste is nu gefixt.
+
+### Impact
+Na deze deploy:
+- BTTS picks tonen alleen Bet365 of Unibet als bookie (binnen operator's preferred set)
+- O/U 2.5 picks tonen alleen preferred bookies
+- De K-League BTTS pick die eerder "William Hill" liet zien zou nu NIET surface als geen preferred bookie het markt heeft (voorheen surfacede het met de sharp-ref prijs)
+
+### Follow-up
+- Asian Handicap / spread codepaden audit (volgende sprint)
+- Modal-renderer mystery (waar Bart "Bet365" zag) — nog niet opgelost zonder screenshot
+
+### Tests
+- `npm test`: 512 passed, 0 failed.
+
 ## [10.12.19] - 2026-04-17
 
 Hotfix · `marketFairHb is not defined` in handbal scan. Zelfde type scope-bug als de v10.12.13 `f5Diag` fix.

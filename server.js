@@ -6028,9 +6028,21 @@ async function runPrematch(emit) {
           }).filter(Boolean);
 
           if (bttsBk.length > 0) {
+            // v10.12.20 fix: pick-odds MUST come uit operator's preferred bookies
+            // (execution truth). filteredBks bevat ook sharp-refs (Pinnacle,
+            // William Hill) voor consensus-berekening; die mogen niet naar de
+            // pick.bookie lekken. Doctrine §10.A preferred = operator settings.
+            // Voorheen lekten non-preferred bookies naar de pick badge.
+            const preferredSet = getPreferredBookies();
+            const isPreferred = (name) => {
+              if (!preferredSet || !preferredSet.length) return true; // no setting → allow all (pre-set fallback)
+              const lc = String(name || '').toLowerCase();
+              return preferredSet.some(p => lc.includes(p));
+            };
             let bestYes = { price: 0, bookie: '' };
             let bestNo  = { price: 0, bookie: '' };
             for (const b of bttsBk) {
+              if (!isPreferred(b.name)) continue;
               const yesVal = b.values.find(v => v.value === 'Yes');
               const noVal  = b.values.find(v => v.value === 'No');
               if (yesVal) { const p = parseFloat(yesVal.odd); if (p > bestYes.price) bestYes = { price: p, bookie: b.name }; }
