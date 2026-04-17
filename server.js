@@ -6165,9 +6165,19 @@ async function runPrematch(emit) {
           }).filter(Boolean);
 
           if (dnbBk.length > 0) {
+            // v10.12.22 fix: DNB pick-odds moeten uit operator's preferred
+            // bookies komen, niet uit de wider consensus-pool (Pinnacle etc).
+            // Zelfde fix als BTTS in v10.12.20.
+            const _prefSetDnb = getPreferredBookies();
+            const _isPreferredDnb = (name) => {
+              if (!_prefSetDnb || !_prefSetDnb.length) return true;
+              const lc = String(name || '').toLowerCase();
+              return _prefSetDnb.some(p => lc.includes(p));
+            };
             let bestDnbH = { price: 0, bookie: '' };
             let bestDnbA = { price: 0, bookie: '' };
             for (const b of dnbBk) {
+              if (!_isPreferredDnb(b.name)) continue;
               const homeVal = b.values.find(v => v.value === 'Home');
               const awayVal = b.values.find(v => v.value === 'Away');
               if (homeVal) { const p = parseFloat(homeVal.odd); if (p > bestDnbH.price) bestDnbH = { price: p, bookie: b.name }; }
@@ -6212,10 +6222,18 @@ async function runPrematch(emit) {
           const p12 = adjHome2 + adjAway2;
           const pX2 = (adjDraw || 0) + adjAway2;
 
+          // v10.12.22 fix: Double Chance pick-odds alleen uit preferred bookies
+          const _prefSetDc = getPreferredBookies();
+          const _isPreferredDc = (name) => {
+            if (!_prefSetDc || !_prefSetDc.length) return true;
+            const lc = String(name || '').toLowerCase();
+            return _prefSetDc.some(p => lc.includes(p));
+          };
           let bestHX = { price: 0, bookie: '' };
           let best12 = { price: 0, bookie: '' };
           let bestX2 = { price: 0, bookie: '' };
           for (const b of dcBookies) {
+            if (!_isPreferredDc(b.name)) continue;
             for (const o of b.values) {
               const val = String(o.name || '').trim();
               const price = parseFloat(o.price) || 0;
@@ -6247,7 +6265,17 @@ async function runPrematch(emit) {
         }
 
         // ── Handicap ──────────────────────────────────────────────────
-        for (const bk of bookies.slice(0, 3)) {
+        // v10.12.22 fix: filter op preferred bookies voordat we de 3-bookie
+        // slice nemen. Voorheen bevatte bookies.slice(0,3) vaak Pinnacle/
+        // William Hill → pick.bookie lekte naar sharp-ref.
+        const _prefSetAh = getPreferredBookies();
+        const _prefAhBookies = _prefSetAh && _prefSetAh.length
+          ? bookies.filter(bk => {
+              const lc = String(bk.title || '').toLowerCase();
+              return _prefSetAh.some(p => lc.includes(p));
+            })
+          : bookies;
+        for (const bk of _prefAhBookies.slice(0, 3)) {
           const sMkt = bk.markets?.find(m => m.key === 'spreads');
           if (!sMkt) continue;
           for (const o of (sMkt.outcomes || [])) {

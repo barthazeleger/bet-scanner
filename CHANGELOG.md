@@ -2,6 +2,38 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.12.22] - 2026-04-17
+
+Vervolg preferred-bookie lek audit · DNB + Double Chance + Handicap gefixt. Complementeert v10.12.20.
+
+### Root cause recap
+`filteredBks` in football scan bevat `Pinnacle` + `William Hill` als sharp-refs voor consensus-truth. Meerdere pick-paden gebruikten die zonder preferred-filter → non-preferred bookies lekten naar pick.bookie. v10.12.20 loste BTTS + analyseTotal op. Deze commit vervolgt:
+
+### Gefixt in deze commit
+1. **`server.js:6165+` DNB block** — bestDnbH / bestDnbA loop filtert nu op `getPreferredBookies()`. Zelfde pattern als BTTS (v10.12.20).
+2. **`server.js:6228+` Double Chance block** — bestHX / best12 / bestX2 manual loops krijgen preferred filter.
+3. **`server.js:6268+` Handicap block** — `bookies.slice(0, 3)` nam willekeurige eerste 3 uit de pool (vaak Pinnacle + William Hill aan de top). Nu: eerst filter op preferred, dan slice.
+
+### Preferred-compliance status (football markten)
+| Markt | Status |
+|-------|--------|
+| 1X2 ML | ✅ via `bestOdds` (al gated) |
+| O/U Totals 2.5 | ✅ v10.12.20 analyseTotal |
+| BTTS | ✅ v10.12.20 |
+| DNB | ✅ v10.12.22 |
+| Double Chance 1X/12/X2 | ✅ v10.12.22 |
+| Asian Handicap (spreads) | ✅ v10.12.22 |
+| Odd/Even (hockey — uses bestFromArr) | ✅ al gated |
+| Team Totals | ✅ via `bestFromArr` |
+
+Alle football pick-paden landen nu op operator's preferred bookies. Als geen preferred bookie het markt biedt → pick surfacet niet (consistent met 1X2 gedrag).
+
+### Modal mystery
+Wacht nog op screenshot van modal-renderer voor de "Bet365 in modal, Unibet op card, William Hill in reason" discrepantie. Zonder dat kan ik niet pinpointen waar modal zijn bookie-label vandaan haalt.
+
+### Tests
+- `npm test`: 523 passed, 0 failed.
+
 ## [10.12.21] - 2026-04-17
 
 Phase C.10 · Unified stake-regime engine (observability-mode). Grootste stake-logica update sinds `unit_at_time`, maar nog NIET verbonden met live stake-flow — eerst valideren via admin endpoint.
