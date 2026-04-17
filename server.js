@@ -9381,6 +9381,9 @@ app.get('/api/model-feed', requireAdmin, (req, res) => {
 // In-app notifications (opgeslagen in Supabase)
 app.get('/api/inbox-notifications', async (req, res) => {
   try {
+    if (!isValidUuid(req.user?.id)) {
+      return res.status(401).json({ error: 'Invalid user context' });
+    }
     let query = supabase.from('notifications')
       .select('*').order('created_at', { ascending: false }).limit(50);
     // Filter: user's own notifications + global (null user_id)
@@ -9397,6 +9400,7 @@ app.get('/api/inbox-notifications', async (req, res) => {
 // Nu: global rows alleen door admin muteerbaar; users markeren alleen hun eigen.
 app.put('/api/inbox-notifications/read', async (req, res) => {
   try {
+    if (!isValidUuid(req.user?.id)) return res.status(401).json({ error: 'Invalid user context' });
     const isAdmin = req.user?.role === 'admin';
     const scope = isAdmin
       ? `user_id.eq.${req.user.id},user_id.is.null`
@@ -9411,6 +9415,7 @@ app.put('/api/inbox-notifications/read', async (req, res) => {
 // global notifications verwijderen voor iedereen.
 app.delete('/api/inbox-notifications', async (req, res) => {
   try {
+    if (!isValidUuid(req.user?.id)) return res.status(401).json({ error: 'Invalid user context' });
     const isAdmin = req.user?.role === 'admin';
     const scope = isAdmin
       ? `user_id.eq.${req.user.id},user_id.is.null`
