@@ -324,7 +324,9 @@ async function loadPushSubs() {
   try {
     const { data, error } = await supabase.from('push_subscriptions').select('*');
     if (error) throw new Error(error.message);
-    _pushSubsCache = (data || []).map(r => r.subscription);
+    // v10.10.22 fix: user_id meegeven zodat sendPushToUser kan filteren.
+    // Voorheen: alleen r.subscription → user_id was altijd undefined.
+    _pushSubsCache = (data || []).map(r => ({ ...r.subscription, user_id: r.user_id || null }));
     return _pushSubsCache;
   } catch { return []; }
 }
@@ -9809,7 +9811,8 @@ async function checkOpenBetResults(userId = null) {
       await updateBetOutcome(bet.id, uitkomst, userId);
       // Push notification for bet result
       const wlAmount = uitkomst === 'W' ? +((bet.odds-1)*bet.inzet).toFixed(2) : -bet.inzet;
-      await sendPushToAll({
+      // v10.10.22 fix: per-user push i.p.v. global broadcast (Codex P0 blocker).
+      await sendPushToUser(userId, {
         title: uitkomst === 'W' ? '✅ Bet gewonnen!' : '❌ Bet verloren',
         body: `${bet.wedstrijd}: ${ev.scoreH}-${ev.scoreA}\n${bet.markt} · ${uitkomst === 'W' ? '+' : ''}€${wlAmount}`,
         tag: 'bet-result-' + bet.id,
