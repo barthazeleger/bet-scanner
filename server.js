@@ -249,7 +249,7 @@ const {
   pitcherAdjustment, pitcherReliabilityFactor, goalieAdjustment,
   injurySeverityWeight, nbaAvailabilityAdjustment,
   shotsDifferentialAdjustment, recomputeWl, summarizeSignalMetrics,
-  shrinkFormScore, bayesSmooth,
+  shrinkFormScore,
 } = modelMath;
 
 // ── SUPABASE CONFIG ──────────────────────────────────────────────────────────

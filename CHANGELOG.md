@@ -2,6 +2,23 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [10.10.20] - 2026-04-17
+
+Sharp reference integratie v1 (roadmap punt 6). Pinnacle/Betfair/Circa als apart gescheiden "true price" referentie in de line-timeline.
+
+### Added
+- **[claude] `SHARP_BOOKIES` set + `isSharpBookie()` helper** in `lib/line-timeline.js`. Hard gescheiden van preferred/execution bookies (Codex-doctrine v10.10.14): sharp = Pinnacle, Betfair, Circa. Execution = Bet365, Unibet.
+- **[claude] `bestSharpPrice` + `bestSharpBookie` in `snapshotAggregate`**. Elk tijdpunt-snapshot bevat nu naast market-best en preferred-best ook de sharp-reference prijs als aparte as.
+- **[claude] `sharpGap` in `buildTimeline` output**. Verschil tussen sharp-reference prijs en preferred-prijs aan close. Positief = sharp biedt betere odds = Bart's execution-bookie achterloopt op de scherpste markt-referentie. Kan later door execution-gate of CLV-monitor geconsumeerd worden.
+- **[claude] Ongebruikte `bayesSmooth` import opgeruimd** uit server.js (Codex-note v10.10.19).
+- **[claude] +5 regressietests**: isSharpBookie detectie, snapshotAggregate sharp-velden, buildTimeline sharpGap berekening, null-fallback bij ontbrekende sharp-data.
+
+### Note
+- v1 scope: sharp-reference data is nu beschikbaar in de line-timeline shape maar wordt nog niet geconsumeerd door execution-gate of CLV-meting. Dat zijn vervolgslices (CLV tegen Pinnacle closing line, sharpGap in gate-thresholds).
+
+### Tests
+- `npm test` groen: `454 passed, 0 failed`.
+
 ## [10.10.19] - 2026-04-17
 
 Broad Bayesian shrinkage op form-streaks (selection edge, roadmap punt 5). Zelfde principe als BTTS-H2H shrinkage (v10.8.23) maar nu op elke sport.

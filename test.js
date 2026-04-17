@@ -2302,7 +2302,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '10.10.19');
+  assert.strictEqual(appMeta.APP_VERSION, '10.10.20');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -5514,6 +5514,67 @@ test('shrinkFormScore: formAdj-verschil wordt kleiner na shrinkage', () => {
   const shrunkDiff = (shrinkFormScore(hmRaw) - shrinkFormScore(awRaw)) / 15 * 0.04;
   assert.ok(Math.abs(shrunkDiff) < Math.abs(rawDiff), `shrunk adj ${shrunkDiff} < raw adj ${rawDiff}`);
   assert.ok(Math.abs(shrunkDiff) > 0, 'niet volledig naar 0 gedempt');
+});
+
+// ── SHARP REFERENCE (v10.10.20, roadmap punt 6) ─────────────────────────────
+console.log('\n  Sharp reference (Pinnacle/Betfair):');
+
+test('lineTimeline.isSharpBookie: detecteert Pinnacle/Betfair als sharp', () => {
+  assert.strictEqual(lineTimeline.isSharpBookie('Pinnacle'), true);
+  assert.strictEqual(lineTimeline.isSharpBookie('Betfair'), true);
+  assert.strictEqual(lineTimeline.isSharpBookie('Pinnacle Sports'), true);
+  assert.strictEqual(lineTimeline.isSharpBookie('Bet365'), false);
+  assert.strictEqual(lineTimeline.isSharpBookie('Unibet'), false);
+});
+
+test('snapshotAggregate: returnt bestSharpPrice apart van bestPrice/bestPreferred', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-17T19:00:00Z', bookie: 'Pinnacle', odds: 2.15 }),
+    makeOddsRow({ at: '2026-04-17T19:00:00Z', bookie: 'Bet365', odds: 2.10 }),
+    makeOddsRow({ at: '2026-04-17T19:00:00Z', bookie: 'Unibet', odds: 2.05 }),
+    makeOddsRow({ at: '2026-04-17T19:00:00Z', bookie: 'Bovada', odds: 2.12 }),
+  ];
+  const preferred = new Set(['bet365', 'unibet']);
+  const agg = lineTimeline.snapshotAggregate(rows, preferred);
+  assert.strictEqual(agg.bestPrice, 2.15, 'market-best = Pinnacle');
+  assert.strictEqual(agg.bestPreferredPrice, 2.10, 'preferred-best = Bet365');
+  assert.strictEqual(agg.bestSharpPrice, 2.15, 'sharp-best = Pinnacle');
+  assert.strictEqual(agg.bestSharpBookie, 'Pinnacle');
+});
+
+test('buildTimeline: sharpGap = sharp - preferred aan close', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-17T19:55:00Z', bookie: 'Pinnacle', odds: 2.15 }),
+    makeOddsRow({ at: '2026-04-17T19:55:00Z', bookie: 'Bet365', odds: 2.05 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-17T20:00:00Z'),
+    preferredBookies: ['bet365'],
+    closeWindowMs: 10 * 60 * 1000,
+  });
+  assert.strictEqual(t.sharpGap, 0.10, 'sharp (2.15) - preferred (2.05) = 0.10');
+  assert.strictEqual(t.sharpPrice, 2.15);
+  assert.strictEqual(t.sharpBookie, 'Pinnacle');
+});
+
+test('buildTimeline: sharpGap=null als geen sharp bookie in data', () => {
+  const rows = [
+    makeOddsRow({ at: '2026-04-17T19:55:00Z', bookie: 'Bet365', odds: 2.05 }),
+    makeOddsRow({ at: '2026-04-17T19:55:00Z', bookie: 'Unibet', odds: 2.00 }),
+  ];
+  const t = lineTimeline.buildTimeline(rows, {
+    kickoffMs: Date.parse('2026-04-17T20:00:00Z'),
+    preferredBookies: ['bet365'],
+    closeWindowMs: 10 * 60 * 1000,
+  });
+  assert.strictEqual(t.sharpGap, null);
+  assert.strictEqual(t.sharpPrice, null);
+});
+
+test('buildTimeline: lege rows → sharpGap=null (geen crash)', () => {
+  const t = lineTimeline.buildTimeline([]);
+  assert.strictEqual(t.sharpGap, null);
+  assert.strictEqual(t.sharpBookie, null);
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────
