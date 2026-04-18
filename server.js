@@ -8114,35 +8114,10 @@ app.get('/api/admin/v2/market-thresholds', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// POST /api/admin/v2/autotune-clv — run CLV-based signal weight tuning
-app.post('/api/admin/v2/autotune-clv', requireAdmin, async (req, res) => {
-  try {
-    const result = await autoTuneSignalsByClv();
-    res.json(result);
-  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
-});
-
-// GET /api/admin/v2/snapshot-counts — quick health check op v2 tabellen
-app.get('/api/admin/v2/snapshot-counts', requireAdmin, async (req, res) => {
-  try {
-    const hours = Math.max(1, Math.min(168, parseInt(req.query.hours) || 24));
-    const sinceIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-    const tables = ['fixtures', 'odds_snapshots', 'feature_snapshots', 'market_consensus', 'model_runs', 'pick_candidates'];
-    const counts = {};
-    for (const t of tables) {
-      // Eerst totaal
-      const { count: total } = await supabase.from(t).select('*', { count: 'exact', head: true });
-      // Dan recent
-      const recentField = t === 'fixtures' ? 'created_at' : 'created_at';
-      const { count: recent } = await supabase.from(t).select('*', { count: 'exact', head: true })
-        .gte(t === 'odds_snapshots' || t === 'feature_snapshots' || t === 'market_consensus' || t === 'model_runs' ? 'captured_at' : 'created_at', sinceIso);
-      counts[t] = { total: total || 0, recent: recent || 0 };
-    }
-    res.json({ hours, counts, sinceIso });
-  } catch (e) {
-    res.status(500).json({ error: (e && e.message) || 'Interne fout' });
-  }
-});
+// v11.3.3 Phase 5.4k: autotune-clv + snapshot-counts verhuisd naar
+// lib/routes/admin-snapshots.js.
+const createAdminSnapshotsRouter = require('./lib/routes/admin-snapshots');
+app.use('/api', createAdminSnapshotsRouter({ supabase, requireAdmin, autoTuneSignalsByClv }));
 
 // ── PUSH + INBOX NOTIFICATIONS ─────────────────────────────────────────────
 // v11.2.0 Phase 5.1: handlers verhuisd naar lib/routes/notifications.js via

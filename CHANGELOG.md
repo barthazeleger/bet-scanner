@@ -2,6 +2,26 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.3] - 2026-04-18
+
+**Phase 5.4k · admin snapshot/tuning utilities**
+
+### Added
+
+- **[claude] `lib/routes/admin-snapshots.js`** — 2 admin utilities:
+  - `POST /api/admin/v2/autotune-clv` — trigger handmatige CLV-based signal weight tuning.
+  - `GET /api/admin/v2/snapshot-counts?hours=24` — total + recent row-count per v2 snapshot tabel (fixtures, odds_snapshots, feature_snapshots, market_consensus, model_runs, pick_candidates). Health-check of de snapshot-polling functioneert.
+- 2 nieuwe tests.
+
+### Changed
+
+- server.js netto **-25 regels** (11865 → 11840).
+- Totaal shrinkage sinds v11.0.0 baseline: **-697 regels** via 13 extracted route modules.
+
+### Tests
+
+607 passed · 0 failed.
+
 ## [11.3.2] - 2026-04-18
 
 **Phase 5.4j · server.js extraction · admin-controls cluster (kill-switch, operator, upgrade-ack)**
