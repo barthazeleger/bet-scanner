@@ -1,11 +1,13 @@
 # Code Review Response — 2026-04-18
 
 **Branch**: `barthazeleger/sec-review-prs`
-**Final version**: `v11.3.24`
-**Test status**: `624 passed, 0 failed` (was 609 vóór reviews)
+**Final version**: `v11.3.26`
+**Test status**: `632 passed, 0 failed` (was 609 vóór reviews, +23 regressie + integration tests)
 **Commits**:
 - `b22e95f` — [v11.3.23] Phase 7.1 · live fixes
 - `8f01165` — [v11.3.24] Phase 7.2 + 7.3 · dedup + docs
+- `5dcfc37` — [v11.3.25] Phase 8.1 + 8.2 · route integration-test infra + empirical pick-distribution endpoint
+- `5754dc7` — [v11.3.26] Phase 9.1 + 9.2 · frontend DOM hardening + scan-orchestrator extractie
 
 ## Context
 
