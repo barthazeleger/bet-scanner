@@ -125,7 +125,7 @@
         <div class="scan-panel scan-panel-pm" style="max-width:100%;width:100%;padding:32px 28px">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
             <div>
-              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">11.0.1</span></div>
+              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">11.0.2</span></div>
               <div style="font-size:26px;font-weight:800;line-height:1.2;letter-spacing:-.02em" data-i18n-html="scan_headline">Vind de beste bets van dit moment</div>
               <div style="font-size:13px;color:rgba(255,255,255,0.55);margin-top:10px;line-height:1.7" data-i18n-html="scan_desc">
                 Pre-match · Live xG · H2H · Opstellingen · Standen · Predictions<br>
@@ -490,6 +490,18 @@
   <div id="analyse-out">
     <div class="empty-state"><div class="ico">&#128270;</div><div>Geen scandata beschikbaar. Start eerst een prematch scan.</div></div>
   </div>
+
+  <!-- v11.0.2: near-miss picks (admin-only). Toont kandidaten uit laatste 24h
+       die door filters zijn gevallen — operator ziet welke picks "net niet" zijn
+       en waarom, zonder DB-tools. -->
+  <div class="card admin-only" id="near-miss-card" style="margin-top:16px;display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="card-title">🔍 Net-niet picks · laatste 24u</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadNearMisses()">🔄 Ververs</button>
+    </div>
+    <div id="near-miss-summary" style="font-size:13px;color:var(--muted);margin-bottom:10px">Laden…</div>
+    <div id="near-miss-list" style="font-size:13px"></div>
+  </div>
 </section>
 
 <!-- ══ INBOX ═══════════════════════════════════════════════════════════════ -->
@@ -624,7 +636,7 @@
       <div class="card-hd">
         <div>
           <div class="card-title" style="font-size:17px" data-i18n="card_how_it_works">🎯 EdgePickr — hoe het werkt</div>
-          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 11.0.1</span> · <span data-i18n="info_date">april 2026</span></div>
+          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 11.0.2</span> · <span data-i18n="info_date">april 2026</span></div>
         </div>
         <div style="font-size:24px">🤖</div>
       </div>
@@ -824,6 +836,17 @@
           <div style="font-weight:700;color:var(--accent)">&euro;98/mnd</div>
           <div style="font-size:11px;color:var(--muted)">Start: 12-04-2026</div>
           <div style="font-size:11px;color:var(--muted)">Verlengt: 12-05-2026</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-weight:600">ChatGPT Plus (OpenAI)</div>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">Codex reviewer · second-opinion model · doctrine-sparring</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-weight:700;color:var(--accent)">&euro;23/mnd</div>
+          <div style="font-size:11px;color:var(--muted)">Start: 15-04-2026</div>
+          <div style="font-size:11px;color:var(--muted)">Verlengt: 15-05-2026</div>
         </div>
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
@@ -3682,6 +3705,55 @@ async function refreshAnalyse() {
     analysePicks = [...(scanPicks.prematch||[]), ...(scanPicks.live||[])];
   }
   doSearch();
+  loadNearMisses();
+}
+
+// v11.0.2: laad near-miss picks uit /api/admin/v2/pick-candidates-summary
+// (admin-only endpoint). Silent-fail voor niet-admin users, anders toont top
+// rejection-redenen + laatste 10 rejected kandidaten.
+async function loadNearMisses() {
+  const card = document.getElementById('near-miss-card');
+  const summary = document.getElementById('near-miss-summary');
+  const list = document.getElementById('near-miss-list');
+  if (!card || !summary || !list) return;
+  try {
+    const r = await api('/api/admin/v2/pick-candidates-summary?hours=24');
+    if (!r || !r.ok) { card.style.display = 'none'; return; }
+    const d = await r.json();
+    if (!d || d.error) { card.style.display = 'none'; return; }
+    card.style.display = '';
+    const total = d.total || 0;
+    const accepted = d.accepted || 0;
+    const rejected = d.rejected || 0;
+    const acc = d.acceptanceRate != null ? `${d.acceptanceRate}%` : '—';
+    summary.innerHTML = `<strong>${total}</strong> kandidaten · <strong>${accepted}</strong> geaccepteerd (${acc}) · <strong>${rejected}</strong> net-niet`;
+    const reasons = d.byReason || {};
+    const topReasons = Object.entries(reasons).slice(0, 6);
+    const recent = Array.isArray(d.recentRejected) ? d.recentRejected.slice(0, 10) : [];
+    let html = '';
+    if (topReasons.length) {
+      html += '<div style="margin-bottom:10px"><strong>Top redenen:</strong> ';
+      html += topReasons.map(([k, n]) => `<span style="color:var(--muted);margin-right:12px">${k} (${n})</span>`).join('');
+      html += '</div>';
+    }
+    if (recent.length) {
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 12px;font-size:12px">';
+      for (const p of recent) {
+        const edge = p.edge != null ? `edge ${(+p.edge).toFixed(2)}%` : 'edge —';
+        const odds = p.odds != null ? `@ ${p.odds}` : '';
+        html += `<div style="grid-column:1/-1;padding:6px 0;border-top:1px solid var(--border)">
+          <div style="color:var(--fg);font-weight:600">${(p.selection || '?').toString().replace(/[<>]/g,'')}</div>
+          <div style="color:var(--muted);margin-top:2px">${p.bookie || '?'} ${odds} · ${edge} · <em>${(p.reason || 'unknown').replace(/[<>]/g,'')}</em></div>
+        </div>`;
+      }
+      html += '</div>';
+    } else {
+      html += '<div style="color:var(--muted)">Geen rejected kandidaten in laatste 24u.</div>';
+    }
+    list.innerHTML = html;
+  } catch (e) {
+    card.style.display = 'none';
+  }
 }
 
 function doSearch() {

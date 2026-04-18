@@ -2,6 +2,25 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.0.2] - 2026-04-18
+
+**Phase 3 · info-panel + near-miss surface** (items 2 en 6 uit operator-report).
+
+### Added
+
+- **[claude] C3.1 ChatGPT Plus subscription entry** in Info → 💳 Abonnementen kaart. Regel tussen Claude Max en Supabase: €23/mnd · Start 15-04-2026 · Verlengt 15-05-2026. Beschrijving: "Codex reviewer · second-opinion model · doctrine-sparring".
+- **[claude] C3.2 Near-miss picks UI-sectie · `index.html`** (admin-only card op Analyse tab). Haalt data uit bestaand endpoint `/api/admin/v2/pick-candidates-summary?hours=24`. Toont `accepted/rejected` counts, top 6 rejection-redenen als inline tags, en laatste 10 rejected candidates met selection/bookie/odds/edge/reason.
+  - `loadNearMisses()` fire't bij Analyse tab load + manual refresh-knop.
+  - Silent-hide bij 404 (non-admin users).
+
+### Why
+
+Operator-report item 2: operator betaalt €23/mnd aan ChatGPT (OpenAI) voor de Codex review-workflow, was niet zichtbaar in de subscription-overview. Item 6: operator wilde kunnen zien welke picks "net niet" waren in recente scans zonder DB-tools te openen. Data bestond al in `pick_candidates.rejected_reason`; alleen UI-surface ontbrak.
+
+### Tests
+
+556 passed · 0 failed · geen nieuwe tests toegevoegd (UI-only changes, bestaand endpoint).
+
 ## [11.0.1] - 2026-04-18
 
 **Phase 2 · operator-UX fixes** (items 4 en 5 uit operator-report).
