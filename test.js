@@ -2410,7 +2410,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '11.3.24');
+  assert.strictEqual(appMeta.APP_VERSION, '11.3.25');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -7428,6 +7428,201 @@ test('health-route factory returns router with /health endpoint', () => {
   assert.strictEqual(typeof router, 'function');
   // Express Router exposes stack; check at least one route registered.
   assert(Array.isArray(router.stack) && router.stack.length > 0, 'health router should have routes');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v11.3.25 · PHASE 8.1 ROUTE-LEVEL INTEGRATION TESTS (via route-harness)
+// ═══════════════════════════════════════════════════════════════════════════
+// Reviewer Codex #2 H4: coverage op server/db geldpaden te laag. Deze tests
+// mounten echte Express routers met mocked deps en dispatchen requests via
+// de harness. Geen supertest dep, geen nieuwe devDep — pure in-process.
+
+const { callRoute, makeNoopAuthMiddleware } = require('./lib/testing/route-harness');
+
+// Health route — public, minimal payload.
+test('integration: GET /health returns { ok, ts }', async () => {
+  const createHealthRouter = require('./lib/routes/health');
+  const router = createHealthRouter();
+  const res = await callRoute(router, { method: 'GET', path: '/health' });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.ok, true);
+  assert(Number.isFinite(res.body.ts), 'ts should be a number');
+});
+
+// Bets-read flow: GET /bets returnt bets + stats voor een user.
+test('integration: GET /bets returns { bets, stats } scoped per user', async () => {
+  const createBetsRouter = require('./lib/routes/bets');
+  const mockBets = [
+    { id: 1, wedstrijd: 'A vs B', markt: 'ML', odds: 2.0, units: 1, inzet: 10, uitkomst: 'W', wl: 10, userId: 'u1' },
+    { id: 2, wedstrijd: 'C vs D', markt: 'Over 2.5', odds: 1.8, units: 1, inzet: 10, uitkomst: 'Open', wl: 0, userId: 'u1' },
+  ];
+  const router = createBetsRouter({
+    readBets: async (userId) => {
+      assert.strictEqual(userId, 'u1', 'readBets should receive correct userId');
+      return { bets: mockBets, _raw: [] };
+    },
+    deleteBet: async () => {},
+    loadUsers: async () => [{ id: 'u1', role: 'user', settings: { startBankroll: 500, unitEur: 10 } }],
+    calcStats: (bets, sb, ue) => ({ total: bets.length, bankroll: sb, unitEur: ue }),
+    rateLimit: () => false,
+    defaultStartBankroll: 500,
+    defaultUnitEur: 10,
+  });
+  const res = await callRoute(router, { method: 'GET', path: '/bets', user: { id: 'u1', role: 'user' } });
+  assert.strictEqual(res.statusCode, 200);
+  assert(Array.isArray(res.body.bets));
+  assert.strictEqual(res.body.bets.length, 2);
+  assert.strictEqual(res.body.stats.total, 2);
+});
+
+// Bets-correlations: groepeert open bets op dezelfde match.
+test('integration: GET /bets/correlations groepeert open bets op wedstrijd', async () => {
+  const createBetsRouter = require('./lib/routes/bets');
+  const router = createBetsRouter({
+    readBets: async () => ({
+      bets: [
+        { id: 1, wedstrijd: 'Ajax vs PSV', markt: 'ML', odds: 2.0, units: 1, inzet: 10, uitkomst: 'Open' },
+        { id: 2, wedstrijd: 'Ajax vs PSV', markt: 'Over 2.5', odds: 1.8, units: 1, inzet: 10, uitkomst: 'Open' },
+        { id: 3, wedstrijd: 'Feyenoord vs AZ', markt: 'ML', odds: 1.7, units: 1, inzet: 10, uitkomst: 'Open' },
+      ],
+    }),
+    deleteBet: async () => {},
+    loadUsers: async () => [],
+    calcStats: () => ({}),
+    rateLimit: () => false,
+    defaultStartBankroll: 500,
+    defaultUnitEur: 10,
+  });
+  const res = await callRoute(router, { method: 'GET', path: '/bets/correlations', user: { id: 'u1' } });
+  assert.strictEqual(res.statusCode, 200);
+  assert(Array.isArray(res.body.correlations));
+  assert.strictEqual(res.body.correlations.length, 1, 'alleen Ajax/PSV (2 bets) is correlated');
+  assert.strictEqual(res.body.correlations[0].bets.length, 2);
+});
+
+// Bets DELETE: rate-limit afweer + user-scoping.
+test('integration: DELETE /bets/:id blokkeert bij rate-limit hit', async () => {
+  const createBetsRouter = require('./lib/routes/bets');
+  let rateLimitCalled = false;
+  const router = createBetsRouter({
+    readBets: async () => ({ bets: [] }),
+    deleteBet: async () => {},
+    loadUsers: async () => [],
+    calcStats: () => ({}),
+    rateLimit: () => { rateLimitCalled = true; return true; },
+    defaultStartBankroll: 500,
+    defaultUnitEur: 10,
+  });
+  const res = await callRoute(router, { method: 'DELETE', path: '/bets/42', user: { id: 'u1' }, params: { id: '42' } });
+  assert(rateLimitCalled, 'rateLimit helper should be invoked');
+  assert.strictEqual(res.statusCode, 429);
+});
+
+// Bets DELETE: ongeldige id returnt 400.
+test('integration: DELETE /bets/:id rejects invalid id', async () => {
+  const createBetsRouter = require('./lib/routes/bets');
+  const router = createBetsRouter({
+    readBets: async () => ({ bets: [] }),
+    deleteBet: async () => {},
+    loadUsers: async () => [],
+    calcStats: () => ({}),
+    rateLimit: () => false,
+    defaultStartBankroll: 500,
+    defaultUnitEur: 10,
+  });
+  const res = await callRoute(router, { method: 'DELETE', path: '/bets/notanumber', user: { id: 'u1' }, params: { id: 'notanumber' } });
+  assert.strictEqual(res.statusCode, 400);
+});
+
+// Admin error-leak regressie: admin-controls upgrade-ack returnt géén raw error.
+test('integration: admin-controls 500-pad lekt geen raw error message', async () => {
+  const createAdminControlsRouter = require('./lib/routes/admin-controls');
+  const router = createAdminControlsRouter({
+    requireAdmin: makeNoopAuthMiddleware(),
+    killSwitch: { enabled: true, set: new Set(), thresholds: {}, lastRefreshed: null },
+    refreshKillSwitch: async () => {},
+    operator: { master_scan_enabled: true },
+    saveOperatorState: async () => {},
+    loadCalib: () => { throw new Error('SECRET_INTERNAL_DETAIL'); },
+    saveCalib: async () => {},
+  });
+  const res = await callRoute(router, {
+    method: 'POST', path: '/admin/v2/upgrade-ack',
+    user: { id: 'admin-1', role: 'admin' }, body: { type: 'upgrade_api' },
+  });
+  assert.strictEqual(res.statusCode, 500);
+  assert(res.body && res.body.error);
+  assert(!/SECRET_INTERNAL_DETAIL/.test(String(res.body.error)),
+    'raw internal error message must not leak to client');
+});
+
+// v11.3.25 Phase 8.2: pick-distribution endpoint (empirical bias-check).
+test('integration: GET /admin/v2/pick-distribution aggregates by market × bookie × reason', async () => {
+  const createAdminInspectRouter = require('./lib/routes/admin-inspect');
+  const mockCandidates = [
+    { bookmaker: 'Bet365', passed_filters: true, rejected_reason: null, model_run_id: 'run1', selection_key: 'over', created_at: new Date().toISOString() },
+    { bookmaker: 'Bet365', passed_filters: false, rejected_reason: 'edge_below_min', model_run_id: 'run1', selection_key: 'over', created_at: new Date().toISOString() },
+    { bookmaker: 'Unibet', passed_filters: false, rejected_reason: 'no_bookie_price', model_run_id: 'run1', selection_key: 'over', created_at: new Date().toISOString() },
+    { bookmaker: 'Bet365', passed_filters: true, rejected_reason: null, model_run_id: 'run2', selection_key: 'home', created_at: new Date().toISOString() },
+  ];
+  const mockRuns = [
+    { id: 'run1', market_type: 'totals' },
+    { id: 'run2', market_type: 'moneyline' },
+  ];
+  const mockSupabase = {
+    from: (table) => ({
+      select: () => ({
+        gte: () => ({
+          order: () => ({
+            limit: () => Promise.resolve({ data: table === 'pick_candidates' ? mockCandidates : [], error: null }),
+          }),
+        }),
+        in: () => Promise.resolve({ data: table === 'model_runs' ? mockRuns : [], error: null }),
+      }),
+    }),
+  };
+  const router = createAdminInspectRouter({
+    supabase: mockSupabase,
+    requireAdmin: makeNoopAuthMiddleware(),
+    computeBookieConcentration: () => ({}),
+    getActiveStartBankroll: () => 500,
+    aggregateEarlyPayoutStats: async () => [],
+    normalizeSport: (s) => s,
+    detectMarket: () => 'other',
+  });
+  const res = await callRoute(router, {
+    method: 'GET', path: '/admin/v2/pick-distribution',
+    query: { hours: '24' }, user: { id: 'admin-1', role: 'admin' },
+  });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.total, 4);
+  assert.strictEqual(res.body.accepted, 2);
+  assert.strictEqual(res.body.rejected, 2);
+  assert(res.body.distribution.totals, 'distribution should have totals bucket');
+  assert(res.body.distribution.totals.bet365, 'totals → bet365 bucket should exist');
+  assert.strictEqual(res.body.distribution.totals.bet365.accepted, 1);
+  assert.strictEqual(res.body.distribution.totals.bet365.rejected, 1);
+  assert(res.body.bookieSummary.bet365, 'bookieSummary should aggregate bet365');
+  assert.strictEqual(res.body.bookieSummary.bet365.accepted, 2);
+  assert.strictEqual(res.body.bookieSummary.bet365.total, 3);
+});
+
+// Info route: GET /version returns app version (geen auth nodig — mounted elsewhere).
+test('integration: GET /version returns { version } from app-meta', async () => {
+  const createInfoRouter = require('./lib/routes/info');
+  const router = createInfoRouter({
+    appVersion: '11.3.25-test',
+    loadCalib: () => ({ markets: {} }),
+    requireAdmin: makeNoopAuthMiddleware(),
+    afKey: 'test-key',
+    afRateLimit: { callsToday: 0, remaining: 100, limit: 100 },
+    sportRateLimits: {},
+    getCurrentStakeRegime: () => ({ regime: 'stable', kellyFraction: 0.5 }),
+    leagues: { football: [], basketball: [], hockey: [], baseball: [], 'american-football': [], handball: [] },
+  });
+  const res = await callRoute(router, { method: 'GET', path: '/version' });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.version, '11.3.25-test');
 });
 
 // ── SUMMARY ──────────────────────────────────────────────────────────────────

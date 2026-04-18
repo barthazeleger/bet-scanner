@@ -2,6 +2,43 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.25] - 2026-04-18
+
+**Phase 8.1 + 8.2 · route integration tests + empirical pick-distribution**
+
+Reviewer Codex #2's H4 ("coverage te laag op de gevaarlijkste codepaden") en
+aanbeveling voor empirical reporting adresseren zonder nieuwe deps.
+
+### Added
+
+- **`lib/testing/route-harness.js`** — lightweight Express-router test-harness.
+  `callRoute(router, { method, path, user, query, params, body })` dispatcht
+  requests via `router.handle()` met mock req/res, zonder HTTP-overhead of
+  supertest devDep. Export ook `makeNoopAuthMiddleware()` voor
+  requireAdmin-bypass in tests.
+- **8 route-level integration tests** (`test.js`):
+  - `GET /health` returns `{ ok, ts }`.
+  - `GET /bets` scoped per user.
+  - `GET /bets/correlations` groepeert op wedstrijd.
+  - `DELETE /bets/:id` rate-limit + invalid-id paths.
+  - Admin 500-pad lekt géén raw `e.message` (regression tegen H3).
+  - `GET /version` returns app-meta version.
+  - `GET /admin/v2/pick-distribution` 3D aggregation test.
+- **`GET /api/admin/v2/pick-distribution`** in `lib/routes/admin-inspect.js`:
+  3D aggregatie van pick_candidates per (market_type × bookie × rejection_reason)
+  over laatste N uur. Joint `pick_candidates` met `model_runs` voor market_type.
+  Returnt distribution-tree + bookieSummary met acceptance-rate. Direct
+  data-driven antwoord op "Over 2.5 / Bet365 / Unibet" bias-vraag — reviewer
+  Codex #2's expliciete aanbeveling.
+
+### Changed
+
+- Test count: 624 → **632 passed** (+8 integration tests).
+
+### Fixed
+
+(niets — pure additions, geen regressie-fixes deze commit.)
+
 ## [11.3.24] - 2026-04-18
 
 **Phase 7.2 + 7.3 · dedup + docs sync (Codex #1 + Codex #2)**
