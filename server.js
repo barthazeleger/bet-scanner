@@ -9576,70 +9576,27 @@ app.get('/api/admin/supabase-usage', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/status', (req, res) => {
-  const uptime = process.uptime();
-  const c = loadCalib();
-  res.json({
-    version:    APP_VERSION,
-    uptime:     Math.round(uptime),
-    uptimeStr:  uptime > 86400 ? `${Math.floor(uptime/86400)}d ${Math.floor((uptime%86400)/3600)}h`
-              : uptime > 3600 ? `${Math.floor(uptime/3600)}h ${Math.floor((uptime%3600)/60)}m`
-              : `${Math.floor(uptime/60)}m`,
-    services: {
-      apiFootball: {
-        status: !!AF_KEY ? 'active' : 'no key',
-        plan: 'All Sports',
-        remaining: afRateLimit.remaining,
-        limit: afRateLimit.limit || 7500,
-        callsToday: afRateLimit.callsToday || 0,
-        usedPct: Math.round((afRateLimit.callsToday || 0) / (afRateLimit.limit || 7500) * 100),
-        updatedAt: afRateLimit.updatedAt,
-        perSport: {
-          football:            { calls: sportRateLimits.football?.callsToday            || 0, limit: 7500 },
-          basketball:          { calls: sportRateLimits.basketball?.callsToday          || 0, limit: 7500 },
-          hockey:              { calls: sportRateLimits.hockey?.callsToday              || 0, limit: 7500 },
-          baseball:            { calls: sportRateLimits.baseball?.callsToday            || 0, limit: 7500 },
-          'american-football': { calls: sportRateLimits['american-football']?.callsToday || 0, limit: 7500 },
-          handball:            { calls: sportRateLimits.handball?.callsToday            || 0, limit: 7500 },
-        },
-      },
-      espn: { status: 'active', plan: 'Free', unlimited: true, note: 'Live scores auto-refresh' },
-      supabase: { status: 'active', plan: 'Free', unlimited: true, note: 'PostgreSQL · 500MB · bets/users/calibratie/snapshots' },
-      webPush: { status: (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) ? 'active' : 'no key', plan: 'Free', unlimited: true, note: 'Operator alerts · picks · model updates (VAPID)' },
-      render: { status: 'active', plan: 'Free', unlimited: true, note: 'Hosting + keep-alive elke 14 min' },
-      mlbStats: { status: 'active', plan: 'Free', unlimited: true, note: 'MLB pitcher stats (api.mlb.com/api/v1)' },
-      nhlPublic: { status: 'active', plan: 'Free', unlimited: true, note: 'NHL shots-differential + lineups' },
-      openMeteo: { status: 'active', plan: 'Free', unlimited: true, note: 'Weer voor outdoor wedstrijden (open-meteo.com)' },
-    },
-    model: {
-      totalSettled: c.totalSettled || 0,
-      totalWins: c.totalWins || 0,
-      lastCalibration: c.modelLastUpdated || null,
-      marketsTracked: Object.keys(c.markets || {}).filter(k => (c.markets[k]?.n || 0) > 0).length,
-    },
-    stakeRegime: _currentStakeRegime ? {
-      regime: _currentStakeRegime.regime,
-      kellyFraction: _currentStakeRegime.kellyFraction,
-      unitMultiplier: _currentStakeRegime.unitMultiplier,
-      reasons: _currentStakeRegime.reasons || [],
-    } : null,
-    leagues: {
-      football:            AF_FOOTBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-      basketball:          NBA_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-      hockey:              NHL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-      baseball:            BASEBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-      'american-football': NFL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-      handball:            HANDBALL_LEAGUES.map(l => ({ id: l.id, name: l.name, key: l.key, ha: l.ha })),
-    },
-  });
-});
-
-// Versie info
-// v11.2.7 Phase 5.4e: /api/version + /api/changelog verhuisd naar
-// lib/routes/info.js. /api/status blijft in server.js tot dedicated sprint
-// (25+ deps op module-level state).
+// v11.2.9 Phase 5.4g: /api/status toegevoegd aan lib/routes/info.js module
+// (naast /api/version + /api/changelog). Alle meta/info routes één mount,
+// expliciete deps inject.
 const createInfoRouter = require('./lib/routes/info');
-app.use('/api', createInfoRouter({ appVersion: APP_VERSION, loadCalib, requireAdmin }));
+app.use('/api', createInfoRouter({
+  appVersion: APP_VERSION,
+  loadCalib,
+  requireAdmin,
+  afKey: AF_KEY,
+  afRateLimit,
+  sportRateLimits,
+  getCurrentStakeRegime: () => _currentStakeRegime,
+  leagues: {
+    football:            AF_FOOTBALL_LEAGUES,
+    basketball:          NBA_LEAGUES,
+    hockey:              NHL_LEAGUES,
+    baseball:             BASEBALL_LEAGUES,
+    'american-football': NFL_LEAGUES,
+    handball:            HANDBALL_LEAGUES,
+  },
+}));
 
 // Model activity feed · alle automatische wijzigingen
 // Shared multiplier-formule voor rebuild én incremental updateCalibration.

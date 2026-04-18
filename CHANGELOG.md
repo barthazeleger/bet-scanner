@@ -2,6 +2,24 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.2.9] - 2026-04-18
+
+**Phase 5.4g · server.js extraction · /api/status naar info-router**
+
+### Added
+
+- **[claude] `/api/status` toegevoegd aan `lib/routes/info.js`** — uptime + services breakdown (api-football rate-limit per sport, ESPN, Supabase, WebPush, Render, MLB Stats, NHL public, Open-Meteo) + model stats + stake-regime + leagues per sport. Mount alleen als status-specifieke deps geleverd (afRateLimit, sportRateLimits, getCurrentStakeRegime, leagues); anders alleen /api/version + /api/changelog.
+- Deps inject: afKey, afRateLimit, sportRateLimits, getCurrentStakeRegime (getter voor live state), leagues object met arrays per sport.
+
+### Changed
+
+- server.js netto **-43 regels** (12103 → 12060).
+- Totaal shrinkage sinds v11.0.0 (12537 baseline): **-477 regels** via 9 extracted route modules.
+
+### Tests
+
+599 passed · 0 failed.
+
 ## [11.2.8] - 2026-04-18
 
 **Phase 5.4f · server.js extraction · picks-read routes + shared safePick helpers**
