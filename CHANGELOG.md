@@ -2,6 +2,27 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.6] - 2026-04-18
+
+**Phase 5.4n · admin-sources cluster (scrape-diagnose + scrape-sources GET/POST)**
+
+### Added
+
+- **[claude] `lib/routes/admin-sources.js`** — 3 admin data-source operator endpoints:
+  - `GET /api/admin/v2/scrape-diagnose?name=X` — live probe één externe bron met HTTP detail-error via safeFetch returnDetails.
+  - `GET /api/admin/v2/scrape-sources` — health + breaker-state + enabled-flag voor alle scrape-bronnen.
+  - `POST /api/admin/v2/scrape-sources` — enable/disable source runtime + reset-breaker; persist naar calib zodat toggle deploys overleeft.
+- Deps inject: requireAdmin, operator (OPERATOR shared state), loadCalib, saveCalib. scraper-base / data-aggregator lazy-required in-module (self-contained lib modules).
+
+### Changed
+
+- server.js netto **-81 regels** (11538 → 11457).
+- Totaal shrinkage sinds v11.0.0 baseline: **-1080 regels** via 16 extracted route modules.
+
+### Tests
+
+609 passed · 0 failed. Lift-and-shift; bestaande scraper-base tests dekken de logica.
+
 ## [11.3.5] - 2026-04-18
 
 **Phase 5.4m · admin-inspect cluster (bookie-concentration / stake-regime / early-payout-summary / pick-candidates-summary / clv-stats)**
