@@ -54,6 +54,7 @@ const createTrackerRouter = require('./lib/routes/tracker');
 const createAdminUsersRouter = require('./lib/routes/admin-users');
 const createBetsRouter = require('./lib/routes/bets');
 const createInfoRouter = require('./lib/routes/info');
+const createPicksRouter = require('./lib/routes/picks');
 const {
   epBucketKey, calcKelly, kellyToUnits, kellyScore, KELLY_FRACTION,
   poisson, poissonOver, poisson3Way,
@@ -2404,7 +2405,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '11.2.7');
+  assert.strictEqual(appMeta.APP_VERSION, '11.2.8');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4983,6 +4984,41 @@ test('user router: construct met valid deps + 2 routes', () => {
   });
   const routes = router.stack.filter(l => l.route).map(l => l.route.path);
   assert.ok(routes.includes('/user/settings'));
+});
+
+test('picks router: throws bij missing deps', () => {
+  assert.throws(() => createPicksRouter({}), /missing required dep/);
+});
+
+test('picks router: construct met valid deps + 2 routes', () => {
+  const router = createPicksRouter({
+    supabase: { from: () => ({ select: () => ({ order: () => ({ limit: () => ({ or: () => ({}) }) }) }) }) },
+    isValidUuid: () => true,
+    getLastPrematchPicks: () => [],
+    getLastLivePicks: () => [],
+    loadScanHistoryFromSheets: async () => [],
+    loadScanHistory: () => [],
+  });
+  const routes = router.stack.filter(l => l.route).map(l => l.route.path);
+  assert.ok(routes.includes('/picks'));
+  assert.ok(routes.includes('/scan-history'));
+});
+
+test('picks router: safePick strips model-internals voor non-admin', () => {
+  const fullPick = { match: 'A vs B', odd: 2.0, reason: 'secret', kelly: 0.05, ep: 0.6 };
+  const safe = createPicksRouter.safePick(fullPick, false);
+  assert.strictEqual(safe.match, 'A vs B');
+  assert.strictEqual(safe.odd, 2.0);
+  assert.strictEqual(safe.reason, undefined);
+  assert.strictEqual(safe.kelly, undefined);
+  assert.strictEqual(safe.ep, undefined);
+});
+
+test('picks router: safePick returnt alles voor admin', () => {
+  const fullPick = { match: 'A vs B', reason: 'full', kelly: 0.05 };
+  const safe = createPicksRouter.safePick(fullPick, true);
+  assert.strictEqual(safe.reason, 'full');
+  assert.strictEqual(safe.kelly, 0.05);
 });
 
 test('info router: throws bij missing deps', () => {

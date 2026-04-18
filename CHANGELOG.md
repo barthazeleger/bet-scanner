@@ -2,6 +2,31 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.2.8] - 2026-04-18
+
+**Phase 5.4f · server.js extraction · picks-read routes + shared safePick helpers**
+
+### Added
+
+- **[claude] `lib/routes/picks.js`** — 2 endpoints:
+  - `GET /api/picks` — huidige prematch + live picks (in-memory state via getters)
+  - `GET /api/scan-history` — laatste N scans uit scan_history tabel
+- Pure helpers `safePick(p, isAdmin)` + `safePicksList(picks, isAdmin)` + `PUBLIC_PICK_FIELDS` geëxporteerd als standalone (voor hergebruik in /api/potd + /api/analyze die nog in server.js staan).
+- server.js importeert nu `safePick/safePicksList` uit lib/routes/picks (geen duplicaat). DRY win voor security-sensitive projectie.
+- 4 nieuwe tests: router missing-deps + wire-check, safePick admin vs non-admin.
+
+### Changed
+
+- server.js netto **-36 regels** (12139 → 12103).
+- Totaal shrinkage sinds v11.0.0 (12537 baseline): **-434 regels** via 9 extracted route modules.
+
+### NIET in scope
+- `/api/potd` (complex record-lookup uit bets-history) en `/api/analyze` (natural-language team/market parser) blijven in server.js tot dedicated sprint. Ze gebruiken nu de geëxporteerde helpers.
+
+### Tests
+
+599 passed · 0 failed.
+
 ## [11.2.7] - 2026-04-18
 
 **Phase 5.4e · server.js extraction · info/meta routes**

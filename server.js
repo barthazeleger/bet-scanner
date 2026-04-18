@@ -9130,16 +9130,18 @@ app.get('/api/bets/:id/current-odds', async (req, res) => {
   }
 });
 
-// Laatste picks ophalen (voor analyse tab)
-app.get('/api/picks', (req, res) => {
-  // SECURITY: same projection als /api/scan-history en /api/analyze.
-  // Non-admin krijgt alleen public-safe veldset; geen reason/kelly/ep/strength/expectedEur/signals.
-  const isAdmin = req.user?.role === 'admin';
-  res.json({
-    prematch: safePicksList(lastPrematchPicks, isAdmin),
-    live:     safePicksList(lastLivePicks, isAdmin),
-  });
-});
+// v11.2.8 Phase 5.4f: /api/picks + /api/scan-history verhuisd naar
+// lib/routes/picks.js. safePicksList wordt gedeeld via die module voor potd +
+// analyze (nog in server.js). POTD + /api/analyze blijven in server.js tot
+// dedicated sprint (complex natural-language parsing resp. record-lookup).
+const createPicksRouter = require('./lib/routes/picks');
+app.use('/api', createPicksRouter({
+  supabase, isValidUuid,
+  getLastPrematchPicks: () => lastPrematchPicks,
+  getLastLivePicks:     () => lastLivePicks,
+  loadScanHistoryFromSheets, loadScanHistory,
+  scanHistoryMax: SCAN_HISTORY_MAX,
+}));
 
 // POTD (Pick of the Day) post generator voor Reddit + X
 app.get('/api/potd', requireAdmin, async (req, res) => {
@@ -9239,45 +9241,10 @@ app.get('/api/potd', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Scan history · laatste N scans met picks
-// SECURITY: model-internals (reason, kelly, ep, strength, expectedEur, signals, scanType)
-// alleen voor admin; non-admin krijgen public-safe veldset zodat IP niet lekt.
-const PUBLIC_PICK_FIELDS = ['match', 'league', 'label', 'odd', 'units', 'prob', 'edge', 'score', 'kickoff', 'bookie', 'sport', 'selected', 'audit'];
-function safePick(p, isAdmin) {
-  if (isAdmin) return p;
-  const out = {};
-  for (const k of PUBLIC_PICK_FIELDS) if (p[k] !== undefined) out[k] = p[k];
-  return out;
-}
-function safePicksList(picks, isAdmin) {
-  return (picks || []).map(p => safePick(p, isAdmin));
-}
-
-app.get('/api/scan-history', async (req, res) => {
-  // v10.8.12: expliciet no-store zodat browser/CDN nooit een stale response
-  // cached — auto-refresh zou anders oude picks blijven zien.
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
-  const isAdmin = req.user?.role === 'admin';
-  try {
-    let query = supabase.from('scan_history').select('*')
-      .order('ts', { ascending: false }).limit(SCAN_HISTORY_MAX);
-    if (!isAdmin && req.user?.id) {
-      if (isValidUuid(req.user.id)) query = query.or(`user_id.eq.${req.user.id},user_id.is.null`);
-    }
-    const { data, error } = await query;
-    if (error) throw new Error(error.message);
-    const history = (data || []).map(r => ({
-      ts: r.ts, type: r.type, totalEvents: r.total_events,
-      picks: safePicksList(r.picks || [], isAdmin),
-    }));
-    return res.json(history);
-  } catch (e) {
-    console.error('scan-history query fout:', e.message);
-    const raw = await loadScanHistoryFromSheets().catch(() => loadScanHistory());
-    const filtered = (raw || []).map(r => ({ ...r, picks: safePicksList(r.picks || [], isAdmin) }));
-    res.json(filtered);
-  }
-});
+// v11.2.8: safePick/safePicksList/PUBLIC_PICK_FIELDS helpers verhuisd naar
+// lib/routes/picks.js. /api/potd en /api/analyze gebruiken ze nog, hieronder
+// geïmporteerd voor backwards-compat.
+const { safePick, safePicksList, PUBLIC_PICK_FIELDS } = require('./lib/routes/picks');
 
 // ── MATCH ANALYSER ENDPOINT ──────────────────────────────────────────────────
 app.post('/api/analyze', async (req, res) => {
