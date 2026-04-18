@@ -2,6 +2,28 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.4] - 2026-04-18
+
+**Phase 5.4l · admin-signals cluster (signal-performance × 2 + model-feed)**
+
+### Added
+
+- **[claude] `lib/routes/admin-signals.js`** — 3 admin-read endpoints:
+  - `GET /api/admin/v2/signal-performance` — persisted signal_stats tabel.
+  - `GET /api/admin/signal-performance` — live analytics: per signal name → n / avgClv / shrunkExcessClv / posClvRate + status (auto_promotable / logging_positive / logging / active / mute_candidate).
+  - `GET /api/model-feed` — calibratie-feed voor admin UI: modelLog + signal weights + market-multipliers + ep-buckets + aggregate perSport.
+- Deps inject: supabase, loadCalib, loadSignalWeights, summarizeSignalMetrics, parseBetSignals, normalizeSport, detectMarket.
+- 2 nieuwe tests.
+
+### Changed
+
+- server.js netto **-76 regels** (11840 → 11764).
+- Totaal shrinkage sinds v11.0.0 baseline: **-773 regels** via 14 extracted route modules.
+
+### Tests
+
+609 passed · 0 failed.
+
 ## [11.3.3] - 2026-04-18
 
 **Phase 5.4k · admin snapshot/tuning utilities**
