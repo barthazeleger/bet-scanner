@@ -47,6 +47,7 @@ const clvBackfill = require('./lib/clv-backfill');
 const earlyPayout = require('./lib/signals/early-payout');
 const earlyPayoutRules = require('./lib/signals/early-payout-rules');
 const createNotificationsRouter = require('./lib/routes/notifications');
+const createClvRouter = require('./lib/routes/clv');
 const {
   epBucketKey, calcKelly, kellyToUnits, kellyScore, KELLY_FRACTION,
   poisson, poissonOver, poisson3Way,
@@ -2397,7 +2398,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '11.2.1');
+  assert.strictEqual(appMeta.APP_VERSION, '11.2.2');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4954,6 +4955,38 @@ test('notifications router: construct met valid deps returnt Express router', ()
   assert.ok(routes.includes('/push/subscribe'));
   assert.ok(routes.includes('/inbox-notifications'));
   assert.ok(routes.includes('/inbox-notifications/read'));
+});
+
+// ── CLV ROUTER (v11.2.2 Phase 5.2 extraction) ───────────────────────────────
+console.log('\n  CLV router (factory extraction):');
+
+test('clv router: throws bij missing deps', () => {
+  assert.throws(() => createClvRouter({}), /missing required dep/);
+});
+
+test('clv router: construct met valid deps + 3 routes', () => {
+  const stubMiddleware = (req, res, next) => next();
+  const router = createClvRouter({
+    supabase: { from: () => ({ select: () => ({}) }) },
+    requireAdmin: stubMiddleware,
+    findGameIdVerbose: async () => ({ fxId: null }),
+    fetchCurrentOdds: async () => null,
+    fetchSnapshotClosing: async () => null,
+    marketKeyFromBetMarkt: () => null,
+    matchesClvRecomputeTarget: () => true,
+    afRateLimit: { remaining: 100, limit: 100, callsToday: 0 },
+    sportRateLimits: {},
+    refreshKillSwitch: async () => {},
+    KILL_SWITCH: { set: new Set() },
+    autoTuneSignalsByClv: async () => ({}),
+    evaluateKellyAutoStepup: async () => ({}),
+  });
+  assert.ok(router);
+  assert.strictEqual(typeof router.use, 'function');
+  const routes = router.stack.filter(l => l.route).map(l => l.route.path);
+  assert.ok(routes.includes('/clv/backfill'));
+  assert.ok(routes.includes('/clv/recompute'));
+  assert.ok(routes.includes('/clv/backfill/probe'));
 });
 
 console.log('\n  Scan-logger (heartbeat notification writer):');

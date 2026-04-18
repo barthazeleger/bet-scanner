@@ -2,6 +2,36 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.2.2] - 2026-04-18
+
+**Phase 5.2 · server.js extraction · CLV routes** (3 endpoints, ~280 regels uit server.js).
+
+### Added
+
+- **[claude] `lib/routes/clv.js`** — factory-pattern Express router. 3 endpoints:
+  - `POST /api/clv/backfill` — vul lege clv_pct voor settled/past-kickoff bets (met snapshot-fallback v11.0.1).
+  - `POST /api/clv/recompute` — forced hercomputeer CLV voor bestaande settled bets (bv. na fetchCurrentOdds fix). Updates alleen bij delta ≥ minDelta. Draait tuning (kill-switch + autoTuneSignals + kellyStepup) na een batch updates.
+  - `GET /api/clv/backfill/probe?bet_id=X` — dry-run diagnose voor één bet.
+- Throws bij missing deps (fail-fast). 13 deps expliciet inject: supabase, requireAdmin, findGameIdVerbose, fetchCurrentOdds, fetchSnapshotClosing, marketKeyFromBetMarkt, matchesClvRecomputeTarget, afRateLimit, sportRateLimits, refreshKillSwitch, KILL_SWITCH, autoTuneSignalsByClv, evaluateKellyAutoStepup.
+- 2 nieuwe tests: missing-deps throws, construct-returnt router met 3 routes wire-check.
+
+### Changed
+
+- server.js netto **−264 regels** (12685 → 12421).
+- Totaal server.js shrinkage sinds v11.0.0: **−156 regels** (12537 baseline → 12421 nu), ondanks 11 nieuwe sanity gates in v11.2.1 + v11.1.x die regels toevoegden.
+
+### Why
+
+Tweede concrete cluster onder modular-from-start doctrine. Pattern identiek aan Phase 5.1 notifications: factory-pattern + expliciete deps + fail-fast + router mount. Demonstreert dat het patroon schaalbaar is voor ALLE toekomstige extracties (auth, bets, admin, tracker, scan).
+
+### Roadmap resterend
+
+Phase 5.3: auth + bets · 5.4: admin/v2 cluster · 5.5: tracker + check-results · 5.6: per-sport scan modules (grootste deel).
+
+### Tests
+
+583 passed · 0 failed · server.js syntax valid. Bestaande CLV backfill + snapshot fallback tests (v11.0.1) blijven werken via geïnjecteerde deps.
+
 ## [11.2.1] - 2026-04-18
 
 **P0 volledige sanity-coverage · pre-operator-bets safety audit**
