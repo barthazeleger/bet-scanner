@@ -2,6 +2,35 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.19] - 2026-04-18
+
+**Phase 6.2b · maintenance + health schedulers**
+
+### Added
+
+- **[claude] `lib/runtime/maintenance-schedulers.js`** — 7 schedulers via één factory:
+  - `scheduleRetentionCleanup` — 24u sweep over odds_snapshots (>30d) en feature_snapshots (>60d).
+  - `scheduleAutotune` — 6u tick CLV-autotune, gate ≥20 nieuwe settled bets per run.
+  - `scheduleBookieConcentrationWatcher` — 6u tick bookie-share check (>60% → warn-push, 24u dedup).
+  - `scheduleHealthAlerts` — 1u tick CLV-milestones + drift-alerts + soft-drawdown (–15% 7d → warn).
+  - `scheduleSignalStatsRefresh` — 24u aggregate per-signal Brier/CLV/PnL/lift, schrijft signal_stats.
+  - `scheduleAutoRetraining` — 7d scan: markten met ≥500 pick_candidates gereed voor residual logistic regression training (log-only voorlopig).
+  - `checkUnitSizeChange` — boot-time unit-baseline/-wijziging log naar notifications.
+- Ook geexporteerd als pure helpers: `computeBookieConcentration` + `writeTrainingExamplesForSettled`.
+- Alle state (`_lastClvAlertN`, `_lastDdAlertAt`, `_driftAlertedKeys`, `_driftAlertResetAt`, `_lastBookieConcAlertAt`, `_lastAutotuneAt`, `_lastAutotuneSettledCount`) nu module-scoped in closure.
+- Deps inject: supabase, loadCalib, saveCalib, readBets, getAdminUserId, notify, normalizeSport, detectMarket, autoTuneSignalsByClv, loadSignalWeights, getCurrentModelVersionId (getter), getUnitEur (getter).
+- Factory met fail-fast dep-validation.
+
+### Changed
+
+- server.js netto **-484 regels** (8820 → 8336).
+- Totaal shrinkage sinds v11.0.0 baseline: **-4201 regels**.
+- Dead comment-headers opgeruimd (FIXTURE SNAPSHOT POLLING, UNIT SIZE CHANGE LOGGING, CLV HEALTH ALERTS) — secties zijn allemaal naar lib/ verhuisd.
+
+### Tests
+
+609 passed · 0 failed. Lift-and-shift zonder gedragswijziging — zelfde 24u/6u/1u/7d intervals, zelfde thresholds (25 CLV milestone-step, 30d/60d retention, >60% concentration warn, -15% drawdown soft, ≥500 pick_candidates residual-trigger), zelfde dedup-cooldowns (24u concentration, 14d drift-reset).
+
 ## [11.3.18] - 2026-04-18
 
 **Phase 6.2a · polling + heartbeat schedulers**
