@@ -2,6 +2,44 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.0.0] - 2026-04-18
+
+**Major version bump** · architectuur-shift "modular-from-start" + drie P0 correctness-bugs uit operator-report weggenomen. Geen breaking API-changes voor externe consumers, wel een doctrine-shift in hoe nieuwe code wordt toegevoegd: alle nieuwe route-handlers, scan-helpers, signal-modules en runtime-helpers landen vanaf nu DIRECT in `lib/routes/`, `lib/scan/`, `lib/signals/`, `lib/runtime/` — nooit meer eerst in server.js. server.js shrinkt monotonisch vanaf deze release.
+
+### P0 correctness-bugs uit operator-report 2026-04-18
+
+- **[claude] C1.1 BTTS/ML/DNB auto-close gate · `lib/runtime/results-checker.js`** (new module).
+  - **WHAT**: nieuwe `resolveBetOutcome(markt, ev, {isLive})` pure functie met volledige settle-pipeline (BTTS, O/U, NRFI/YRFI, 1H O/U + spread, P1 O/U, odd-even, DNB, spread/handicap, ML, 3-weg 60-min). LIVE-gate blokkeert auto-settle tenzij `resolveEarlyLiveOutcome` mathematisch-gegarandeerd resultaat oplevert (beide teams al gescoord voor BTTS Ja, over-lijn al bereikt, etc.). **Nooit auto-L uit live.**
+  - **WHY**: operator report — twee Open BTTS bets werden door `/api/check-results` geauto-L'd terwijl één echt W was en de ander nog in progress. Root-cause: pipeline viel door naar finished-branch met partial score, waarna "else L" in BTTS-logic fireed. Learning-loop werd mee gecontamineerd via `updateCalibration`.
+  - **BONUS**: `updateBetOutcome()` krijgt outcome-flip handling. `revertCalibration()` rolt vorige calibration-delta terug bij W→L of L→W corrections vóór de nieuwe wordt geapplied. Voorheen append-only → operator-correcties verdubbelden de vervuiling.
+  - **IMPACT**: geen wrongly-closed Open bets meer. Signal-weights behouden integriteit bij corrections.
+  - 13 nieuwe tests (live-gate + finished-pipeline coverage).
+
+- **[claude] C1.2 Scan-heartbeat fix · `lib/runtime/scan-logger.js`** (new module).
+  - **WHAT**: onvoorwaardelijke `scan_end` notificatie aan einde van elke scan (cron + manual, ook bij 0 picks). Heartbeat-watcher query nu `['cron_tick', 'scan_end', 'unit_change']` — drop legacy `scan_final_selection` dat nooit werd geschreven. `hasRecentScanActivity(rows)` pure helper voor testability.
+  - **WHY**: operator report — SCANNER STIL alert 21 min NA een succesvolle cron-scan. Heartbeat zocht naar notification-type dat nergens werd geïnsert; cron_tick silent fail (Supabase timeout) of puur-manual scans → false alarm.
+  - **IMPACT**: geen false-positive SCANNER STIL meer.
+  - 6 nieuwe tests.
+
+- **[claude] C1.3 Stake-regime drawdown op echte bankroll · `lib/stake-regime.js`** (computeBankrollMetrics helper).
+  - **WHAT**: `computeBankrollMetrics(bets, startBankroll)` centraliseert regime-input-afleiding (rolling CLV/ROI windows, consecutive L, drawdown). Drawdown-anchor: balance/peak starten op `_activeStartBankroll` i.p.v. 0. Fallback bij startBankroll≤0: drawdownPct=0 (skip gate). Labels in regime-reasons tonen "bankroll piek €X → nu €Y" i.p.v. verwarrende "peak €X (nu €Y)" die P/L-getallen suggereerde.
+  - **WHY**: operator report — web-push "STAKE-REGIME TRANSITION: exploratory → drawdown_hard · drawdown 56.4% sinds peak €88.72 (nu €38.72)". Die cijfers waren NET P/L, niet bankroll. Engine triggered `drawdown_hard` (kelly 0.25, unit ×0.5) terwijl echte bankroll ~8% was gezakt. Doctrine-hook §6 Fase 4: drawdown_hard is "catastrofaal verlies territory" — moet op echte bankroll, niet P/L-delta.
+  - **IMPACT**: regime-engine acteert op correcte realiteit. Operator ziet concrete bankroll-cijfers die matchen met Settings. DRY: ~60 regels duplicate code weg uit server.js.
+  - 7 nieuwe tests (real-anchor voorbeeld uit report, fallback, sort, rolling windows).
+
+### Architectuur / doctrine
+
+- **Modular-from-start directive**: nieuwe code landt voortaan direct in `lib/` (routes/scan/signals/runtime). server.js is voortaan alleen: app-setup, middleware-mount, boot-sequence. Volledige routes-extraction volgt in v11.2.x batch.
+- **Dead-import cleanup**: `resolveEarlyLiveOutcome` uit `server.js` weggehaald (wordt nu via `results-checker.js` aangeroepen).
+- **Silent-catch oplossing**: push-notif failure bij bet-result gebruikt nu `console.warn` met bet-id ipv `() => {}`.
+
+### Tests
+
+549 passed · 0 failed · 26 nieuwe tests gedekt over de 3 bugfixes. `npm audit --audit-level=high` clean.
+
+### Versie-anker locaties (voor onderhouders)
+`lib/app-meta.js`, `package.json`, `package-lock.json` (2x), `index.html` (2x), `README.md`, `docs/PRIVATE_OPERATING_MODEL.md`.
+
 ## [10.12.26] - 2026-04-17
 
 Codex final-review response · eerlijke erkenning + dial-back overclaims + review bewaard in repo.
