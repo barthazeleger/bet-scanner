@@ -2,6 +2,29 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.2.6] - 2026-04-18
+
+**Phase 5.4d · server.js extraction · bets read + delete routes**
+
+### Added
+
+- **[claude] `lib/routes/bets.js`** — 3 endpoints:
+  - `GET /api/bets` — lijst + stats (admin ?all=true voor cross-user)
+  - `GET /api/bets/correlations` — groep open bets op wedstrijd, totalExposure + warning
+  - `DELETE /api/bets/:id` — user-scoped delete, rate-limited
+- Deps: readBets, deleteBet, loadUsers, calcStats, rateLimit, defaultStartBankroll, defaultUnitEur.
+- NIET in scope (complexe deps, eigen sprint): POST/PUT /api/bets, POST /api/bets/recalculate, GET /api/bets/:id/current-odds. Docstring noteert dit.
+- 2 nieuwe tests: missing-deps + route-mount wire-check.
+
+### Changed
+
+- server.js netto **-41 regels** (12211 → 12170).
+- Totaal shrinkage sinds v11.0.0 (12537 baseline): **-367 regels** via 7 extracted route modules.
+
+### Tests
+
+593 passed · 0 failed.
+
 ## [11.2.5] - 2026-04-18
 
 **Phase 5.4c · server.js extraction · admin-users routes**

@@ -8464,44 +8464,15 @@ app.post('/api/live', requireAdmin, (req, res) => {
 });
 
 // Bets ophalen
-app.get('/api/bets', async (req, res) => {
-  try {
-    // Admin can see all data with ?all=true
-    const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
-    const { bets, _raw } = await readBets(userId);
-    // Gebruik user-specifieke instellingen voor stats
-    const users = await loadUsers().catch(() => []);
-    const user  = users.find(u => u.id === req.user?.id);
-    const sb = user?.settings?.startBankroll ?? START_BANKROLL;
-    const ue = user?.settings?.unitEur       ?? UNIT_EUR;
-    res.json({ bets, stats: calcStats(bets, sb, ue), _raw });
-  }
-  catch (e) { res.status(500).json({ error: 'Interne fout' }); }
-});
-
-// Correlated bets · groepen open bets op dezelfde wedstrijd
-app.get('/api/bets/correlations', async (req, res) => {
-  try {
-    const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
-    const { bets } = await readBets(userId);
-    const openBets = bets.filter(b => b.uitkomst === 'Open');
-    const groups = {};
-    openBets.forEach(b => {
-      const key = b.wedstrijd.toLowerCase().trim();
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(b);
-    });
-    const correlated = Object.entries(groups)
-      .filter(([_, g]) => g.length > 1)
-      .map(([match, g]) => ({
-        match,
-        bets: g.map(b => ({ id: b.id, markt: b.markt, odds: b.odds, units: b.units })),
-        totalExposure: g.reduce((s, b) => s + b.inzet, 0),
-        warning: `${g.length} bets op dezelfde wedstrijd · gecorreleerd risico €${g.reduce((s,b) => s + b.inzet, 0).toFixed(2)}`
-      }));
-    res.json({ correlations: correlated });
-  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
-});
+// v11.2.6 Phase 5.4d: GET /api/bets + correlations + DELETE verhuisd naar
+// lib/routes/bets.js. POST/PUT/recalculate + current-odds blijven in
+// server.js tot dedicated sprint (complexere deps).
+const createBetsRouter = require('./lib/routes/bets');
+app.use('/api', createBetsRouter({
+  readBets, deleteBet, loadUsers, calcStats, rateLimit,
+  defaultStartBankroll: START_BANKROLL,
+  defaultUnitEur: UNIT_EUR,
+}));
 
 // Bet toevoegen
 // ── PRE-KICKOFF CHECK · 30 min voor aftrap ───────────────────────────────────
@@ -9059,18 +9030,6 @@ app.get('/api/debug/wl', requireAdmin, async (req, res) => {
 });
 
 // Bet verwijderen
-app.delete('/api/bets/:id', async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    if (rateLimit('betwrite:' + userId, 60, 60 * 1000)) return res.status(429).json({ error: 'Te veel bet-writes · wacht een minuut' });
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
-    await deleteBet(id, userId);
-    res.json(await readBets(userId));
-  }
-  catch (e) { res.status(500).json({ error: 'Interne fout' }); }
-});
-
 // v10.12.24: huidige-odds endpoint voor een bet. Handig voor operator om
 // te zien of de markt is bewogen sinds hij heeft gelogd. Returnt ook
 // delta vs de gelogde odds en "move direction".
