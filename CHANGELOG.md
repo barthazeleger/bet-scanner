@@ -2,6 +2,30 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.5] - 2026-04-18
+
+**Phase 5.4m · admin-inspect cluster (bookie-concentration / stake-regime / early-payout-summary / pick-candidates-summary / clv-stats)**
+
+### Added
+
+- **[claude] `lib/routes/admin-inspect.js`** — 5 admin-read endpoints voor observability/analytics:
+  - `GET /api/admin/v2/bookie-concentration?days=7` — per-bookie stake-share window (soft-book closure-risico spotten).
+  - `GET /api/admin/v2/stake-regime` — preview van unified stake-regime decision op live bets (`computeBankrollMetrics` + `evaluateStakeRegime`), real-bankroll anchor.
+  - `GET /api/admin/v2/early-payout-summary?days=30` — shadow-mode aggregaten uit `early_payout_log`; combinatie-key (bookie, sport, market) met `readyForPromotion` flag (≥50 samples).
+  - `GET /api/admin/v2/pick-candidates-summary?hours=24` — totaal/accepted/rejected + byReason + byBookie + recentRejected top 10.
+  - `GET /api/admin/v2/clv-stats?days=30` — CLV-first KPI per sport + per (sport, markt) bucket; kill-switch eligibility (n≥30 + avg CLV < -2% → WATCHLIST, < -5% → AUTO_DISABLE).
+- Deps inject: supabase, requireAdmin, computeBookieConcentration, getActiveStartBankroll (live getter), aggregateEarlyPayoutStats, normalizeSport, detectMarket.
+- Factory pattern met fail-fast dep-validation.
+
+### Changed
+
+- server.js netto **-226 regels** (11764 → 11538).
+- Totaal shrinkage sinds v11.0.0 baseline: **-999 regels** via 15 extracted route modules.
+
+### Tests
+
+609 passed · 0 failed. Geen nieuwe tests in deze stap — endpoints lift-and-shift zonder gedragswijziging; bestaande stake-regime + early-payout tests dekken de logica.
+
 ## [11.3.4] - 2026-04-18
 
 **Phase 5.4l · admin-signals cluster (signal-performance × 2 + model-feed)**
