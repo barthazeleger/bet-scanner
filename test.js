@@ -2346,7 +2346,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '11.1.0');
+  assert.strictEqual(appMeta.APP_VERSION, '11.1.1');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3795,6 +3795,39 @@ test('odds-parser: buildSpreadFairProbFns ondersteunt opposite-point pairing', (
   const { homeFn, awayFn } = buildSpreadFairProbFns(homeSpr, awaySpr, 0.5, 0.5);
   assert.ok(homeFn(-7.5) > 0.45 && homeFn(-7.5) < 0.55);
   assert.ok(awayFn(7.5) > 0.45 && awayFn(7.5) < 0.55);
+});
+
+test('odds-parser: buildSpreadFairProbFns hasDevig=true bij paired bookies', () => {
+  const homeSpr = [{ side: 'home', point: -7.5, price: 1.95, bookie: 'Bet365' }];
+  const awaySpr = [{ side: 'away', point: 7.5, price: 1.95, bookie: 'Unibet' }];
+  const { hasDevig } = buildSpreadFairProbFns(homeSpr, awaySpr, 0.5, 0.5);
+  assert.strictEqual(hasDevig(-7.5), true, 'opposite-point paired → devig beschikbaar');
+  assert.strictEqual(hasDevig(-12.5), false, 'geen data op -12.5 → geen devig');
+});
+
+test('odds-parser: buildSpreadFairProbFns hasDevig=false bij eenzame bookie (operator-report bug)', () => {
+  // Reproductie van de v11.0 bug: Bet365 biedt -9.5, geen andere bookie heeft
+  // -9.5 of +9.5. Zonder hasDevig-gate gaf fpHome * 0.50 een synthetische prob
+  // die bij extreme lijnen systematisch te hoog was → fake edges.
+  const homeSpr = [{ side: 'home', point: -9.5, price: 3.45, bookie: 'Bet365' }];
+  const awaySpr = []; // niemand anders biedt de overkant
+  const { hasDevig, homeFn } = buildSpreadFairProbFns(homeSpr, awaySpr, 0.69, 0.31);
+  assert.strictEqual(hasDevig(-9.5), false, 'Bet365-only line → geen devig');
+  assert.strictEqual(homeFn(-9.5), 0.69, 'fallback word teruggegeven maar caller moet hem negeren');
+});
+
+test('odds-parser: buildSpreadFairProbFns bookieCountAt telt unique bookies', () => {
+  const homeSpr = [
+    { side: 'home', point: -7.5, price: 1.95, bookie: 'Bet365' },
+    { side: 'home', point: -7.5, price: 1.92, bookie: 'Unibet' },
+    { side: 'home', point: -7.5, price: 1.93, bookie: 'Pinnacle' },
+  ];
+  const awaySpr = [
+    { side: 'away', point: 7.5, price: 1.95, bookie: 'Bet365' },
+  ];
+  const { bookieCountAt } = buildSpreadFairProbFns(homeSpr, awaySpr, 0.5, 0.5);
+  assert.strictEqual(bookieCountAt(-7.5), 3, 'max(home-side, away-side) = 3');
+  assert.strictEqual(bookieCountAt(-12.5), 0, 'geen data → 0');
 });
 
 test('odds-parser: fairProbs2Way devigt home/away odds', () => {

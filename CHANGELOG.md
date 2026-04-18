@@ -2,6 +2,42 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.1.1] - 2026-04-18
+
+**P0 model-integrity fix · NBA/NFL 1H spread fake-edges** (operator-report item extra, image-v11).
+
+### Fixed
+
+- **[claude] 1H basketball + 1H NFL spread gebruikten full-game ML probability direct als fair-prob**. Bij extreme lijnen die alleen Bet365 aanbiedt (bv. -9.5, -10.5) gaf dit synthetische edges van 80-160% (operator zag Denver -9.5 @ 3.45 met 69% model-kans = Edge +85%, pure 158%). Nu: per-point devig via `buildSpreadFairProbFns`, 3-bookie-minimum gate, en `modelMarketSanityCheck` (4% divergence threshold).
+- **[claude] Full-game NBA spread kreeg dezelfde hardening**: hasDevig-gate + bookie-count ≥ 3 + sanity-check + `_fixtureMeta` voor scan-gate playability.
+- **[claude] `lib/odds-parser.js:buildSpreadFairProbFns`** exposeert nu ook `hasDevig(pt)` en `bookieCountAt(pt)` helpers. Callers kunnen nu expliciet checken of de fallback is gebruikt (= geen cross-bookie paired devig) en dat als grond om de pick te rejecten beschouwen.
+
+### Why
+
+Operator-report 2026-04-18 image-v11: twee NBA 1H picks met 158% pure edge, één BTTS Nee met redelijke 2.40 odds. Operator diagnose: "andere bookies bieden deze spread niet eens aan, daardoor is er geen markt-consensus". Diagnose klopt — `fpHome=69%` (full-game ML 2-way) werd direct doorgestuurd als 1H cover-prob, zonder devig, zonder bookie-check, zonder sanity-check. Een Bet365-only extreme lijn kreeg daardoor een fake edge bovenaan de ranking.
+
+Operator stelde ook "veel 2+ odds picks" vast — dat was een symptoom van deze bug: hoge odds combineren met overconfident model-prob = hoge (fake) edge = top van ranking. Fix hierbij lost dat deels op. Bij eerlijke devig + sanity-check eindigen extreme-lijn picks op 5-15% edge (realistisch) of worden gerejected.
+
+### Gates in volgorde
+
+Voor elke 1H + full-game basketball/NFL spread-pick wordt nu gecheckt:
+1. `hasDevig(point) === true` — cross-bookie paired devig beschikbaar? Zo nee, skip.
+2. `bookieCountAt(point) >= 3` — minstens 3 bookies hebben deze line? Zo nee, skip.
+3. `modelMarketSanityCheck(fp, 1/price).agree` — model-prob binnen 4% van markt-implied? Zo nee, skip.
+4. `_fixtureMeta` meegegeven aan `mkP()` — scan-gate kan playability/thinness/stale-price meetsen.
+
+Bij falen van 1 of 2: fallback-prob wordt genegeerd, pick fires niet. Bij falen van 3: logged maar niet als pick doorgevoerd.
+
+### Tests
+
+573 passed · 0 failed (+3 nieuwe hasDevig/bookieCountAt tests). De drie failure-modes (eenzame bookie, paired maar te divergent, valide met 3+ bookies) zijn gedekt.
+
+### IMPACT
+
+Bij volgende scan: geen 1H NBA/NFL spread picks meer uit Bet365-only extreme lijnen zonder market-consensus. Het BTTS/ML/Over/Under patroon blijft ongewijzigd. "Veel 2+ odds" pattern zou drastisch moeten afnemen voor 1H spreads specifiek.
+
+Operator-waarneming dat de laatste scan Denver -9.5 en Cleveland -10.5 toonde met onrealistische edges = bevestigd als bug, niet als tactiek.
+
 ## [11.1.0] - 2026-04-18
 
 **Phase 4 · early-payout shadow signal + referee-reds research-entry** (items 5b en 7 uit operator-report).

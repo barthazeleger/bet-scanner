@@ -3039,26 +3039,39 @@ async function runBasketball(emit) {
         }
 
         // Spread (NBA, variabele lijnen) — per-point devigged consensus voor eerlijke cover-prob.
+        // v11.1.1: hasDevig-gate + bookie-count ≥ 3 + modelMarketSanityCheck. Voorheen kon
+        // een Bet365-only extreme lijn (bv. -12.5) de fallback-prob (fpHome*0.50) raken en
+        // dan een synthetische "+50%" edge opleveren. Nu vereisen we paired devig + ≥3
+        // bookies + divergence ≤ 4%.
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home');
           const awaySpr = parsed.spreads.filter(o => o.side === 'away');
-          // NBA spread-cover ≈ 0.50 × ML wanneer geen paired consensus (fallback)
-          const { homeFn, awayFn } = buildSpreadFairProbFns(homeSpr, awaySpr, fpHome * 0.50, fpAway * 0.50);
+          const { homeFn, awayFn, hasDevig, bookieCountAt } = buildSpreadFairProbFns(homeSpr, awaySpr, fpHome * 0.50, fpAway * 0.50);
           const bH = bestSpreadPick(homeSpr, homeFn, MIN_EDGE + 0.01);
-          if (bH) {
+          if (bH && hasDevig(bH.point) && bookieCountAt(bH.point) >= 3) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
             const fp = homeFn(bH.point);
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Spread | ${bH.bookie}: ${bH.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
-              Math.round(fp*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
+            const marketProb = 1 / bH.price;
+            const sanity = modelMarketSanityCheck(fp, marketProb);
+            if (sanity.agree) {
+              const fxMeta = { fixtureId: gameId, marketType: 'spread', selectionKey: `home_${bH.point}`, line: bH.point };
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+                `Spread | ${bH.bookie}: ${bH.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                Math.round(fp*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals, null, fxMeta);
+            }
           }
           const bA = bestSpreadPick(awaySpr, awayFn, MIN_EDGE + 0.01);
-          if (bA) {
+          if (bA && hasDevig(bA.point) && bookieCountAt(bA.point) >= 3) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
             const fp = awayFn(bA.point);
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Spread | ${bA.bookie}: ${bA.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
-              Math.round(fp*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
+            const marketProb = 1 / bA.price;
+            const sanity = modelMarketSanityCheck(fp, marketProb);
+            if (sanity.agree) {
+              const fxMeta = { fixtureId: gameId, marketType: 'spread', selectionKey: `away_${bA.point}`, line: bA.point };
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+                `Spread | ${bA.bookie}: ${bA.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                Math.round(fp*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals, null, fxMeta);
+            }
           }
         }
 
@@ -3097,23 +3110,42 @@ async function runBasketball(emit) {
           }
         }
 
-        // ── 1st Half Spread (basketball - research: mispriced vs full-game spread) ──
+        // ── 1st Half Spread (basketball) ──
+        // v11.1.1: VOLLEDIGE REWRITE. Vroegere versie gebruikte fpHome (full-game ML 2-way
+        // prob, bv. 69%) direct als fair-prob voor 1H handicap — wat systematisch
+        // overconfident is bij extreme lijnen die alleen Bet365 aanbiedt (-9.5/-10.5).
+        // Operator-report 2026-04-18 image-v11: Denver -9.5 @ 3.45 kreeg 69% model-kans,
+        // Edge +85% (pure 158%) = fake edge. Nu: per-point devig (half-game fallback =
+        // ML × 0.50) + hasDevig-gate + min 3 bookies + divergence ≤ 4%.
         {
           const h1HomeSpr = parsed.halfSpreads.filter(o => o.side === 'home');
           const h1AwaySpr = parsed.halfSpreads.filter(o => o.side === 'away');
-          const bH = bestSpreadPick(h1HomeSpr, fpHome, MIN_EDGE + 0.01);
-          if (bH) {
+          const { homeFn, awayFn, hasDevig, bookieCountAt } = buildSpreadFairProbFns(h1HomeSpr, h1AwaySpr, fpHome * 0.50, fpAway * 0.50);
+          const bH = bestSpreadPick(h1HomeSpr, homeFn, MIN_EDGE + 0.01);
+          if (bH && hasDevig(bH.point) && bookieCountAt(bH.point) >= 3) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, bH.price,
-              `1st Half Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(fpHome*100), bH.edge * 0.18, kickoffTime, bH.bookie, matchSignals);
+            const fp = homeFn(bH.point);
+            const marketProb = 1 / bH.price;
+            const sanity = modelMarketSanityCheck(fp, marketProb);
+            if (sanity.agree) {
+              const fxMeta = { fixtureId: gameId, marketType: 'half_spread', selectionKey: `home_${bH.point}`, line: bH.point };
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, bH.price,
+                `1st Half Spread | ${bH.bookie}: ${bH.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                Math.round(fp*100), bH.edge * 0.18, kickoffTime, bH.bookie, matchSignals, null, fxMeta);
+            }
           }
-          const bA = bestSpreadPick(h1AwaySpr, fpAway, MIN_EDGE + 0.01);
-          if (bA) {
+          const bA = bestSpreadPick(h1AwaySpr, awayFn, MIN_EDGE + 0.01);
+          if (bA && hasDevig(bA.point) && bookieCountAt(bA.point) >= 3) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, bA.price,
-              `1st Half Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-              Math.round(fpAway*100), bA.edge * 0.18, kickoffTime, bA.bookie, matchSignals);
+            const fp = awayFn(bA.point);
+            const marketProb = 1 / bA.price;
+            const sanity = modelMarketSanityCheck(fp, marketProb);
+            if (sanity.agree) {
+              const fxMeta = { fixtureId: gameId, marketType: 'half_spread', selectionKey: `away_${bA.point}`, line: bA.point };
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, bA.price,
+                `1st Half Spread | ${bA.bookie}: ${bA.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                Math.round(fp*100), bA.edge * 0.18, kickoffTime, bA.bookie, matchSignals, null, fxMeta);
+            }
           }
         }
       }
@@ -4874,23 +4906,39 @@ async function runFootballUS(emit) {
           }
         }
 
-        // ── 1st Half Spread (NFL - research: 1H spreads often mispriced vs full-game) ──
+        // ── 1st Half Spread (NFL) ──
+        // v11.1.1: zelfde fix als NBA 1H spread. Per-point devig + hasDevig gate +
+        // bookie-count ≥ 3 + modelMarketSanityCheck. Voorkomt fake edges op extreme
+        // lijnen die alleen 1 bookie aanbiedt.
         {
           const h1HomeSpr = parsed.halfSpreads.filter(o => o.side === 'home');
           const h1AwaySpr = parsed.halfSpreads.filter(o => o.side === 'away');
-          const bH = bestSpreadPick(h1HomeSpr, fpHome, MIN_EDGE + 0.01);
-          if (bH) {
+          const { homeFn, awayFn, hasDevig, bookieCountAt } = buildSpreadFairProbFns(h1HomeSpr, h1AwaySpr, fpHome * 0.50, fpAway * 0.50);
+          const bH = bestSpreadPick(h1HomeSpr, homeFn, MIN_EDGE + 0.01);
+          if (bH && hasDevig(bH.point) && bookieCountAt(bH.point) >= 3) {
             const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, bH.price,
-              `1st Half Spread | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
-              Math.round(fpHome*100), bH.edge * 0.18, kickoffTime, bH.bookie, matchSignals);
+            const fp = homeFn(bH.point);
+            const marketProb = 1 / bH.price;
+            const sanity = modelMarketSanityCheck(fp, marketProb);
+            if (sanity.agree) {
+              const fxMeta = { fixtureId: gameId, marketType: 'half_spread', selectionKey: `home_${bH.point}`, line: bH.point };
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${hm} ${pt}`, bH.price,
+                `1st Half Spread | ${bH.bookie}: ${bH.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                Math.round(fp*100), bH.edge * 0.18, kickoffTime, bH.bookie, matchSignals, null, fxMeta);
+            }
           }
-          const bA = bestSpreadPick(h1AwaySpr, fpAway, MIN_EDGE + 0.01);
-          if (bA) {
+          const bA = bestSpreadPick(h1AwaySpr, awayFn, MIN_EDGE + 0.01);
+          if (bA && hasDevig(bA.point) && bookieCountAt(bA.point) >= 3) {
             const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, bA.price,
-              `1st Half Spread | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
-              Math.round(fpAway*100), bA.edge * 0.18, kickoffTime, bA.bookie, matchSignals);
+            const fp = awayFn(bA.point);
+            const marketProb = 1 / bA.price;
+            const sanity = modelMarketSanityCheck(fp, marketProb);
+            if (sanity.agree) {
+              const fxMeta = { fixtureId: gameId, marketType: 'half_spread', selectionKey: `away_${bA.point}`, line: bA.point };
+              mkP(`${hm} vs ${aw}`, league.name, `🎯 1H ${aw} ${pt}`, bA.price,
+                `1st Half Spread | ${bA.bookie}: ${bA.price} · cover ${(fp*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                Math.round(fp*100), bA.edge * 0.18, kickoffTime, bA.bookie, matchSignals, null, fxMeta);
+            }
           }
         }
 
