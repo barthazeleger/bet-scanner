@@ -2,6 +2,47 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.1.0] - 2026-04-18
+
+**Phase 4 · early-payout shadow signal + referee-reds research-entry** (items 5b en 7 uit operator-report).
+
+### Added
+
+- **[claude] `docs/EARLY_PAYOUT_RULES.md`** — research-doc met per-bookie per-sport per-market early-payout regels. Bet365: 2-goal lead football, 5-run MLB, 20-point NBA, 3-goal NHL, 17-point NFL. Unibet/Pinnacle/Betfair: geen regels (pure full-time settlement). Handbal + NFL playoff gemarkeerd als "verify before activation".
+- **[claude] `lib/signals/early-payout-rules.js`** — genormaliseerde EARLY_PAYOUT_RULES constant dict + getEarlyPayoutRule(bookie, sport, market) lookup helper. Alleen bevestigde regels geëncodeerd; verify-entries blijven weg tot operator signoff.
+- **[claude] `lib/signals/early-payout.js`** — shadow-mode signaal-module:
+  - `evaluateEarlyPayoutFromFinal(args)` — conservatieve ondergrens op basis van final-score differential (mist comeback-loss gevallen, aangegeven in module-docstring; shadow v2 gebruikt /events endpoint).
+  - `logEarlyPayoutShadow(supabase, args)` — schrijft row naar `early_payout_log` tabel alleen wanneer rule applies (ruleApplies=true).
+  - `aggregateEarlyPayoutStats(rows)` — pure helper voor analytics-endpoint.
+- **[claude] SQL migration `docs/migrations-archive/v11.1.0_early_payout_log.sql`** — nieuwe `early_payout_log` tabel met bet_id, bookie, sport, market, selection, outcome, ep_rule_applied, ep_would_have_paid, potential_lift, scores, odds. RLS enabled + service-role policy.
+- **[claude] Settle-flow wiring** — `checkOpenBetResults` roept `logEarlyPayoutShadow` na elke succesvolle `updateBetOutcome`. Fire-and-forget, try/catch omhuld, blokkeert settle-flow niet bij DB-fout.
+- **[claude] GET `/api/admin/v2/early-payout-summary?days=30`** — admin endpoint. Per (bookie, sport, market) combinatie: samples, activationRate, conversionRate, readyForPromotion (bool, ≥50 samples). Shadow-mode readout; geen scoring-impact.
+- **[claude] `docs/RESEARCH_MARKETS_SIGNALS.md`** — referee-reds → O/U 2.5 correlatie-vraag als open research-item gedocumenteerd. Geen code-change; wacht op 200+ settled O/U bets met referee-data vóór shadow-implementatie.
+
+### Why
+
+Operator-report item 5b: "Bet365 early payout voordelen ... is dit nog iets wat we willen? ... bv bij voetbal als team 2 doelpunten voorkomt sluit bet365 hem al af". Bart expliciet gevraagd dit grondig uit te zoeken, per bookie te differentiëren, en te testen of het vaak een W zou zijn geweest ondanks lagere Bet365 odds.
+
+Volgt doctrine `project_signal_promotion_doctrine`: shadow-log eerst, promotion pas bij 50+ samples + bewezen lift. Geen scoring-impact v11.1.0.
+
+### Doctrinaire caveats
+
+- v1 activation-estimate is conservatief (final-diff-floor). Echte activation-rate ligt hoger; comeback-loss scenarios die bet365 WEL had uitbetaald worden gemist. Shadow v2 scope.
+- odds-cost meting (Bet365 vs Unibet prijsspread) nog niet geautomatiseerd — volgt uit line-timeline data wanneer odds_snapshots matures.
+- Alleen moneyline ML-picks worden gelogd (andere markt-types kennen geen EP).
+
+### Tests
+
+570 passed · 0 failed · 14 nieuwe tests:
+- 6 rules-dict lookups (Bet365 per sport, Unibet/Pinnacle null, totals geen EP).
+- 5 evaluateEarlyPayoutFromFinal scenarios (2-0 wouldPay, 1-0 not, Unibet skip, MLB 5-run, NBA 15pt).
+- 2 logEarlyPayoutShadow (skip-on-false, write-on-true).
+- 1 aggregator (3 Bet365 football rows, rates berekend).
+
+### Operator-actie
+
+Migration runnen: `node scripts/migrate.js docs/migrations-archive/v11.1.0_early_payout_log.sql` vóór eerste shadow-log rows kunnen worden geschreven.
+
 ## [11.0.2] - 2026-04-18
 
 **Phase 3 · info-panel + near-miss surface** (items 2 en 6 uit operator-report).

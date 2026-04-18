@@ -44,6 +44,8 @@ const { matchesClvRecomputeTarget } = require('./lib/runtime/operator-actions');
 const { resolveBetOutcome } = require('./lib/runtime/results-checker');
 const { logScanEnd } = require('./lib/runtime/scan-logger');
 const { fetchSnapshotClosing } = require('./lib/clv-backfill');
+const { logEarlyPayoutShadow, aggregateEarlyPayoutStats } = require('./lib/signals/early-payout');
+const { marketKeyFromBetMarkt: _marketKeyFromBetMarkt } = require('./lib/clv-match');
 
 // Snapshot layer (v2 foundation): point-in-time logging voor learning + backtesting
 const snap = require('./lib/snapshots');
@@ -7193,6 +7195,34 @@ app.get('/api/admin/v2/stake-regime', requireAdmin, async (req, res) => {
   }
 });
 
+// ── v2 Admin: early-payout shadow aggregates (Phase 4 / v11.1.0) ────────────
+// GET /api/admin/v2/early-payout-summary?days=30
+// Shadow-mode readout. Toont per (bookie, sport, market) de samples, activation
+// en conversion-rate uit early_payout_log. Geen scoring-impact; alleen
+// observability tot 50+ samples + bewezen lift promotie triggert.
+app.get('/api/admin/v2/early-payout-summary', requireAdmin, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
+    const sinceIso = new Date(Date.now() - days * 86400000).toISOString();
+    const { data: rows, error } = await supabase.from('early_payout_log')
+      .select('bookie_used, sport, market_type, selection_key, actual_outcome, ep_rule_applied, ep_would_have_paid, potential_lift, logged_at')
+      .gte('logged_at', sinceIso);
+    if (error) return res.status(500).json({ error: error.message });
+    const stats = aggregateEarlyPayoutStats(rows || []);
+    const combinations = Object.entries(stats).map(([key, v]) => ({ key, ...v, readyForPromotion: v.samples >= 50 }));
+    combinations.sort((a, b) => b.samples - a.samples);
+    return res.json({
+      days,
+      totalRows: (rows || []).length,
+      combinations,
+      note: 'Shadow-mode. Samples ≥ 50 per combinatie + walk-forward bewijs van lift vereist voor promotion naar actief signaal.',
+    });
+  } catch (e) {
+    console.error('early-payout-summary error:', e.message);
+    res.status(500).json({ error: 'Interne fout · check server logs' });
+  }
+});
+
 // ── v2 Admin: pick_candidates analytics ─────────────────────────────────────
 // GET /api/admin/v2/pick-candidates-summary?hours=24
 // Toont aggregaties: totaal kandidaten, accepted ratio, top reject reasons,
@@ -10607,6 +10637,28 @@ async function checkOpenBetResults(userId = null) {
         tag: 'bet-result-' + bet.id,
         url: '/',
       }).catch(e => console.warn(`[bet-push] failed voor bet ${bet.id}:`, e?.message || e));
+
+      // v11.1.0: early-payout shadow-log. Fire-and-forget met catch, mag
+      // settle-flow niet blokkeren. Alleen relevant als bet.markt mappable is
+      // naar moneyline + bookie heeft EP-regels voor deze sport.
+      try {
+        const mk = _marketKeyFromBetMarkt(bet.markt);
+        if (mk && mk.market_type === 'moneyline' && bet.tip) {
+          await logEarlyPayoutShadow(supabase, {
+            betId: bet.id,
+            bookie: bet.tip,
+            sport: bet.sport || 'football',
+            marketType: mk.market_type,
+            selection: mk.selection_key,
+            actualOutcome: uitkomst,
+            finalScoreHome: ev.scoreH,
+            finalScoreAway: ev.scoreA,
+            oddsUsed: bet.odds,
+          });
+        }
+      } catch (e) {
+        console.warn(`[early-payout] shadow-log skip voor bet ${bet.id}:`, e?.message || e);
+      }
     }
     results.push({
       id: bet.id, wedstrijd: bet.wedstrijd, markt: bet.markt,

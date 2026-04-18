@@ -1,6 +1,43 @@
 # EdgePickr · Market & Signal Expansion Research
 
-Laatste update: 2026-04-14 (v9.3.0 baseline)
+Laatste update: 2026-04-18 (v11.1.0 · early-payout shadow + referee-reds open-vraag)
+
+## Open research-vragen 2026-04-18
+
+### Referee-reds → Over 2.5 / BTTS Yes asymmetrie (operator-report item 7)
+**Hypothese**: scheidsrechters die vaker rode kaarten geven zouden theoretisch
+O/U 2.5 zwaarder moeten belasten dan BTTS Yes (rode kaart = minder tempo/doelpunten
+in 2e helft, maar beide teams kunnen alsnog scoren). Empirisch bewijs is echter
+zwak — rode kaarten komen gemiddeld ~0.3 per wedstrijd voor, te dun om per
+scheidsrechter een stabiele rate te meten onder 100+ wedstrijden.
+
+**Huidige state in code**: `refereeName` wordt wel gecached (server.js:1922 in
+afCache.referees) en in pick-payload gehouden (`referee: !!refereeName`), maar
+**geen cross-feed naar O/U of BTTS probability-aanpassing**. Scheidsrechter is
+observatie-data, geen input.
+
+**Beslissing**: niet bouwen vóór we 200+ settled O/U bets hebben met
+referee-data. Bij dat volume: bereken correlatie tussen `referee.redCardRate`
+en O/U 2.5 uitkomsten. Als Pearson > 0.10 en consistent over 3+ seizoenen →
+shadow-mode signaal bouwen (doctrine `project_signal_promotion_doctrine`).
+
+### Early-payout coverage (operator-report item 5b, v11.1.0)
+**Gelanceerd in shadow**: zie `docs/EARLY_PAYOUT_RULES.md` + `lib/signals/early-payout.js`.
+Bet365 2-goal lead / 5-run lead / 20-point lead / 3-goal lead rules per sport.
+Shadow-log schrijft naar `early_payout_log` tabel. Promotion-trigger: 50+ samples
+per (bookie, sport, market) + conversion > odds-cost + 1% safety margin.
+
+Open items binnen dit signaal:
+- shadow v2: fixture `/events` endpoint gebruiken voor peak-lead-during-match
+  (niet alleen final-score differential). Verhoogt recall; huidige v1 is
+  conservatieve ondergrens.
+- counterfactual-meting: als bet is geplaatst bij Unibet, had plaatsing bij
+  Bet365 (met iets lagere odds) een L naar W geconverteerd? Vereist odds-
+  snapshot match op scan-moment per bookie.
+- handbal + NFL playoff: regels nog verify-status in `EARLY_PAYOUT_RULES.md`;
+  niet meenemen tot operator bevestigt.
+
+
 
 Dit document inventariseert (a) markten in api-sports die we nu niet gebruiken,
 (b) gratis externe APIs die signal-diepte kunnen toevoegen, en (c) een

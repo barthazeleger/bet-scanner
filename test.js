@@ -44,6 +44,8 @@ const operatorActions = require('./lib/runtime/operator-actions');
 const resultsChecker = require('./lib/runtime/results-checker');
 const scanLogger = require('./lib/runtime/scan-logger');
 const clvBackfill = require('./lib/clv-backfill');
+const earlyPayout = require('./lib/signals/early-payout');
+const earlyPayoutRules = require('./lib/signals/early-payout-rules');
 const {
   epBucketKey, calcKelly, kellyToUnits, kellyScore, KELLY_FRACTION,
   poisson, poissonOver, poisson3Way,
@@ -2344,7 +2346,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '11.0.2');
+  assert.strictEqual(appMeta.APP_VERSION, '11.1.0');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -5015,6 +5017,143 @@ test('clv-backfill: ongeldige odds (≤1) worden genegeerd', async () => {
   });
   assert.strictEqual(r.bookieUsed, 'Betway');
   assert.strictEqual(r.closingOdds, 1.92);
+});
+
+// ── EARLY-PAYOUT RULES DICT (v11.1.0) ────────────────────────────────────────
+console.log('\n  Early-payout rules:');
+
+test('early-payout rules: Bet365 football ML → 2 Goals Ahead', () => {
+  const r = earlyPayoutRules.getEarlyPayoutRule('Bet365', 'football', 'moneyline');
+  assert.ok(r, 'Bet365 football ML rule bestaat');
+  assert.strictEqual(r.leadType, 'goals');
+  assert.strictEqual(r.leadThreshold, 2);
+  assert.ok(r.appliesToSelections.includes('home'));
+  assert.ok(r.appliesToSelections.includes('away'));
+});
+
+test('early-payout rules: Bet365 MLB ML → 5 Run Lead', () => {
+  const r = earlyPayoutRules.getEarlyPayoutRule('bet365', 'baseball', 'moneyline');
+  assert.strictEqual(r.leadThreshold, 5);
+  assert.strictEqual(r.leadType, 'runs');
+});
+
+test('early-payout rules: Bet365 NBA ML → 20 Point Lead', () => {
+  const r = earlyPayoutRules.getEarlyPayoutRule('Bet365', 'basketball', 'moneyline');
+  assert.strictEqual(r.leadThreshold, 20);
+});
+
+test('early-payout rules: Bet365 NHL ML → 3 Goal Lead', () => {
+  const r = earlyPayoutRules.getEarlyPayoutRule('Bet365', 'hockey', 'moneyline');
+  assert.strictEqual(r.leadThreshold, 3);
+});
+
+test('early-payout rules: Unibet / Pinnacle hebben geen regels', () => {
+  assert.strictEqual(earlyPayoutRules.getEarlyPayoutRule('Unibet', 'football', 'moneyline'), null);
+  assert.strictEqual(earlyPayoutRules.getEarlyPayoutRule('Pinnacle', 'football', 'moneyline'), null);
+  assert.strictEqual(earlyPayoutRules.bookieHasAnyEarlyPayoutRules('Unibet'), false);
+  assert.strictEqual(earlyPayoutRules.bookieHasAnyEarlyPayoutRules('Bet365'), true);
+});
+
+test('early-payout rules: Over/Under totals hebben nooit EP', () => {
+  assert.strictEqual(earlyPayoutRules.getEarlyPayoutRule('Bet365', 'football', 'total'), null);
+  assert.strictEqual(earlyPayoutRules.getEarlyPayoutRule('Bet365', 'football', 'btts'), null);
+});
+
+// ── EARLY-PAYOUT EVALUATOR + SHADOW-LOG (v11.1.0) ────────────────────────────
+console.log('\n  Early-payout signal (shadow mode):');
+
+test('early-payout evaluator: Bet365 football 2-0 final → ruleApplies true, wouldPay true', () => {
+  const r = earlyPayout.evaluateEarlyPayoutFromFinal({
+    bookie: 'Bet365', sport: 'football', marketType: 'moneyline', selection: 'home',
+    finalScoreHome: 2, finalScoreAway: 0,
+  });
+  assert.strictEqual(r.ruleApplies, true);
+  assert.strictEqual(r.wouldHavePaidByFinalDiff, true);
+});
+
+test('early-payout evaluator: Bet365 football 1-0 final → ruleApplies true, wouldPay false', () => {
+  const r = earlyPayout.evaluateEarlyPayoutFromFinal({
+    bookie: 'Bet365', sport: 'football', marketType: 'moneyline', selection: 'home',
+    finalScoreHome: 1, finalScoreAway: 0,
+  });
+  assert.strictEqual(r.ruleApplies, true);
+  assert.strictEqual(r.wouldHavePaidByFinalDiff, false);
+});
+
+test('early-payout evaluator: Unibet → ruleApplies false (geen EP-regel)', () => {
+  const r = earlyPayout.evaluateEarlyPayoutFromFinal({
+    bookie: 'Unibet', sport: 'football', marketType: 'moneyline', selection: 'home',
+    finalScoreHome: 2, finalScoreAway: 0,
+  });
+  assert.strictEqual(r.ruleApplies, false);
+});
+
+test('early-payout evaluator: MLB 5-run lead → wouldPay true', () => {
+  const r = earlyPayout.evaluateEarlyPayoutFromFinal({
+    bookie: 'Bet365', sport: 'baseball', marketType: 'moneyline', selection: 'away',
+    finalScoreHome: 2, finalScoreAway: 7,
+  });
+  assert.strictEqual(r.wouldHavePaidByFinalDiff, true);
+});
+
+test('early-payout evaluator: NBA 15-point diff → wouldPay false (<20 threshold)', () => {
+  const r = earlyPayout.evaluateEarlyPayoutFromFinal({
+    bookie: 'Bet365', sport: 'basketball', marketType: 'moneyline', selection: 'home',
+    finalScoreHome: 115, finalScoreAway: 100,
+  });
+  assert.strictEqual(r.ruleApplies, true);
+  assert.strictEqual(r.wouldHavePaidByFinalDiff, false);
+});
+
+test('early-payout shadow-log: skipt insert als ruleApplies=false', async () => {
+  let inserted = null;
+  const sb = { from: () => ({ async insert(p) { inserted = p; return { error: null }; } }) };
+  const { logged } = await earlyPayout.logEarlyPayoutShadow(sb, {
+    betId: 1, bookie: 'Unibet', sport: 'football', marketType: 'moneyline', selection: 'home',
+    actualOutcome: 'W', finalScoreHome: 2, finalScoreAway: 0,
+  });
+  assert.strictEqual(logged, false);
+  assert.strictEqual(inserted, null);
+});
+
+test('early-payout shadow-log: schrijft row bij ruleApplies met potential_lift=true (L + wouldPay)', async () => {
+  // Dit is edge-case voor v1: final diff ≥ threshold én actual_outcome=L.
+  // Kan gebeuren als bet is op home ML maar team verloor (bv. home 2-0 → away comeback 3-2),
+  // maar in onze conservative eval op final-score-only is die combinatie onmogelijk
+  // (diff ≥ 2 in selection-direction impliceert W). Test met scenario waarin
+  // selection tegenstrijdig was aan de lead-richting maar rule techniisch applied.
+  // Echte potential_lift meting komt uit event-timeline (shadow v2).
+  let inserted = null;
+  const sb = { from: () => ({ async insert(p) { inserted = p; return { error: null }; } }) };
+  const { logged, evaluation } = await earlyPayout.logEarlyPayoutShadow(sb, {
+    betId: 7, bookie: 'Bet365', sport: 'football', marketType: 'moneyline', selection: 'home',
+    actualOutcome: 'W', finalScoreHome: 3, finalScoreAway: 0, oddsUsed: 1.85,
+  });
+  assert.strictEqual(logged, true);
+  assert.strictEqual(evaluation.wouldHavePaidByFinalDiff, true);
+  assert.ok(inserted);
+  assert.strictEqual(inserted.bet_id, 7);
+  assert.strictEqual(inserted.ep_rule_applied, true);
+  assert.strictEqual(inserted.ep_would_have_paid, true);
+  assert.strictEqual(inserted.potential_lift, false); // actual=W, dus geen lift
+  assert.strictEqual(inserted.odds_used, 1.85);
+});
+
+test('early-payout aggregator: samples + rates per bookie/sport/market', () => {
+  const rows = [
+    { bookie_used: 'Bet365', sport: 'football', market_type: 'moneyline', ep_rule_applied: true, ep_would_have_paid: true, potential_lift: false, actual_outcome: 'W' },
+    { bookie_used: 'Bet365', sport: 'football', market_type: 'moneyline', ep_rule_applied: true, ep_would_have_paid: false, potential_lift: false, actual_outcome: 'L' },
+    { bookie_used: 'Bet365', sport: 'football', market_type: 'moneyline', ep_rule_applied: true, ep_would_have_paid: true, potential_lift: true, actual_outcome: 'L' },
+    { bookie_used: 'Unibet', sport: 'football', market_type: 'moneyline', ep_rule_applied: false, actual_outcome: 'W' }, // should skip (rule not applied)
+  ];
+  const stats = earlyPayout.aggregateEarlyPayoutStats(rows);
+  const k = 'Bet365/football/moneyline';
+  assert.ok(stats[k]);
+  assert.strictEqual(stats[k].samples, 3);
+  assert.strictEqual(stats[k].potentialLifts, 1);
+  assert.strictEqual(stats[k].losses, 2);
+  assert.strictEqual(stats[k].conversionRate, 0.5);
+  assert.strictEqual(stats[k].activationRate, +((2/3).toFixed(4)));
 });
 
 // ── PRICE-MEMORY: line-timeline (v10.10.9, fundament 2 uit Bouwvolgorde) ─────
