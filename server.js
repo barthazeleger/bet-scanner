@@ -7428,8 +7428,8 @@ app.post('/api/live', requireAdmin, (req, res) => {
 
 // Bets ophalen
 // v11.2.6 Phase 5.4d: GET /api/bets + correlations + DELETE verhuisd naar
-// lib/routes/bets.js. POST/PUT/recalculate + current-odds blijven in
-// server.js tot dedicated sprint (complexere deps).
+// lib/routes/bets.js. POST/PUT/recalculate + current-odds zijn in v11.3.10
+// naar lib/routes/bets-write.js verhuisd (mount verderop in dit bestand).
 const createBetsRouter = require('./lib/routes/bets');
 app.use('/api', createBetsRouter({
   readBets, deleteBet, loadUsers, calcStats, rateLimit,
@@ -7749,150 +7749,27 @@ async function scheduleCLVCheck(bet) {
   console.log(`📊 CLV check gepland voor "${bet.wedstrijd}" over ${Math.round(delayMs/60000)} min (2 min voor aftrap)`);
 }
 
-app.post('/api/bets', async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    // v10.12.1 (security): 60 writes/min per user. Voorkomt spam-fill van bets
-    // tabel + aanloop-kosten op writeBet → getUserUnitEur DB lookups.
-    if (rateLimit('betwrite:' + userId, 60, 60 * 1000)) return res.status(429).json({ error: 'Te veel bet-writes · wacht een minuut' });
-    const body = req.body || {};
-    // Input validation
-    if (!body.wedstrijd || typeof body.wedstrijd !== 'string') return res.status(400).json({ error: 'Wedstrijd is verplicht' });
-    if (!body.markt || typeof body.markt !== 'string') return res.status(400).json({ error: 'Markt is verplicht' });
-    const odds = parseFloat(body.odds);
-    if (isNaN(odds) || odds <= 1.0) return res.status(400).json({ error: 'Odds moeten hoger zijn dan 1.0' });
-    const units = parseFloat(body.units);
-    if (isNaN(units) || units <= 0) return res.status(400).json({ error: 'Units moeten hoger zijn dan 0' });
-    const VALID_OUTCOMES = new Set(['Open', 'W', 'L']);
-    if (body.uitkomst && !VALID_OUTCOMES.has(body.uitkomst)) return res.status(400).json({ error: 'Uitkomst moet Open, W of L zijn' });
-    // Fix datum for late-night/early-morning kickoffs (00:00-09:59)
-    // If tijd is between 00:00 and 09:59 and datum is today, change datum to tomorrow
-    if (body.datum && body.tijd) {
-      const tijdH = parseInt(body.tijd.split(':')[0]);
-      if (!isNaN(tijdH) && tijdH >= 0 && tijdH < 10) {
-        const todayAms = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-        // Parse datum (DD-MM-YYYY format)
-        const datumParts = body.datum.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-        if (datumParts) {
-          const datumISO = `${datumParts[3]}-${datumParts[2]}-${datumParts[1]}`;
-          if (datumISO === todayAms) {
-            const tomorrowAms = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-            const [y, m, d] = tomorrowAms.split('-');
-            body.datum = `${d}-${m}-${y}`;
-          }
-        }
-      }
-    }
-
-    const { bets } = await readBets(userId);
-    const nextId = bets.length > 0 ? Math.max(...bets.map(b => b.id)) + 1 : 1;
-    const newBet = { ...body, id: nextId, odds, units, uitkomst: body.uitkomst || 'Open' };
-    await writeBet(newBet, userId);
-    // v10.12.25: log crashes in background-schedulers zodat silent-failure
-    // niet betekent "bet heeft geen CLV-tracking en niemand merkt het".
-    schedulePreKickoffCheck(newBet).catch(e => console.warn(`[pre-kickoff] schedule failed voor bet ${newBet?.id}:`, e?.message || e));
-    scheduleCLVCheck(newBet).catch(e => console.warn(`[CLV] schedule failed voor bet ${newBet?.id}:`, e?.message || e));
-    const result = await readBets(userId);
-    // Check for correlated bets on the same match
-    const newMatch = (newBet.wedstrijd || '').toLowerCase().trim();
-    if (newMatch) {
-      const openOnSame = result.bets.filter(b =>
-        b.uitkomst === 'Open' && b.id !== nextId &&
-        b.wedstrijd.toLowerCase().trim() === newMatch
-      );
-      if (openOnSame.length > 0) {
-        const allOnMatch = [newBet, ...openOnSame];
-        const totalExposure = allOnMatch.reduce((s, b) => s + (b.inzet || (b.units || 0) * 10), 0);
-        result.correlationWarning = {
-          match: newBet.wedstrijd,
-          count: allOnMatch.length,
-          bets: allOnMatch.map(b => ({ id: b.id, markt: b.markt || '', odds: b.odds || b.odd || 0 })),
-          totalExposure,
-          message: `${allOnMatch.length} bets op ${newBet.wedstrijd} · gecorreleerd risico €${totalExposure.toFixed(2)}`
-        };
-      }
-    }
-    res.json(result);
-  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
-});
-
-// Uitkomst / bet-velden updaten
-app.put('/api/bets/:id', async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    if (rateLimit('betwrite:' + userId, 60, 60 * 1000)) return res.status(429).json({ error: 'Te veel bet-writes · wacht een minuut' });
-    const { uitkomst, odds, units, tip, sport } = req.body || {};
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
-    if (uitkomst && !['Open', 'W', 'L'].includes(uitkomst)) return res.status(400).json({ error: 'Uitkomst moet Open, W of L zijn' });
-    // v10.12.1 (security): sport-whitelist. Voorheen accepteerde dit arbitraire
-    // strings → vervuilde normalizeSport() buckets + calibration.
-    const ALLOWED_SPORTS = new Set(['football','basketball','hockey','baseball','american-football','handball']);
-    if (sport != null && !ALLOWED_SPORTS.has(String(sport))) return res.status(400).json({ error: 'Ongeldige sport' });
-    const updates = {};
-    const userUe = await getUserUnitEur(userId);
-    if (odds != null) updates.odds = parseFloat(odds);
-    if (units != null) { updates.units = parseFloat(units); updates.inzet = +(parseFloat(units) * userUe).toFixed(2); }
-    if (tip) updates.tip = tip;
-    if (sport) updates.sport = sport;
-    // Score override (voor corrigeren van picks die met buggy edge-calc zijn gelogd)
-    if (req.body.score === null || typeof req.body.score === 'number') {
-      updates.score = req.body.score;
-    }
-    if (Object.keys(updates).length) {
-      let updateQuery = supabase.from('bets').update(updates).eq('bet_id', id);
-      if (userId) updateQuery = updateQuery.eq('user_id', userId);
-      await updateQuery;
-    }
-    if (uitkomst) {
-      // Uitkomst in dezelfde request: updateBetOutcome herberekent wl
-      await updateBetOutcome(id, uitkomst, userId);
-    } else if (odds != null || units != null) {
-      // Odds of units aangepast zonder nieuwe uitkomst: als bet al settled is, wl herberekenen
-      // zodat bankroll/ROI consistent blijft. Voorkomt stale wl-waarden op historische bets.
-      let readQ = supabase.from('bets').select('*').eq('bet_id', id);
-      if (userId) readQ = readQ.eq('user_id', userId);
-      const { data: row } = await readQ.single();
-      if (row && (row.uitkomst === 'W' || row.uitkomst === 'L')) {
-        const newInzet = row.inzet != null ? row.inzet : +((row.units || 0) * userUe).toFixed(2);
-        const newWl = row.uitkomst === 'W'
-          ? +((row.odds - 1) * newInzet).toFixed(2)
-          : +(-newInzet).toFixed(2);
-        let wlQ = supabase.from('bets').update({ wl: newWl }).eq('bet_id', id);
-        if (userId) wlQ = wlQ.eq('user_id', userId);
-        await wlQ;
-      }
-    }
-    res.json(await readBets(userId));
-  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
-});
-
-// W/L herberekenen voor alle settled bets (fix na inzet-bug)
-app.post('/api/bets/recalculate', requireAdmin, async (req, res) => {
-  try {
-    let fixed = 0;
-    // Admin recalculate: filter by user unless ?all=true
-    const userId = req.user?.role === 'admin' && req.query.all ? null : req.user?.id;
-    let settledQuery = supabase.from('bets').select('*').in('uitkomst', ['W', 'L']);
-    if (userId) settledQuery = settledQuery.eq('user_id', userId);
-    const { data: settledBets } = await settledQuery;
-    const recalcUe = await getUserUnitEur(userId);
-    for (const bet of (settledBets || [])) {
-      const inzet = bet.inzet || +(bet.units * recalcUe).toFixed(2);
-      const wl = bet.uitkomst === 'W' ? +((bet.odds-1)*inzet).toFixed(2) : +(-inzet).toFixed(2);
-      if (Math.abs((bet.wl || 0) - wl) >= 0.01) {
-        await supabase.from('bets').update({ wl }).eq('bet_id', bet.bet_id);
-        fixed++;
-      }
-    }
-    const { bets } = await readBets(userId);
-    const users = await loadUsers().catch(() => []);
-    const user  = users.find(u => u.id === req.user?.id);
-    const sb = user?.settings?.startBankroll ?? START_BANKROLL;
-    const ue = user?.settings?.unitEur       ?? UNIT_EUR;
-    res.json({ fixed, bets, stats: calcStats(bets, sb, ue) });
-  } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
-});
+// v11.3.10 Phase 5.4r: POST /api/bets, PUT /api/bets/:id, POST /api/bets/recalculate
+// en GET /api/bets/:id/current-odds verhuisd naar lib/routes/bets-write.js via
+// factory-pattern. Lift-and-shift: zelfde gedrag, zelfde deps, zelfde responses.
+const createBetsWriteRouter = require('./lib/routes/bets-write');
+app.use('/api', createBetsWriteRouter({
+  supabase,
+  rateLimit,
+  requireAdmin,
+  readBets,
+  writeBet,
+  updateBetOutcome,
+  getUserUnitEur,
+  loadUsers,
+  calcStats,
+  defaultStartBankroll: START_BANKROLL,
+  defaultUnitEur: UNIT_EUR,
+  schedulePreKickoffCheck,
+  scheduleCLVCheck,
+  afGet,
+  marketKeyFromBetMarkt,
+}));
 
 // v11.2.2 Phase 5.2: CLV backfill + recompute + probe verhuisd naar
 // lib/routes/clv.js via factory-pattern. Handelt admin-only vul van
@@ -7992,106 +7869,6 @@ app.get('/api/debug/wl', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Interne fout' }); }
 });
 
-// Bet verwijderen
-// v10.12.24: huidige-odds endpoint voor een bet. Handig voor operator om
-// te zien of de markt is bewogen sinds hij heeft gelogd. Returnt ook
-// delta vs de gelogde odds en "move direction".
-app.get('/api/bets/:id/current-odds', async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Ongeldig ID' });
-    if (rateLimit('currentodds:' + userId, 30, 60 * 1000)) return res.status(429).json({ error: 'Te veel refreshes · wacht een minuut' });
-    // Haal bet op (scoped per user)
-    let betQuery = supabase.from('bets').select('*').eq('bet_id', id);
-    if (userId) betQuery = betQuery.eq('user_id', userId);
-    const { data: bet, error: betErr } = await betQuery.single();
-    if (betErr || !bet) return res.status(404).json({ error: 'Bet niet gevonden' });
-    if (!bet.fixture_id) return res.json({ note: 'Geen fixture_id gekoppeld aan deze bet; huidige odds niet opvraagbaar.', canRefresh: false });
-    // Skip als uitkomst al bekend — zinloos om odds van afgelopen match te fetchen
-    if (bet.uitkomst === 'W' || bet.uitkomst === 'L') {
-      return res.json({ note: 'Bet is al settled; current-odds refresh wordt overgeslagen.', canRefresh: false });
-    }
-    // Sport-gebaseerde api host
-    const sport = (bet.sport || 'football').toLowerCase();
-    const hostMap = {
-      football: { host: 'v3.football.api-sports.io', path: '/odds' },
-      basketball: { host: 'v1.basketball.api-sports.io', path: '/odds' },
-      hockey: { host: 'v1.hockey.api-sports.io', path: '/odds' },
-      baseball: { host: 'v1.baseball.api-sports.io', path: '/odds' },
-      'american-football': { host: 'v1.american-football.api-sports.io', path: '/odds' },
-      handball: { host: 'v1.handball.api-sports.io', path: '/odds' },
-    };
-    const cfg = hostMap[sport];
-    if (!cfg) return res.status(400).json({ error: `Sport '${sport}' heeft geen odds-endpoint` });
-    // Haal preferred bookie(s)
-    const users = await loadUsers().catch(() => []);
-    const u = users.find(x => x.id === userId);
-    const preferred = Array.isArray(u?.settings?.preferredBookies) && u.settings.preferredBookies.length
-      ? u.settings.preferredBookies.map(x => String(x).toLowerCase())
-      : ['bet365', 'unibet'];
-    // Fetch odds
-    const oddsResp = await afGet(cfg.host, cfg.path, { fixture: bet.fixture_id });
-    if (!oddsResp?.length) return res.json({ note: 'Geen odds beschikbaar bij api-sports', canRefresh: true });
-    const bookmakers = oddsResp[0]?.bookmakers || [];
-    // Filter op preferred bookies eerst, fallback naar alle bookmakers
-    const preferredBks = bookmakers.filter(b => preferred.some(p => String(b.name || '').toLowerCase().includes(p)));
-    const searchBks = preferredBks.length ? preferredBks : bookmakers;
-    // Use resolveOddFromBookie via clv-match voor consistente matching
-    const mapped = marketKeyFromBetMarkt(bet.markt || '');
-    if (!mapped?.market_type || !mapped?.selection_key) {
-      return res.json({ note: 'Markt niet mappable voor odds-refresh', canRefresh: true, marketRaw: bet.markt });
-    }
-    // Zoek beste prijs in preferred bookies voor matching markt
-    let best = { price: 0, bookie: null };
-    for (const bk of searchBks) {
-      for (const betDef of (bk.bets || [])) {
-        for (const val of (betDef.values || [])) {
-          const rawName = String(val.value || '').toLowerCase();
-          const price = parseFloat(val.odd);
-          if (!Number.isFinite(price) || price <= 1.0) continue;
-          // Simpele match op selection_key (home/away/draw/yes/no/over/under)
-          const match = rawName === mapped.selection_key
-            || (mapped.selection_key === 'home' && rawName === 'home')
-            || (mapped.selection_key === 'away' && rawName === 'away')
-            || (mapped.selection_key === 'draw' && rawName === 'draw')
-            || (mapped.selection_key === 'yes' && /^yes/.test(rawName))
-            || (mapped.selection_key === 'no' && /^no/.test(rawName))
-            || (mapped.selection_key === 'over' && /over/.test(rawName))
-            || (mapped.selection_key === 'under' && /under/.test(rawName));
-          if (match && price > best.price) {
-            best = { price: +price.toFixed(3), bookie: bk.name };
-          }
-        }
-      }
-    }
-    if (best.price <= 0) return res.json({ note: 'Markt niet gevonden in huidige odds-response', canRefresh: true });
-    const logged = parseFloat(bet.odds);
-    const deltaAbs = +(best.price - logged).toFixed(3);
-    const deltaPct = logged > 0 ? +((best.price - logged) / logged * 100).toFixed(2) : null;
-    const impliedLogged = logged > 0 ? +(1 / logged).toFixed(4) : null;
-    const impliedCurrent = best.price > 0 ? +(1 / best.price).toFixed(4) : null;
-    const direction = deltaAbs > 0 ? 'lengthened' : deltaAbs < 0 ? 'shortened' : 'flat';
-    const preferredMatch = preferredBks.some(b => String(b.name || '').toLowerCase() === String(best.bookie || '').toLowerCase());
-    res.json({
-      canRefresh: true,
-      fixtureId: bet.fixture_id,
-      loggedOdds: logged,
-      loggedBookie: bet.tip || null,
-      currentOdds: best.price,
-      currentBookie: best.bookie,
-      currentFromPreferred: preferredMatch,
-      deltaAbs,
-      deltaPct,
-      direction,
-      impliedLogged,
-      impliedCurrent,
-    });
-  } catch (e) {
-    console.error('current-odds error:', e.message);
-    res.status(500).json({ error: 'Interne fout · check server logs' });
-  }
-});
 
 // v11.2.8 Phase 5.4f: /api/picks + /api/scan-history verhuisd naar
 // lib/routes/picks.js. safePicksList wordt gedeeld via die module voor potd +

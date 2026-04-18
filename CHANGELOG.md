@@ -2,6 +2,29 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.10] - 2026-04-18
+
+**Phase 5.4r · bets-write cluster (POST/PUT/recalculate/current-odds)**
+
+### Added
+
+- **[claude] `lib/routes/bets-write.js`** — 4 bets write-endpoints extracted uit server.js:
+  - `POST /api/bets` — nieuwe bet + datum-fix (late-night kickoff), pre-kickoff + CLV scheduling, correlation-warning op zelfde wedstrijd.
+  - `PUT /api/bets/:id` — outcome/odds/units/sport/tip update, automatische wl-herberekening als odds/units wijzigen op settled bet, updateBetOutcome bij uitkomst-change.
+  - `POST /api/bets/recalculate` — admin bulk wl-recompute over settled bets.
+  - `GET /api/bets/:id/current-odds` — preferred-bookie odds refresh + drift (delta/direction/implied), respecteert settled-state.
+- Factory deps: supabase, rateLimit, requireAdmin, readBets, writeBet, updateBetOutcome, getUserUnitEur, loadUsers, calcStats, defaults, schedulePreKickoffCheck, scheduleCLVCheck, afGet, marketKeyFromBetMarkt. Fail-fast dep-validation.
+- Comment-docstring op `lib/routes/bets.js` bijgewerkt (verwijst nu naar bets-write.js voor de write-endpoints).
+
+### Changed
+
+- server.js netto **-223 regels** (10799 → 10576).
+- Totaal shrinkage sinds v11.0.0 baseline: **-1957 regels** via 20 extracted route modules.
+
+### Tests
+
+609 passed · 0 failed. Lift-and-shift — geen gedragswijziging, zelfde responses, zelfde validatie-regels, zelfde rate-limits.
+
 ## [11.3.9] - 2026-04-18
 
 **Phase 5.4q · admin model-eval cluster (walkforward + training-examples-build + drift + why-this-pick)**
