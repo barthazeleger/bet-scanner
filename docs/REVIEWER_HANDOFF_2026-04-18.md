@@ -21,7 +21,7 @@ Full finding-by-finding table with pushback rationale in `docs/CODE_REVIEW_RESPO
 
 ## Verification
 
-- `npm test` → **632 passed, 0 failed** (was 609 before your first pass; +15 regression tests for your findings, +8 new route-level integration tests).
+- `npm test` → **634 passed, 0 failed** (was 609 before your first pass; +25 regression + integration tests total across Phase 7-10).
 - `npm run audit:high` → 0 vulnerabilities.
 - `node -c server.js` → syntax clean.
 - Server boot smoke → all schedulers "actief", no boot errors.
