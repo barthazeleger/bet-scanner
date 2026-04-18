@@ -1251,6 +1251,56 @@ test('deriveIncOTProbFrom3Way: invalid input returns null', () => {
 
 // ── modelMarketSanityCheck ───────────────────────────────────────────────────
 
+// ── passesDivergence2Way (v11.1.2) ──────────────────────────────────────────
+
+test('passesDivergence2Way: model matcht markt → beide passen', () => {
+  // Markt: 2.00 / 2.00 = 50/50 fair. Model zegt 49/51 = 1pp divergence.
+  const r = modelMath.passesDivergence2Way(0.49, 0.51, 2.00, 2.00);
+  assert.strictEqual(r.passA, true);
+  assert.strictEqual(r.passB, true);
+  assert.ok(r.marketFair.a > 0.49 && r.marketFair.a < 0.51);
+});
+
+test('passesDivergence2Way: BTTS bug reproductie — 74% model vs 42% market → block', () => {
+  // Sandefjord/Rosenborg BTTS Nee @ 2.40, 74% model. Yes @ ~1.60.
+  // Devigged: yes = 60%, no = 40% (approx). Model no=74% → 34pp divergence → FAIL.
+  const r = modelMath.passesDivergence2Way(0.26, 0.74, 1.60, 2.40);
+  assert.strictEqual(r.passA, false, 'Yes side faalt (26% model vs ~60% market)');
+  assert.strictEqual(r.passB, false, 'No side faalt (74% model vs ~40% market)');
+});
+
+test('passesDivergence2Way: NBA ML signal-push bug → block', () => {
+  // Signal-adjusted adjHome=65%, adjAway=35%. Market (via odds) = 52%/48%.
+  // 13pp divergence → blokkeren.
+  const r = modelMath.passesDivergence2Way(0.65, 0.35, 1.90, 2.10);
+  assert.strictEqual(r.passA, false);
+  assert.strictEqual(r.passB, false);
+});
+
+test('passesDivergence2Way: vig-out-of-range → fail-open (beide passeren)', () => {
+  // Exotisch-hoge vig (bv. 20%) → gate skip om false positives te voorkomen
+  const r = modelMath.passesDivergence2Way(0.80, 0.20, 1.10, 1.10);
+  assert.strictEqual(r.passA, true);
+  assert.strictEqual(r.passB, true);
+  assert.strictEqual(r.marketFair, null);
+});
+
+test('passesDivergence2Way: ongeldige prijs → fail-open', () => {
+  const r = modelMath.passesDivergence2Way(0.5, 0.5, 0, 2.0);
+  assert.strictEqual(r.passA, true);
+  assert.strictEqual(r.passB, true);
+  assert.strictEqual(r.marketFair, null);
+});
+
+test('passesDivergence2Way: custom threshold', () => {
+  // 10% divergence, 15% threshold → pass
+  const r1 = modelMath.passesDivergence2Way(0.60, 0.40, 2.00, 2.00, 0.15);
+  assert.strictEqual(r1.passA, true);
+  // 10% divergence, 5% threshold → fail
+  const r2 = modelMath.passesDivergence2Way(0.60, 0.40, 2.00, 2.00, 0.05);
+  assert.strictEqual(r2.passA, false);
+});
+
 test('modelMarketSanityCheck: agree when within threshold', () => {
   const r = modelMarketSanityCheck(0.50, 0.52, 0.04);
   assert.strictEqual(r.agree, true);
@@ -2346,7 +2396,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '11.1.1');
+  assert.strictEqual(appMeta.APP_VERSION, '11.1.2');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);

@@ -267,7 +267,7 @@ const {
   NHL_OT_HOME_SHARE, MODEL_MARKET_DIVERGENCE_THRESHOLD, KELLY_FRACTION,
   getKellyFraction, setKellyFraction, KELLY_FRACTION_MIN, KELLY_FRACTION_MAX, KELLY_FRACTION_STEP,
   poisson, poissonOver, poisson3Way,
-  devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck,
+  devigProportional, consensus3Way, deriveIncOTProbFrom3Way, modelMarketSanityCheck, passesDivergence2Way,
   normalizeTeamName, teamMatchScore, normalizeSport,
   detectMarket, calcKelly, kellyToUnits, kellyScore, epBucketKey,
   pitcherAdjustment, pitcherReliabilityFactor, goalieAdjustment,
@@ -2991,13 +2991,16 @@ async function runBasketball(emit) {
         // v10.12.8 Phase A.1b basketball: ML is 2-way (geen draw)
         const fxMetaBbH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
         const fxMetaBbA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
+        // v11.1.2: sanity-gate tegen signal-pushed adjHome/adjAway die ver
+        // van market-consensus afligt. Zelfde patroon als hockey ML.
+        const bbMlGate = passesDivergence2Way(adjHome, adjAway, bH.price, bA.price);
         // Moneyline picks
-        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && bbMlGate.passA)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
             Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaBbH);
 
-        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && bbMlGate.passB)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
             Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaBbA);
@@ -3806,17 +3809,17 @@ async function runHockey(emit) {
           }
         }
 
-        // Puck line (spread) — NHL standard is ±1.5. Gebruik spread-specifieke
-        // devigged consensus, niet ML fpHome (Home wins ≠ Home covers -1.5).
+        // Puck line (spread) — NHL standard is ±1.5. v11.1.2: vereisen nu
+        // paired devig (≥3 bookies per zijde) ÉN sanity check. Fallback naar
+        // fpHome × 0.55 werkt alleen wanneer we geen consensus hebben; in dat
+        // geval skippen we de pick (liever geen pick dan fake edge).
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
           const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
-          // Cover-kans voor -1.5 in NHL is historisch ~0.55 × ML win prob
-          let fpHomePuck = fpHome * 0.55;
-          let fpAwayPuck = fpAway * 0.55;
           const home15 = homeSpr.filter(s => s.point === -1.5);
           const away15 = awaySpr.filter(s => s.point === 1.5);
-          if (home15.length >= 2 && away15.length >= 2) {
+          let fpHomePuck = null, fpAwayPuck = null;
+          if (home15.length >= 3 && away15.length >= 3) {
             const avgH = home15.reduce((s,o)=>s+1/o.price, 0) / home15.length;
             const avgA = away15.reduce((s,o)=>s+1/o.price, 0) / away15.length;
             const tot = avgH + avgA;
@@ -3825,19 +3828,29 @@ async function runHockey(emit) {
               fpAwayPuck = avgA / tot;
             }
           }
-          const bH = bestSpreadPick(homeSpr, fpHomePuck, MIN_EDGE + 0.01);
-          if (bH) {
-            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Puck Line | ${bH.bookie}: ${bH.price} · cover ${(fpHomePuck*100).toFixed(1)}%${sharedNotes} | ${ko}`,
-              Math.round(fpHomePuck*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
-          }
-          const bA = bestSpreadPick(awaySpr, fpAwayPuck, MIN_EDGE + 0.01);
-          if (bA) {
-            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Puck Line | ${bA.bookie}: ${bA.price} · cover ${(fpAwayPuck*100).toFixed(1)}%${sharedNotes} | ${ko}`,
-              Math.round(fpAway*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
+          if (fpHomePuck != null && fpAwayPuck != null) {
+            const bH = bestSpreadPick(homeSpr, fpHomePuck, MIN_EDGE + 0.01);
+            if (bH) {
+              const sanity = modelMarketSanityCheck(fpHomePuck, 1 / bH.price);
+              if (sanity.agree) {
+                const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+                const fxMeta = { fixtureId: gameId, marketType: 'puck_line', selectionKey: `home_${bH.point}`, line: bH.point };
+                mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+                  `Puck Line | ${bH.bookie}: ${bH.price} · cover ${(fpHomePuck*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                  Math.round(fpHomePuck*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals, null, fxMeta);
+              }
+            }
+            const bA = bestSpreadPick(awaySpr, fpAwayPuck, MIN_EDGE + 0.01);
+            if (bA) {
+              const sanity = modelMarketSanityCheck(fpAwayPuck, 1 / bA.price);
+              if (sanity.agree) {
+                const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+                const fxMeta = { fixtureId: gameId, marketType: 'puck_line', selectionKey: `away_${bA.point}`, line: bA.point };
+                mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+                  `Puck Line | ${bA.bookie}: ${bA.price} · cover ${(fpAwayPuck*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                  Math.round(fpAwayPuck*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals, null, fxMeta);
+              }
+            }
           }
         }
 
@@ -4306,13 +4319,14 @@ async function runBaseball(emit) {
         // v10.12.9 Phase A.1b baseball: ML 2-way
         const fxMetaMlbH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
         const fxMetaMlbA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
-        // Moneyline picks
-        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+        // v11.1.2: sanity-gate tegen pitcher/form-signal-pushed adjHome/adjAway.
+        const mlbMlGate = passesDivergence2Way(adjHome, adjAway, bH.price, bA.price);
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && mlbMlGate.passA)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
             Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaMlbH);
 
-        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && mlbMlGate.passB)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
             Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaMlbA);
@@ -4352,42 +4366,48 @@ async function runBaseball(emit) {
           }
         }
 
-        // Run Line (spread) — MLB standard is ±1.5. Eerder bug: pool mixte
-        // verschillende point-lines (bv -1.5 @ 2.17 en -2.5 @ 4.20), waardoor
-        // bestFromArr soms >3.8 terugkwam en pick geskipt werd. Nu filter op ±1.5.
+        // Run Line (spread) — MLB standard is ±1.5. v11.1.2: vereisen nu ≥3
+        // bookies per zijde voor paired devig + sanity check. Fallback fpHome ×
+        // 0.55 was bij dunne data-pool bron van fake edges — bij insufficient
+        // paired bookies skip nu.
         {
           const homeSpr = parsed.spreads.filter(o => o.side === 'home' && Math.abs(o.point) === 1.5);
           const awaySpr = parsed.spreads.filter(o => o.side === 'away' && Math.abs(o.point) === 1.5);
-          // FIX (v10.7.12): gebruik spread-specifieke devigged consensus ipv ML fpHome.
-          // Home -1.5 cover ≠ Home wins. Markt-consensus van -1.5 pair geeft
-          // eerlijke cover-kans. Fallback: fpHome × 0.55 (historische MLB ratio).
-          let fpHomeSpread = fpHome * 0.55;
-          let fpAwaySpread = fpAway * 0.55;
           const home15 = homeSpr.filter(s => s.point === -1.5);
-          const away15 = awaySpr.filter(s => s.point === 1.5);  // +1.5 insurance pair
-          if (home15.length >= 2 && away15.length >= 2) {
+          const away15 = awaySpr.filter(s => s.point === 1.5);
+          let fpHomeSpread = null, fpAwaySpread = null;
+          if (home15.length >= 3 && away15.length >= 3) {
             const avgH = home15.reduce((s,o)=>s+1/o.price, 0) / home15.length;
             const avgA = away15.reduce((s,o)=>s+1/o.price, 0) / away15.length;
             const tot = avgH + avgA;
-            // Sanity check: typical 2-way book is 1.02-1.12 (2-12% vig)
             if (tot > 1.00 && tot < 1.15) {
               fpHomeSpread = avgH / tot;
               fpAwaySpread = avgA / tot;
             }
           }
-          const bH = bestSpreadPick(homeSpr, fpHomeSpread, MIN_EDGE + 0.01);
-          if (bH) {
-            const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
-              `Run Line | ${bH.bookie}: ${bH.price} · cover ${(fpHomeSpread*100).toFixed(1)}%${sharedNotes} | ${ko}`,
-              Math.round(fpHomeSpread*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals);
-          }
-          const bA = bestSpreadPick(awaySpr, fpAwaySpread, MIN_EDGE + 0.01);
-          if (bA) {
-            const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
-            mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
-              `Run Line | ${bA.bookie}: ${bA.price} · cover ${(fpAwaySpread*100).toFixed(1)}%${sharedNotes} | ${ko}`,
-              Math.round(fpAwaySpread*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals);
+          if (fpHomeSpread != null && fpAwaySpread != null) {
+            const bH = bestSpreadPick(homeSpr, fpHomeSpread, MIN_EDGE + 0.01);
+            if (bH) {
+              const sanity = modelMarketSanityCheck(fpHomeSpread, 1 / bH.price);
+              if (sanity.agree) {
+                const pt = bH.point > 0 ? `+${bH.point}` : `${bH.point}`;
+                const fxMeta = { fixtureId: gameId, marketType: 'run_line', selectionKey: `home_${bH.point}`, line: bH.point };
+                mkP(`${hm} vs ${aw}`, league.name, `🎯 ${hm} ${pt}`, bH.price,
+                  `Run Line | ${bH.bookie}: ${bH.price} · cover ${(fpHomeSpread*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                  Math.round(fpHomeSpread*100), bH.edge * 0.20, kickoffTime, bH.bookie, matchSignals, null, fxMeta);
+              }
+            }
+            const bA = bestSpreadPick(awaySpr, fpAwaySpread, MIN_EDGE + 0.01);
+            if (bA) {
+              const sanity = modelMarketSanityCheck(fpAwaySpread, 1 / bA.price);
+              if (sanity.agree) {
+                const pt = bA.point > 0 ? `+${bA.point}` : `${bA.point}`;
+                const fxMeta = { fixtureId: gameId, marketType: 'run_line', selectionKey: `away_${bA.point}`, line: bA.point };
+                mkP(`${hm} vs ${aw}`, league.name, `🎯 ${aw} ${pt}`, bA.price,
+                  `Run Line | ${bA.bookie}: ${bA.price} · cover ${(fpAwaySpread*100).toFixed(1)}%${sharedNotes} | ${ko}`,
+                  Math.round(fpAwaySpread*100), bA.edge * 0.20, kickoffTime, bA.bookie, matchSignals, null, fxMeta);
+              }
+            }
           }
         }
 
@@ -4419,11 +4439,15 @@ async function runBaseball(emit) {
           const nrfiEdge = adjNrfiP * bestNrfi.price - 1;
           const yrfiEdge = (1 - adjNrfiP) * bestYrfi.price - 1;
 
-          if (nrfiEdge >= MIN_EDGE && bestNrfi.price >= 1.60)
+          // v11.1.2: sanity-gate. nrfiP is consensus-devig, nrfiAdj pushes tot ±2%.
+          // Deze moet dicht bij market-implied blijven (≤ 4% divergence anders fake edge).
+          const nrfiGate = passesDivergence2Way(adjNrfiP, 1 - adjNrfiP, bestNrfi.price, bestYrfi.price);
+
+          if (nrfiEdge >= MIN_EDGE && bestNrfi.price >= 1.60 && nrfiGate.passA)
             mkP(`${hm} vs ${aw}`, league.name, `⚾ NRFI (No Run 1st Inning)`, bestNrfi.price,
               `NRFI: ${(adjNrfiP*100).toFixed(1)}% | ${bestNrfi.bookie}: ${bestNrfi.price}${sharedNotes} | ${ko}`,
               Math.round(adjNrfiP*100), nrfiEdge * 0.18, kickoffTime, bestNrfi.bookie, matchSignals);
-          if (yrfiEdge >= MIN_EDGE && bestYrfi.price >= 1.60)
+          if (yrfiEdge >= MIN_EDGE && bestYrfi.price >= 1.60 && nrfiGate.passB)
             mkP(`${hm} vs ${aw}`, league.name, `⚾ YRFI (Yes Run 1st Inning)`, bestYrfi.price,
               `YRFI: ${((1-adjNrfiP)*100).toFixed(1)}% | ${bestYrfi.bookie}: ${bestYrfi.price}${sharedNotes} | ${ko}`,
               Math.round((1-adjNrfiP)*100), yrfiEdge * 0.18, kickoffTime, bestYrfi.bookie, matchSignals);
@@ -4461,11 +4485,15 @@ async function runBaseball(emit) {
           if (f5HDiag) f5Diag.push(f5HDiag);
           if (f5ADiag) f5Diag.push(f5ADiag);
 
-          if (eF5H >= f5MinEdge && bF5H.price >= 1.60 && bF5H.price <= MAX_WINNER_ODDS)
+          // v11.1.2: sanity-gate op F5 ML. f5Home gebruikt pitcher × 3 signal,
+          // kan daardoor ver van market-implied drijven bij dubieus pitcher-data.
+          const f5MlGate = passesDivergence2Way(f5Home, f5Away, bF5H.price, bF5A.price);
+
+          if (eF5H >= f5MinEdge && bF5H.price >= 1.60 && bF5H.price <= MAX_WINNER_ODDS && f5MlGate.passA)
             mkP(`${hm} vs ${aw}`, league.name, `⚾ F5 ${hm}`, bF5H.price,
               `F5 (1st 5 inn): ${(f5Home*100).toFixed(1)}% | ${bF5H.bookie}: ${bF5H.price} | ${pitcherSig.note} · ${starterReliability.note} | ${ko}`,
               Math.round(f5Home*100), eF5H * 0.24, kickoffTime, bF5H.bookie, [...matchSignals, 'f5_ml', 'pitcher_3x']);
-          if (eF5A >= f5MinEdge && bF5A.price >= 1.60 && bF5A.price <= MAX_WINNER_ODDS)
+          if (eF5A >= f5MinEdge && bF5A.price >= 1.60 && bF5A.price <= MAX_WINNER_ODDS && f5MlGate.passB)
             mkP(`${hm} vs ${aw}`, league.name, `⚾ F5 ${aw}`, bF5A.price,
               `F5 (1st 5 inn): ${(f5Away*100).toFixed(1)}% | ${bF5A.bookie}: ${bF5A.price} | ${pitcherSig.note} · ${starterReliability.note} | ${ko}`,
               Math.round(f5Away*100), eF5A * 0.24, kickoffTime, bF5A.bookie, [...matchSignals, 'f5_ml', 'pitcher_3x']);
@@ -4835,13 +4863,14 @@ async function runFootballUS(emit) {
         // v10.12.9 Phase A.1b NFL: ML 2-way
         const fxMetaNflH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
         const fxMetaNflA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
-        // Moneyline picks
-        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+        // v11.1.2: sanity-gate voor NFL ML (signal-adjusted adjHome/adjAway).
+        const nflMlGate = passesDivergence2Way(adjHome, adjAway, bH.price, bA.price);
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && nflMlGate.passA)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
             Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaNflH);
 
-        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && nflMlGate.passB)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
             Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaNflA);
@@ -5334,13 +5363,14 @@ async function runHandball(emit) {
         // v10.12.9 Phase A.1b handball: ML 2-way
         const fxMetaHbH = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'home', line: null };
         const fxMetaHbA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
-        // Moneyline picks
-        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS)
+        // v11.1.2: sanity-gate voor handball ML (signal-adjusted).
+        const hbMlGate = passesDivergence2Way(adjHome, adjAway, bH.price, bA.price);
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && hbMlGate.passA)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
             `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
             Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, matchSignals, null, fxMetaHbH);
 
-        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS)
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && hbMlGate.passB)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
             `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
             Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, matchSignals, null, fxMetaHbA);
@@ -5986,13 +6016,20 @@ async function runPrematch(emit) {
         const fxMetaH = { fixtureId: fid, marketType: '1x2', selectionKey: 'home', line: null };
         const fxMetaA = { fixtureId: fid, marketType: '1x2', selectionKey: 'away', line: null };
         const fxMetaD = { fixtureId: fid, marketType: '1x2', selectionKey: 'draw', line: null };
-        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && bA.price > BLOWOUT_OPP_MAX)
+        // v11.1.2: 3-way sanity-gate per zijde tegen markt-consensus fp.
+        // adjHome2/adjDraw/adjAway2 zijn signal-adjusted; divergentie > 4pp
+        // t.o.v. fp.home/fp.draw/fp.away = geen pick.
+        const sanityHomeFb = fp && typeof fp.home === 'number' ? modelMarketSanityCheck(adjHome2, fp.home) : { agree: true };
+        const sanityAwayFb = fp && typeof fp.away === 'number' ? modelMarketSanityCheck(adjAway2, fp.away) : { agree: true };
+        const sanityDrawFb = fp && typeof fp.draw === 'number' ? modelMarketSanityCheck(adjDraw || 0, fp.draw) : { agree: true };
+
+        if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS && bA.price > BLOWOUT_OPP_MAX && sanityHomeFb.agree)
           mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price, reasonH, Math.round(adjHome2*100), homeEdge * 0.28 * (cm.home?.multiplier ?? 1), kickoffTime, bH.bookie, matchSignals, refereeName, fxMetaH);
 
-        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && bH.price > BLOWOUT_OPP_MAX)
+        if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS && bH.price > BLOWOUT_OPP_MAX && sanityAwayFb.agree)
           mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price, reasonA, Math.round(adjAway2*100), awayEdge * 0.28 * (cm.away?.multiplier ?? 1), kickoffTime, bA.bookie, matchSignals, refereeName, fxMetaA);
 
-        if (drawEdge >= MIN_EDGE + 0.01 && bD?.price >= 1.60)
+        if (drawEdge >= MIN_EDGE + 0.01 && bD?.price >= 1.60 && sanityDrawFb.agree)
           mkP(`${hm} vs ${aw}`, league.name, `🤝 Gelijkspel`, bD.price, reasonD, Math.round((adjDraw||0)*100), drawEdge * 0.22 * (cm.draw?.multiplier ?? 1), kickoffTime, bD?.bookie, matchSignals, refereeName, fxMetaD);
 
         // ── O/U Goals 2.5 ─────────────────────────────────────────────
@@ -6213,12 +6250,19 @@ async function runPrematch(emit) {
               // v10.12.7 Phase A.1b: BTTS = 2-way binary market
               const fxMetaBttsY = { fixtureId: fid, marketType: 'btts', selectionKey: 'yes', line: null };
               const fxMetaBttsN = { fixtureId: fid, marketType: 'btts', selectionKey: 'no',  line: null };
-              if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60)
+
+              // v11.1.2: market-devig sanity gate. Voorheen kon een calcBTTSProb
+              // output van 26% Yes (= 74% Nee) doorgaan terwijl markt-devigged
+              // Yes=40% aangaf → 14pp divergence, fake edge. Operator-report
+              // 2026-04-18 BTTS Nee @ 2.40 (74% model, 42% market) blokkeert nu.
+              const bttsGate = passesDivergence2Way(bttsYesP, bttsNoP, bestYes.price, bestNo.price);
+
+              if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60 && bttsGate.passA)
                 mkP(`${hm} vs ${aw}`, league.name, `🔥 BTTS Ja`, bestYes.price,
                   `BTTS: ${(bttsYesP*100).toFixed(1)}% | ${bestYes.bookie}: ${bestYes.price} | GF: ${hmGFAvg}/${awGFAvg}${h2hStr} | ${ko}`,
                   Math.round(bttsYesP*100), bttsYesEdge * 0.22 * (cm.over?.multiplier ?? 1), kickoffTime, bestYes.bookie, bttsSignals, refereeName, fxMetaBttsY);
 
-              if (bttsNoEdge >= MIN_EDGE && bestNo.price >= 1.60)
+              if (bttsNoEdge >= MIN_EDGE && bestNo.price >= 1.60 && bttsGate.passB)
                 mkP(`${hm} vs ${aw}`, league.name, `🛡️ BTTS Nee`, bestNo.price,
                   `BTTS Nee: ${(bttsNoP*100).toFixed(1)}% | ${bestNo.bookie}: ${bestNo.price} | GF: ${hmGFAvg}/${awGFAvg} | CS: ${hmTS2?.cleanSheetPct ? (hmTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}/${awTS2?.cleanSheetPct ? (awTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}${h2hStr} | ${ko}`,
                   Math.round(bttsNoP*100), bttsNoEdge * 0.20 * (cm.under?.multiplier ?? 1), kickoffTime, bestNo.bookie, bttsSignals, refereeName, fxMetaBttsN);
@@ -6266,12 +6310,16 @@ async function runPrematch(emit) {
             // v10.12.7 Phase A.1b: DNB = 2-way markt
             const fxMetaDnbH = { fixtureId: fid, marketType: 'dnb', selectionKey: 'home', line: null };
             const fxMetaDnbA = { fixtureId: fid, marketType: 'dnb', selectionKey: 'away', line: null };
-            if (dnbHomeEdge >= MIN_EDGE && bestDnbH.price >= 1.30 && bestDnbH.price <= 2.50)
+            // v11.1.2: sanity-gate vs devigged DNB-market. dnbHomeP/dnbAwayP is
+            // model-derived (redistrib); vergelijk met bookmaker-implied.
+            const dnbGate = passesDivergence2Way(dnbHomeP, dnbAwayP, bestDnbH.price, bestDnbA.price);
+
+            if (dnbHomeEdge >= MIN_EDGE && bestDnbH.price >= 1.30 && bestDnbH.price <= 2.50 && dnbGate.passA)
               mkP(`${hm} vs ${aw}`, league.name, `🏠 DNB ${hm}`, bestDnbH.price,
                 `Draw No Bet: ${(dnbHomeP*100).toFixed(1)}% | ${bestDnbH.bookie}: ${bestDnbH.price} | Gelijk=terugbetaling | ${ko}`,
                 Math.round(dnbHomeP*100), dnbHomeEdge * 0.24, kickoffTime, bestDnbH.bookie, matchSignals, refereeName, fxMetaDnbH);
 
-            if (dnbAwayEdge >= MIN_EDGE && bestDnbA.price >= 1.30 && bestDnbA.price <= 2.50)
+            if (dnbAwayEdge >= MIN_EDGE && bestDnbA.price >= 1.30 && bestDnbA.price <= 2.50 && dnbGate.passB)
               mkP(`${hm} vs ${aw}`, league.name, `✈️ DNB ${aw}`, bestDnbA.price,
                 `Draw No Bet: ${(dnbAwayP*100).toFixed(1)}% | ${bestDnbA.bookie}: ${bestDnbA.price} | Gelijk=terugbetaling | ${ko}`,
                 Math.round(dnbAwayP*100), dnbAwayEdge * 0.24, kickoffTime, bestDnbA.bookie, matchSignals, refereeName, fxMetaDnbA);

@@ -2,6 +2,50 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.1.2] - 2026-04-18
+
+**P0 comprehensive sanity-gate coverage · 11 markten** (vervolg-fix op operator-report "veel 2+ odds picks").
+
+### Added
+
+- **[claude] `lib/model-math.js:passesDivergence2Way(modelA, modelB, priceA, priceB, threshold)`** — pure helper die paired 2-way odds deviged + model-probability vergelijkt met market-implied. Returnt {passA, passB, marketFair}. Vig-range [1.00, 1.15) met fail-open bij onbruikbare vig. Default threshold 0.04 (4pp divergence).
+
+### Fixed — sanity-gates per market
+
+Elke nieuw gefixte site volgt hetzelfde patroon: als model-prob > 4pp van market-devigged consensus afligt, skip de pick. Voorheen passeerden signal-pushed of form-based probs onbeperkt, wat systematisch tot fake-edge picks leidde (zichtbaar in operator-report als "veel 2+ odds").
+
+1. **Football BTTS Yes/Nee** (server.js:6217-6234) — operator's directe bug-report. Sandefjord/Rosenborg BTTS Nee @ 2.40 met 74% model-kans (42% market) wordt nu geblokkeerd.
+2. **Football 1X2 ML 3-way** (server.js:6019-6026) — per-zijde sanity vs fp.home/fp.draw/fp.away consensus. Signal-adjusted adjHome2/adjAway2 die > 4pp divergeert wordt geskipt.
+3. **Football DNB** (server.js:6303-6316) — devig2Way op bestDnbH/A prices.
+4. **Basketball ML** (server.js:2991-3004) — devig2Way op adjHome/adjAway vs bH/bA odds.
+5. **Baseball ML** (server.js:4309-4323) — devig2Way op adjHome/adjAway.
+6. **Baseball NRFI/YRFI** (server.js:4420-4440) — devig2Way op adjNrfiP / (1-adjNrfiP).
+7. **Baseball F5 ML** (server.js:4451-4486) — devig2Way op f5Home/f5Away (pitcher × 3 signal-weighted).
+8. **Baseball Run Line** (server.js:4369-4414) — vereist nu ≥3 bookies per zijde paired devig + sanity. Fallback `fpHome × 0.55` skipt nu (was bron van fake edges bij dunne pools).
+9. **NHL Puck Line** (server.js:3812-3852) — identiek patroon: ≥3 bookies + sanity + fix een bestaande typo (was `fpAway` ipv `fpAwayPuck` in display).
+10. **NFL ML** (server.js:4836-4853) — devig2Way op adjHome/adjAway.
+11. **Handball ML** (server.js:5337-5352) — devig2Way op adjHome/adjAway.
+
+### Niet in scope (lage risk / structureel anders)
+
+- Pure-devigged O/U markten (basketball, baseball, NFL, hockey, football, handball): model-prob IS market-consensus by construction, divergence-gate zou altijd agreement tonen. Geen fake-edge via divergence mogelijk.
+- Hockey 1st Period O/U: devig-based, zelfde logica.
+- Hockey Team Totals: Poisson-derived zonder direct market anchor per team. Kan in shadow-mode variant later.
+- Football Double Chance / Asian Handicap: per-point devigged, patroon volgt Baseball Run Line fix indien gewenst.
+- Handball Handicap: per-point devig, kan later.
+
+### Operator-observatie "veel 2+ odds"
+
+Bart's vraag was of 2+ odds een tactiek of bug was. Verklaring: de combinatie van (a) hoge odds + (b) overconfident model-prob bij signal-push → (c) grote fake edges → (d) top van ranking → Kelly size hoog → operator-zichtbaar patroon. Met de 11 sanity-gates actief valt dit symptoom structureel weg; picks die 2+ odds hebben en toch bovenaan staan zullen nu legit zijn (BTTS met genuine model-vs-market alignment, O/U line-shopping edges, etc.).
+
+### Versie
+
+v11.1.1 → v11.1.2 in 6 locaties + CHANGELOG.
+
+### Tests
+
+579 passed · 0 failed (+6 nieuwe passesDivergence2Way tests inclusief reproductie van BTTS bug 74% / NBA ML signal-push scenario).
+
 ## [11.1.1] - 2026-04-18
 
 **P0 model-integrity fix · NBA/NFL 1H spread fake-edges** (operator-report item extra, image-v11).
