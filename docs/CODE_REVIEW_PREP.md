@@ -52,7 +52,7 @@ Hosting: Render.com free tier. Single process, single replica.
 - **`index.html`** (~5.7k regels, monoliet — zie §6)
 - **`js/lang.js`** (NL + EN strings)
 - **`login.html`** · separate login page
-- **`test.js`** (~5.8k regels, 523 tests) · monolithische suite; split is backlog item
+- **`test.js`** (~5.8k regels, 624 tests) · monolithische suite; split is backlog item
 
 ## 3. Doctrine-keuzes die eruit kunnen zien als bugs maar intentioneel zijn
 
@@ -157,7 +157,7 @@ node scripts/migrate.js docs/migrations-archive/<file>.sql
 
 ```bash
 npm install
-npm test                      # 523 tests
+npm test                      # 624 tests
 npm run test:coverage         # c8 report (niet geforceerd)
 npm run audit:high            # npm audit level=high
 node -c server.js             # syntax-check

@@ -1,4 +1,4 @@
-# EdgePickr v11.3.23
+# EdgePickr v11.3.24
 
 **Private operator betting terminal** voor een single bankroll, een canonieke
 scan-state en een CLV-first workflow. Markt = baseline truth, model = residual
@@ -75,7 +75,7 @@ SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_KEY=<service_role_key>
 
 # Sport data
-API_SPORTS_KEY=<api-sports.io key>
+API_FOOTBALL_KEY=<api-sports.io key>
 
 # Auth
 JWT_SECRET=<random 64 hex>
@@ -109,7 +109,7 @@ Rate-limited op 200ms per bet. Return `{ scanned, filled, failed, details }`.
 ## Testsuite
 
 ```bash
-npm test     # 315 tests · scanlogica, signals, CLV, security, scrapers, snapshots, regressies
+npm test     # 624 tests · scanlogica, signals, CLV, security, scrapers, snapshots, regressies, reviewer-bugs
 ```
 
 ### Test-categorieën

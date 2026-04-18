@@ -12,10 +12,9 @@ services:
         value: https://mntfhhzanoyhgfavozhg.supabase.co
       - key: SUPABASE_KEY
         sync: false          # service_role key — vul in via Render dashboard
-      - key: ODDS_API_KEY
-        sync: false          # vul in via Render dashboard
+      # v11.3.24 · ODDS_API_KEY verwijderd (was nergens in runtimecode actief).
       - key: API_FOOTBALL_KEY
-        sync: false          # vul in via Render dashboard
+        sync: false          # api-sports.io key — vul in via Render dashboard
       - key: JWT_SECRET
         sync: false          # willekeurige lange string, bijv. 64 hex tekens
       - key: ADMIN_EMAIL

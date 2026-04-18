@@ -2,6 +2,29 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.24] - 2026-04-18
+
+**Phase 7.2 + 7.3 · dedup + docs sync (Codex #1 + Codex #2)**
+
+### Fixed
+
+- **[A1]** `lib/db.js` is nu dedicated aan user-management. Dead-code copies van `readBets`, `writeBet`, `deleteBet`, `calcStats`, `insertBetWithSchemaFallback`, `loadScanHistory`, `loadScanHistoryFromSheets`, `saveScanEntry` en `SCAN_HISTORY_MAX` verwijderd. De canonical leeft in `lib/bets-data.js` (v11.3.21); server.js heeft zijn eigen scan-history implementaties. Geen drie autoriteiten meer.
+- **[A2]** `PUBLIC_PATHS` export uit `lib/config.js` verwijderd (was stale kopie met `/api/status` er nog in). Single source of truth leeft nu in `server.js`.
+- **[A3]** `lib/calibration-store.js` `save()` schrijft nu ook naar de fallback-file. Eerder las `loadSync()` de file als noodfallback, maar werd die nooit bijgewerkt na Supabase-save → schijnveiligheid bij outage.
+- **[D1]** `README.md`: `API_SPORTS_KEY` → `API_FOOTBALL_KEY` (matched runtime `server.js:1161`).
+- **[D2]** `README.md` test-count `315` → `624`; `docs/CODE_REVIEW_PREP.md` `523` → `624`.
+- **[D4]** `render.yaml`: `ODDS_API_KEY` weg (was nergens in runtime-code actief).
+
+### Changed
+
+- `lib/db.js`: 271 → ~90 regels (user management only).
+- `lib/config.js`: −1 export (`PUBLIC_PATHS`).
+- `lib/calibration-store.js`: fallback-file write-back toegevoegd.
+
+### Tests
+
+624 passed · 0 failed (onveranderd — pure cleanup). Server boot groen.
+
 ## [11.3.23] - 2026-04-18
 
 **Phase 7.1 · reviewer-bugs live fixes (Codex #1 + Codex #2)**
