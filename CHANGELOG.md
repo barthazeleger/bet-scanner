@@ -2,6 +2,27 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.2.7] - 2026-04-18
+
+**Phase 5.4e · server.js extraction · info/meta routes**
+
+### Added
+
+- **[claude] `lib/routes/info.js`** — 2 endpoints:
+  - `GET /api/version` — APP_VERSION + laatste 10 modelLog entries
+  - `GET /api/changelog` (admin) — parse CHANGELOG.md → JSON entries met ### sections
+- Deps: appVersion, loadCalib, requireAdmin, optional changelogPath (default ../../CHANGELOG.md).
+- 2 nieuwe tests.
+
+### Changed
+
+- server.js netto **-31 regels** (12170 → 12139).
+- Totaal shrinkage sinds v11.0.0 (12537 baseline): **-398 regels** via 8 extracted route modules.
+
+### Tests
+
+595 passed · 0 failed.
+
 ## [11.2.6] - 2026-04-18
 
 **Phase 5.4d · server.js extraction · bets read + delete routes**

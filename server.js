@@ -9668,14 +9668,11 @@ app.get('/api/status', (req, res) => {
 });
 
 // Versie info
-app.get('/api/version', (req, res) => {
-  const c = loadCalib();
-  res.json({
-    version:          APP_VERSION,
-    modelLog:         (c.modelLog || []).slice(0, 10),
-    modelLastUpdated: c.modelLastUpdated || null,
-  });
-});
+// v11.2.7 Phase 5.4e: /api/version + /api/changelog verhuisd naar
+// lib/routes/info.js. /api/status blijft in server.js tot dedicated sprint
+// (25+ deps op module-level state).
+const createInfoRouter = require('./lib/routes/info');
+app.use('/api', createInfoRouter({ appVersion: APP_VERSION, loadCalib, requireAdmin }));
 
 // Model activity feed · alle automatische wijzigingen
 // Shared multiplier-formule voor rebuild én incremental updateCalibration.
@@ -9784,37 +9781,6 @@ app.post('/api/admin/rebuild-calib', requireAdmin, async (req, res) => {
     res.status(500).json({ error: (e && e.message) || 'Interne fout' });
   } finally {
     _calibRebuildInProgress = false;
-  }
-});
-
-// GET /api/changelog — Parse CHANGELOG.md → JSON. Admin-only voor nu (user-
-// facing versie kan later onder eigen endpoint met gefilterde entries).
-app.get('/api/changelog', requireAdmin, (req, res) => {
-  try {
-    const raw = fs.readFileSync(path.join(__dirname, 'CHANGELOG.md'), 'utf8');
-    const entries = [];
-    // Split op "## [x.y.z] - date" secties
-    const blocks = raw.split(/\n(?=## \[)/);
-    for (const block of blocks) {
-      const hdr = block.match(/^## \[([^\]]+)\]\s*-\s*(\d{4}-\d{2}-\d{2})/);
-      if (!hdr) continue;
-      const version = hdr[1], date = hdr[2];
-      // Binnen het block: ### Section headers
-      const body = block.slice(hdr[0].length).trim();
-      const sections = [];
-      const parts = body.split(/\n(?=### )/);
-      for (const p of parts) {
-        const sh = p.match(/^### ([^\n]+)/);
-        if (!sh) continue;
-        const title = sh[1].trim();
-        const text = p.slice(sh[0].length).trim();
-        sections.push({ title, text });
-      }
-      entries.push({ version, date, sections });
-    }
-    res.json({ version: APP_VERSION, entries });
-  } catch (e) {
-    res.status(500).json({ error: (e && e.message) || 'Kan CHANGELOG niet lezen' });
   }
 });
 
