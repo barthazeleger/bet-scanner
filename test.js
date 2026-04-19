@@ -2514,7 +2514,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '11.3.29');
+  assert.strictEqual(appMeta.APP_VERSION, '11.3.30');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -2957,40 +2957,25 @@ test('signal kill: avg CLV ≤ -3% over ≥50 samples → weight = 0', () => {
   assert.strictEqual(decide(0.5, 100), 1.0, 'positief → niet mute');
 });
 
-test('adaptiveMinEdge: tier-based threshold per sample size', () => {
-  const baseMinEdge = 0.055;
-  const compute = (n) => n >= 100 ? baseMinEdge : n >= 30 ? Math.max(baseMinEdge, 0.065) : Math.max(baseMinEdge, 0.08);
-  assert.strictEqual(compute(0), 0.08, 'geen data → 8% conservatief');
-  assert.strictEqual(compute(29), 0.08, '<30 → 8%');
-  assert.strictEqual(compute(30), 0.065, '30-99 → 6.5%');
-  assert.strictEqual(compute(99), 0.065);
-  assert.strictEqual(compute(100), 0.055, 'proven → base 5.5%');
-  assert.strictEqual(compute(500), 0.055);
+test('adaptiveMinEdge: uniforme baseMinEdge post-tier-removal (v11.3.30)', () => {
+  // v11.3.30: tier-differentiatie verwijderd. adaptiveMinEdge retourneert
+  // altijd baseMinEdge. Risico wordt elders geborgd (sanity-gate 7pp,
+  // signal-quality, line-quality, execution-coverage). Oude tiers (8%/6.5%/5.5%)
+  // waren een sample-trap: unproven markten kwamen nooit door 8%, kregen
+  // dus geen samples, bleven op 8% → chicken-and-egg.
+  const compute = (n, base) => base;
+  assert.strictEqual(compute(0, 0.055), 0.055, 'geen data → base');
+  assert.strictEqual(compute(29, 0.055), 0.055, '<30 → base');
+  assert.strictEqual(compute(30, 0.055), 0.055, '30-99 → base');
+  assert.strictEqual(compute(500, 0.055), 0.055, '≥100 → base');
 });
 
-test('adaptiveMinEdge: bootstrap mode bypass tot 100 totaal', () => {
-  const BOOTSTRAP = 100;
-  const baseMinEdge = 0.055;
-  const compute = (totalSettled, marketN) => {
-    if (totalSettled < BOOTSTRAP) return baseMinEdge;
-    if (marketN >= 100) return baseMinEdge;
-    if (marketN >= 30) return Math.max(baseMinEdge, 0.065);
-    return Math.max(baseMinEdge, 0.08);
-  };
-  // Bootstrap fase: alles op base ondanks per-markt 0
-  assert.strictEqual(compute(0, 0), 0.055, 'geen data globaal → base');
-  assert.strictEqual(compute(50, 5), 0.055, 'in bootstrap → bypass adaptive');
-  assert.strictEqual(compute(99, 0), 0.055, 'net onder bootstrap drempel → base');
-  // Post-bootstrap: tiers actief
-  assert.strictEqual(compute(100, 0), 0.08, 'post-bootstrap, n=0 → strict 8%');
-  assert.strictEqual(compute(500, 50), 0.065, 'post-bootstrap, n=50 → 6.5%');
-});
-
-test('adaptiveMinEdge: nooit lager dan baseMinEdge', () => {
-  const compute = (n, base) => n >= 100 ? base : n >= 30 ? Math.max(base, 0.065) : Math.max(base, 0.08);
-  // Als baseMinEdge hoger is dan tier-defaults, gebruik base
-  assert.strictEqual(compute(500, 0.10), 0.10, 'base 10% > tier → behoud base');
-  assert.strictEqual(compute(50, 0.10), 0.10);
+test('adaptiveMinEdge: base parameter is passthrough (v11.3.30)', () => {
+  // Als caller een andere base wil (bv. per-sport beleid in toekomstige
+  // sprint), wordt die direct teruggegeven. Tier-logica is weg.
+  const compute = (n, base) => base;
+  assert.strictEqual(compute(500, 0.10), 0.10, 'base 10% → 10%');
+  assert.strictEqual(compute(50, 0.075), 0.075, 'base 7.5% → 7.5%');
 });
 
 // ── v10.1.0 profit-focus: per-bookie ROI + CLV alerts + drawdown ────────────

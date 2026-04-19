@@ -2,6 +2,40 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.30] - 2026-04-19
+
+**Hotfix · adaptiveMinEdge sample-trap volledig verwijderd**
+
+### Fixed
+
+- **[CRITICAL]** `adaptiveMinEdge()` in server.js:251-263 hield unproven markten permanent dood via tier-differentiatie. Oude drempels: `<30 settled bets → 8%`, `30-99 → 6.5%`, `≥100 → 5.5%`. Effect: **football_over** had ≥100 samples → 5.5% drempel → picks komen door. Alle andere markten (**football_1x2, football_btts, football_dnb, basketball_moneyline, hockey_moneyline, baseball_moneyline, baseball_nrfi, baseball_f5_ml**) hadden < 30 samples → 8% drempel → vrijwel nooit picks → geen samples toename → blijvend unproven. Operator-symptoom sinds 2026-04-18: elke scan alleen Over 2.5 voetbal picks, geen andere sport/markt door.
+- **Nieuwe logica**: tier-differentiatie volledig verwijderd. `adaptiveMinEdge()` retourneert nu altijd `baseMinEdge` (5.5%). De parameters `sport` en `marktLabel` blijven voor backward-compat + toekomstig per-markt beleid, maar worden niet benut. Sample-cache refresh blijft lopen voor andere callers (autotune, diversification).
+- Tests 2960-2994 herschreven voor passthrough-gedrag.
+
+### Why
+
+Operator-rapport 2026-04-19 10:00: *"Of Bet365 O2.5 picks, of helemaal niks, geen enkele andere sport, geen enkele andere markt, al 24 uur lang, op zaterdag EN zondag de 2 drukste sportdagen."*
+
+Operator-redeneer 2026-04-19 10:30: *"Om data op te bouwen wil je toch sowieso eerst meer picks op alle markten verzamelen ipv meteen op 1 aan sturen, dan bouw je nooit data op op de anderen?"*
+
+Dat is correct. Tier-differentiatie is in bootstrap-fase (weinig samples per markt) een chicken-and-egg trap: je hebt samples nodig om te calibreren, dus strenger zijn op markten zónder samples verhindert juist de calibratie. Risicobeheer ligt al bij 6 andere gate-lagen (sanity-gate 7pp, signal-quality, line-quality, execution-coverage, price-range, ≥1 paired bookie, dataConfidence). Een extra adaptieve drempel op top is overkill én contra-productief.
+
+Dit volgt op drie eerdere fixes die het symptoom niet volledig raakten:
+- v11.3.28: `MODEL_MARKET_DIVERGENCE_THRESHOLD 0.04 → 0.07` (half fix — 1X2 kwam iets vaker door, BTTS/Team Totals bleven geblokt)
+- v11.3.29 (Codex-finding): `analyseTotal()` exact line-match `< 0.01` (fix voor valse Over 2.5 matches op 3.0-lines — eliminatede de nep-Over-2.5 picks maar liet de echte drempel-trap intact)
+- v11.3.30 (dit release): adaptiveMinEdge tier-trap verwijderd
+
+Screenshot van operator (near-miss UI) toonde 1000 candidates in 24u, 708 rejected via `edge_below_min` met edges typisch 4-5% (onder 5.5% base-drempel in de log). Dat betrof alleen de base-drempel-log; de **echte** drempel in `mkP` via `adaptiveMinEdge` was 8% voor die markten, dus ook picks met 6-7% edge werden stil gedropt zonder spoor in de near-miss UI.
+
+### Niet in deze release (als v11.3.30 niet werkt)
+
+Als deze versoepeling onvoldoende is, volgt v11.3.31 met gerichte rollback van v11.1.2 + v11.2.1 sanity-gates op markten waar model-prob inherent niet op dezelfde basis als marketdevig ligt (BTTS, Hockey Team Totals via Poisson). Alleen een "extreme guard" (>= 15pp) behouden voor Sandefjord-class fake edges. Dit zou het scan-gedrag terugbrengen naar v11.1.1 niveau (baseball ML + diverse markten werkten toen), met behoud van modulariteit en learning-loop extracties.
+
+### Tests
+638 passed, 0 failed.
+
+---
+
 ## [11.3.29] - 2026-04-19
 
 **P0 hotfix · Codex finding: football totals line-matching bug**

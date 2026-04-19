@@ -243,23 +243,33 @@ function getSportCap(sport) {
 const BOOTSTRAP_MIN_TOTAL_BETS = 100;
 
 // Returns adjusted MIN_EDGE for given sport+market based on settled bet history.
-// Bootstrap (<100 totaal): base MIN_EDGE everywhere — eerst data verzamelen.
-// Post-bootstrap per-markt:
-//   < 30 settled bets → 8% edge required (conservative)
-//   30-100 → 6.5% (moderate)
-//   100+ → base MIN_EDGE (proven market)
+// v11.3.30 (operator-rapport 2026-04-19): tier-differentiatie verwijderd.
+//
+// Oude drempels (8% / 6.5% / 5.5%) waren een SAMPLE-TRAP:
+//   - football_over had ≥100 samples → 5.5% → picks komen door
+//   - alle andere markten (1X2, BTTS, DNB, basketball/hockey/baseball ML,
+//     NRFI, F5 ML) <30 samples → 8% → vrijwel nooit picks → geen samples
+//     toename → blijvend unproven → blijvend 8%
+//   Resultaat sinds 2026-04-18: alleen Over 2.5 voetbal picks. Chicken-
+//   and-egg: je hebt samples nodig om te calibreren, dus strenger zijn op
+//   markten zónder samples verhindert juist de calibratie.
+//
+// Nieuwe logica: uniforme baseMinEdge (5.5%) post-bootstrap. Risicobeheer
+// ligt al bij andere lagen: sanity-gate (7pp), signal-quality, line-
+// quality, execution-coverage, price-range, ≥1 paired bookie, dataConfidence.
+// Een extra adaptieve drempel op top is overkill én contra-productief.
+// Bootstrap (<100 totaal): base MIN_EDGE everywhere (ongewijzigd).
 function adaptiveMinEdge(sport, marktLabel, baseMinEdge) {
   if (Date.now() - _marketSampleCache.at > MARKET_SAMPLE_TTL_MS) {
     refreshMarketSampleCounts().catch(e => console.warn('Market samples refresh failed:', e.message));
   }
-  const totalSettled = Object.values(_marketSampleCache.data).reduce((a, b) => a + b, 0);
-  // Bootstrap: nog te weinig globale data om strict per-markt te gaan
-  if (totalSettled < BOOTSTRAP_MIN_TOTAL_BETS) return baseMinEdge;
-  const key = `${normalizeSport(sport)}_${detectMarket(marktLabel || 'other')}`;
-  const n = _marketSampleCache.data[key] || 0;
-  if (n >= 100) return baseMinEdge;
-  if (n >= 30) return Math.max(baseMinEdge, 0.065);
-  return Math.max(baseMinEdge, 0.08);
+  // Bootstrap én post-bootstrap beide: base MIN_EDGE. Sample-cache refresh
+  // blijft lopen zodat een latere beleidswijziging (bv. per-markt kill-
+  // switch op basis van CLV) de counts kan gebruiken zonder extra plumbing.
+  // sport + marktLabel parameters blijven voor backward-compat + toekomstig
+  // per-markt beleid, maar worden nu niet benut.
+  void sport; void marktLabel;
+  return baseMinEdge;
 }
 
 // Pure math & model helpers — geïmporteerd uit lib zodat test.js dezelfde code test
