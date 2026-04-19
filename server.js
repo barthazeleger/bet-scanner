@@ -2957,11 +2957,11 @@ async function runBasketball(emit) {
               const fxMetaH1Ov = { fixtureId: gameId, marketType: 'half_total', selectionKey: 'over', line: h1Line };
               const fxMetaH1Un = { fixtureId: gameId, marketType: 'half_total', selectionKey: 'under', line: h1Line };
 
-              if (h1OverEdge >= MIN_EDGE && h1BestOv.price >= 1.60 && h1Gate.passA)
+              if (h1OverEdge >= MIN_EDGE && h1BestOv.price >= 1.60 && h1BestOv.price <= 3.5 && h1Gate.passA)
                 mkP(`${hm} vs ${aw}`, league.name, `🏀 1H Over ${h1Line} pts`, h1BestOv.price,
                   `1st Half O/U: ${(h1OverP*100).toFixed(1)}% over | ${h1BestOv.bookie}: ${h1BestOv.price}${sharedNotes} | ${ko}`,
                   Math.round(h1OverP*100), h1OverEdge * 0.20, kickoffTime, h1BestOv.bookie, matchSignals, null, fxMetaH1Ov);
-              if (h1UnderEdge >= MIN_EDGE && h1BestUn.price >= 1.60 && h1Gate.passB)
+              if (h1UnderEdge >= MIN_EDGE && h1BestUn.price >= 1.60 && h1BestUn.price <= 3.5 && h1Gate.passB)
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 1H Under ${h1Line} pts`, h1BestUn.price,
                   `1st Half O/U: ${((1-h1OverP)*100).toFixed(1)}% under | ${h1BestUn.bookie}: ${h1BestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-h1OverP)*100), h1UnderEdge * 0.18, kickoffTime, h1BestUn.bookie, matchSignals, null, fxMetaH1Un);
@@ -3765,11 +3765,11 @@ async function runHockey(emit) {
               const fxMetaP1Ov = { fixtureId: gameId, marketType: 'period_total', selectionKey: 'over', line: p1Line };
               const fxMetaP1Un = { fixtureId: gameId, marketType: 'period_total', selectionKey: 'under', line: p1Line };
 
-              if (p1OverEdge >= MIN_EDGE && p1BestOv.price >= 1.60 && p1Gate.passA)
+              if (p1OverEdge >= MIN_EDGE && p1BestOv.price >= 1.60 && p1BestOv.price <= 3.5 && p1Gate.passA)
                 mkP(`${hm} vs ${aw}`, league.name, `🏒 P1 Over ${p1Line} goals`, p1BestOv.price,
                   `1st Period O/U: ${(p1OverP*100).toFixed(1)}% over | ${p1BestOv.bookie}: ${p1BestOv.price}${sharedNotes} | ${ko}`,
                   Math.round(p1OverP*100), p1OverEdge * 0.20, kickoffTime, p1BestOv.bookie, matchSignals, null, fxMetaP1Ov);
-              if (p1UnderEdge >= MIN_EDGE && p1BestUn.price >= 1.60 && p1Gate.passB)
+              if (p1UnderEdge >= MIN_EDGE && p1BestUn.price >= 1.60 && p1BestUn.price <= 3.5 && p1Gate.passB)
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 P1 Under ${p1Line} goals`, p1BestUn.price,
                   `1st Period O/U: ${((1-p1OverP)*100).toFixed(1)}% under | ${p1BestUn.bookie}: ${p1BestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-p1OverP)*100), p1UnderEdge * 0.18, kickoffTime, p1BestUn.bookie, matchSignals, null, fxMetaP1Un);
@@ -4923,11 +4923,11 @@ async function runFootballUS(emit) {
               const fxMetaNflH1Ov = { fixtureId: gameId, marketType: 'half_total', selectionKey: 'over', line: h1Line };
               const fxMetaNflH1Un = { fixtureId: gameId, marketType: 'half_total', selectionKey: 'under', line: h1Line };
 
-              if (h1OverEdge >= MIN_EDGE && h1BestOv.price >= 1.60 && h1NflGate.passA)
+              if (h1OverEdge >= MIN_EDGE && h1BestOv.price >= 1.60 && h1BestOv.price <= 3.5 && h1NflGate.passA)
                 mkP(`${hm} vs ${aw}`, league.name, `🏈 1H Over ${h1Line} pts`, h1BestOv.price,
                   `1st Half O/U: ${(h1OverP*100).toFixed(1)}% over | ${h1BestOv.bookie}: ${h1BestOv.price}${sharedNotes} | ${ko}`,
                   Math.round(h1OverP*100), h1OverEdge * 0.20, kickoffTime, h1BestOv.bookie, matchSignals, null, fxMetaNflH1Ov);
-              if (h1UnderEdge >= MIN_EDGE && h1BestUn.price >= 1.60 && h1NflGate.passB)
+              if (h1UnderEdge >= MIN_EDGE && h1BestUn.price >= 1.60 && h1BestUn.price <= 3.5 && h1NflGate.passB)
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 1H Under ${h1Line} pts`, h1BestUn.price,
                   `1st Half O/U: ${((1-h1OverP)*100).toFixed(1)}% under | ${h1BestUn.bookie}: ${h1BestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-h1OverP)*100), h1UnderEdge * 0.18, kickoffTime, h1BestUn.bookie, matchSignals, null, fxMetaNflH1Un);

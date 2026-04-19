@@ -1303,12 +1303,24 @@ test('passesDivergence2Way: NBA ML signal-push bug → block', () => {
   assert.strictEqual(r.passB, false);
 });
 
-test('passesDivergence2Way: vig-out-of-range → fail-open (beide passeren)', () => {
-  // Exotisch-hoge vig (bv. 20%) → gate skip om false positives te voorkomen
+test('passesDivergence2Way: vig-out-of-range → fail-closed (v12.0.1)', () => {
+  // v12.0.1: extreme overround (bv. 20%+ vig of <0.98 tot) = data-corruptie
+  // of incompatibele paired odds. Fail-closed i.p.v. fail-open voorkomt
+  // absurde picks (bv. NBA 1H Over 110.5 @ 34.0 paired met Under @ 1.10
+  // gaf tot=0.94 → pre-v12.0.1 slipte door; nu hard geblokkeerd).
   const r = modelMath.passesDivergence2Way(0.80, 0.20, 1.10, 1.10);
-  assert.strictEqual(r.passA, true);
-  assert.strictEqual(r.passB, true);
+  assert.strictEqual(r.passA, false);
+  assert.strictEqual(r.passB, false);
   assert.strictEqual(r.marketFair, null);
+  assert.ok(String(r.reason || '').includes('overround_out_of_range'));
+});
+
+test('passesDivergence2Way: extreme odds paired (34 vs 1.10) → fail-closed', () => {
+  // Exacte repro van de v12.0.0 bug: NBA 1H Over 110.5 @ 34 met Under @ 1.10.
+  // Pre-fix: tot=0.029+0.909=0.938 < 1.0 → fail-open → absurde edge door.
+  const r = modelMath.passesDivergence2Way(0.50, 0.50, 34.0, 1.10);
+  assert.strictEqual(r.passA, false, 'outlier odd moet gate falen');
+  assert.strictEqual(r.passB, false);
 });
 
 test('passesDivergence2Way: ongeldige prijs → fail-open', () => {
@@ -2519,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.0.0');
+  assert.strictEqual(appMeta.APP_VERSION, '12.0.1');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);

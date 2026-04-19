@@ -2,6 +2,25 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.0.1] - 2026-04-19
+
+**P0 hotfix · absurde 1H Over odds (bv. 34.0) geblokkeerd**
+
+### Fixed
+
+- **[P0]** Operator-rapport 2026-04-19 na v12.0.0 deploy: NBA 1H Over 110.5 pts pick met Bet365 @ **34.0** (zou 2.0U × +€1012 expectedEur hebben opgeleverd, absoluut onrealistisch). Root cause = stapeling van 3 latent bugs die samen tot catastrofe leidden toen v12.0.0's `dedupeBestPrice` de outlier-prijs niet meer onderdrukte:
+  1. **Parser had geen price sanity-cap**. Api-sports retourneerde ergens een 34.0 odd op een 1H Over-markt (data-corruptie of verkeerde markt-koppeling). Pre-v12.0.0 onderdrukte `dedupeMainLine` de outlier door de laagste prijs te kiezen; post-v12.0.0 `dedupeBestPrice` pakte hem op. Fix: `lib/odds-parser.js` drop alle totals/spreads/halfTotals/halfSpreads/teamTotals quotes met `price < 1.10 || price > 10.0`. O/U-markten hebben per definitie geen prijzen buiten die range.
+  2. **1H/P1 O/U markten misten `price <= 3.5` upper bound**. Alleen full-game O/U had dit. Fix: server.js:2960, 2964, 3768, 3772, 4926, 4930 — toegevoegd aan basketball/hockey/NFL 1H + hockey P1 O/U.
+  3. **`passesDivergence2Way` fail-opent bij `tot < 1.0`**. Extreme paired odds (34 vs 1.10) geven tot=0.938 → oude code `!(tot >= 1.0 && tot < 1.15)` → fail-open → gate laat pick door. Fix: fail-closed op `tot < 0.98 || tot >= 1.15`. Nieuwe test: 34+1.10 paired → gate faalt → pick dropt.
+
+### Why
+v11.3.32 toonde al Bet365 @ 34 odd voor dezelfde 1H Over 110.5 pick. De absurde odds bestonden al een tijd, maar werden gemaskeerd door mildere Kelly-staking (drawdown_soft). v12.0.0's nieuwe `dedupeBestPrice` + 0-signal drop filter maakte de ranking agressiever, en de 34-odd-pick klom naar top-2 met 2.0U stake = catastrofaal advies. Het was dus niet één nieuwe bug maar drie latente defects die de v12.0.0 release ontmaskerde.
+
+### Tests
+638 passed, 0 failed. 2 nieuwe unit-tests: `vig-out-of-range → fail-closed` en `extreme odds paired (34 vs 1.10) → fail-closed`.
+
+---
+
 ## [12.0.0] - 2026-04-19
 
 **Foundational release · parser correctness + calibration integrity + signal discipline**
