@@ -2,6 +2,36 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [11.3.31] - 2026-04-19
+
+**Hotfix · methodologie-mismatch sanity-gates + sanity_fail observability**
+
+Vervolg op Codex second-opinion na v11.3.30. Codex: *"BTTS wordt inhoudelijk verkeerd gegated. `calcBTTSProb()` is een H2H+form-model, geen market-derived probability. Daar een 7pp devig-gate op zetten met `passesDivergence2Way()` is methodologisch fout. Ik heb normale voorbeeldinputs doorgerekend waarbij BTTS direct 15-26 procentpunt van markt-devig afligt en dus altijd faalt."*
+
+### Fixed
+
+- **[CRITICAL]** Football BTTS (server.js:6173): verwijderd `passesDivergence2Way(bttsYesP, bttsNoP, ...)` gate. Vervangen door `h2hN >= 5` check. Reden: `calcBTTSProb()` (H2H + form-model) is niet market-devigged → devig-vergelijking is methodologisch mismatch → faalde structureel ook op legitieme BTTS-inschattingen. De Sandefjord-case (74% model vs 42% market) die oorspronkelijk tot v11.1.2 leidde was een **dun-H2H** probleem (n=2 samples). Een h2hN≥5 gate pakt die oorzaak direct aan zonder de methodologie-mismatch van een devig-gate.
+- **[CRITICAL]** Hockey Team Totals (server.js:3587-3636): verwijderd `passesDivergence2Way(pOver, pUnder, ...)` gate op 4 callsites (home/away × over/under). Reden: `pOver = poissonOver(lambda, line)` is Poisson-based, niet market-devigged — zelfde methodologische mismatch als BTTS. Vervangen door λ-range sanity: `0.5 ≤ lambdaHome/Away ≤ 5.0 goals/game`. Buiten die range betekent data stuk, skip pick. Paired over/under aanwezigheid + price range 1.60-3.5 + edge-min blijven actief.
+- **[HIGH]** Football 1X2 writePickCandidate (server.js:5904-5924): `sanity_fail` reject-reason nu gelogd. Pre-fix logde alleen `no_bookie_price / price_too_low / price_too_high / blowout_opp_too_low / edge_below_min`, maar niet `sanity_fail` — terwijl de `mkP()` call-sites wél op `sanityHomeFb/sanityAwayFb/sanityDrawFb.agree` checken. Near-miss UI was dus **blind** voor deze hele rejection-categorie. Nu format: `sanity_fail (div X.Xpp > Y.Ypp)`.
+- **[HIGH]** `edge_below_min` reject-reason in 1X2: toont nu de **werkelijke** adaptieve drempel via `adaptiveMinEdge('football', side, min)` in plaats van alleen base `min`. Consistent met wat `mkP` daadwerkelijk afdwingt. Na v11.3.30 is dat 5.5% voor alle sides, maar als we later per-markt beleid herinvoeren blijft de log correct.
+
+### Why
+
+Scan-log 2026-04-19 08:41 op v11.3.30: 102 voetbal wedstrijden, 0 pre-match picks. Multi-sport: 0 picks. Near-miss UI: 1000 candidates, 54 geaccepteerd (5.4%), maar: (a) BTTS/DNB/DC hebben geen candidate-logging, (b) sanity_fail voor 1X2 werd niet gelogd, (c) edges op andere markten werden structureel onder de 7pp devig-gate voor BTTS en Team Totals weggevangen.
+
+Codex finding was correct: de scan-gates voor markten waar model-prob **inherent** niet op dezelfde basis als market-devig ligt (BTTS = H2H/form, Hockey TT = Poisson) waren methodologisch fout toegepast. v11.1.2 / v11.2.1 introduceerde ze als over-correction op de Sandefjord operator-report, zonder onderscheid te maken tussen model-types.
+
+### Niet in deze release (follow-up)
+
+- Football BTTS/DNB/DC hebben nog geen eigen `writePickCandidate` logging. Bij nul picks uit die markten zien we niets in near-miss UI. Follow-up: voeg candidate-logging toe voor alle football secondary markten.
+- `adaptiveMinEdge` logging in hockey/baseball/basketball/NFL/handball `writePickCandidate` callsites. Nu nog base-MIN_EDGE in de log.
+- Als BTTS nu zinvolle picks gaat genereren maar qua resultaten slecht blijkt, kan een signal-quality gate (minimum signal-count of dataConfidence ≥ 0.70) worden toegevoegd zonder de foute devig-vergelijking terug te brengen.
+
+### Tests
+637 passed, 0 failed (ongewijzigd — BTTS/TT gate-tests waren indirect via end-to-end scan, geen directe unit-tests die breken op removal).
+
+---
+
 ## [11.3.30] - 2026-04-19
 
 **Hotfix · adaptiveMinEdge sample-trap volledig verwijderd**

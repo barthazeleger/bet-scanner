@@ -3580,11 +3580,17 @@ async function runHockey(emit) {
           const linesHome = [...new Set(homeTT.map(o => o.point))];
           const linesAway = [...new Set(awayTT.map(o => o.point))];
 
-          // v11.2.1 KRITIEKE FIX: Poisson-only TT zonder market-anchor gaf fake
-          // edges. Nu: vereist paired over/under op zelfde line (devig mogelijk),
-          // en Poisson-prob moet binnen 4pp van devigged market-consensus liggen.
-          // Zonder markt-anchor: skip (geen pick beter dan valse edge).
+          // v11.3.31 (Codex-finding): Team Totals gebruikt Poisson-based pOver,
+          // niet market-devigged. `passesDivergence2Way()` vergelijkt Poisson-prob
+          // met devigged-market-prob, wat per definitie methodologisch mismatcht
+          // is — Poisson ≠ market-implied. Fix: verwijder gate, behoud:
+          //   (a) paired over/under aanwezig (zie !ov.length || !un.length check),
+          //   (b) lambda in healthy range (0.5-5.0 goals/game; buiten = data stuk),
+          //   (c) price range 1.60-3.5 + edge-min uit MIN_EDGE,
+          //   (d) mkP's auditSuspicious-dampen op grote baseline-gaps.
+          const ttLambdaOk = (lambda) => Number.isFinite(lambda) && lambda >= 0.5 && lambda <= 5.0;
           for (const line of linesHome) {
+            if (!ttLambdaOk(lambdaHome)) continue;
             const ov = homeTT.filter(o => o.side === 'over' && o.point === line);
             const un = homeTT.filter(o => o.side === 'under' && o.point === line);
             if (!ov.length || !un.length) continue;
@@ -3593,23 +3599,23 @@ async function runHockey(emit) {
             if (bestOv.price <= 0 || bestUn.price <= 0) continue;
             const pOver = poissonOver(lambdaHome, line);
             const pUnder = 1 - pOver;
-            const ttGate = passesDivergence2Way(pOver, pUnder, bestOv.price, bestUn.price);
             const ovEdge = pOver * bestOv.price - 1;
             const unEdge = pUnder * bestUn.price - 1;
             const fxMetaTtH = { fixtureId: gameId, marketType: 'team_total', selectionKey: `home_over_${line}`, line };
             const fxMetaTtU = { fixtureId: gameId, marketType: 'team_total', selectionKey: `home_under_${line}`, line };
-            if (ovEdge >= MIN_EDGE && bestOv.price >= 1.60 && bestOv.price <= 3.5 && ttGate.passA) {
+            if (ovEdge >= MIN_EDGE && bestOv.price >= 1.60 && bestOv.price <= 3.5) {
               mkP(`${hm} vs ${aw}`, league.name, `📈 ${hm} TT Over ${line}`, bestOv.price,
                 `Team Total Home: ${(pOver*100).toFixed(1)}% over ${line} (λ=${lambdaHome.toFixed(2)}) | ${bestOv.bookie}: ${bestOv.price} | ${ko}`,
                 Math.round(pOver*100), ovEdge * 0.22, kickoffTime, bestOv.bookie, [...matchSignals, 'team_total_home'], null, fxMetaTtH);
             }
-            if (unEdge >= MIN_EDGE && bestUn.price >= 1.60 && bestUn.price <= 3.5 && ttGate.passB) {
+            if (unEdge >= MIN_EDGE && bestUn.price >= 1.60 && bestUn.price <= 3.5) {
               mkP(`${hm} vs ${aw}`, league.name, `📉 ${hm} TT Under ${line}`, bestUn.price,
                 `Team Total Home: ${(pUnder*100).toFixed(1)}% under ${line} (λ=${lambdaHome.toFixed(2)}) | ${bestUn.bookie}: ${bestUn.price} | ${ko}`,
                 Math.round(pUnder*100), unEdge * 0.22, kickoffTime, bestUn.bookie, [...matchSignals, 'team_total_home'], null, fxMetaTtU);
             }
           }
           for (const line of linesAway) {
+            if (!ttLambdaOk(lambdaAway)) continue;
             const ov = awayTT.filter(o => o.side === 'over' && o.point === line);
             const un = awayTT.filter(o => o.side === 'under' && o.point === line);
             if (!ov.length || !un.length) continue;
@@ -3618,17 +3624,16 @@ async function runHockey(emit) {
             if (bestOv.price <= 0 || bestUn.price <= 0) continue;
             const pOver = poissonOver(lambdaAway, line);
             const pUnder = 1 - pOver;
-            const ttGate = passesDivergence2Way(pOver, pUnder, bestOv.price, bestUn.price);
             const ovEdge = pOver * bestOv.price - 1;
             const unEdge = pUnder * bestUn.price - 1;
             const fxMetaTtH = { fixtureId: gameId, marketType: 'team_total', selectionKey: `away_over_${line}`, line };
             const fxMetaTtU = { fixtureId: gameId, marketType: 'team_total', selectionKey: `away_under_${line}`, line };
-            if (ovEdge >= MIN_EDGE && bestOv.price >= 1.60 && bestOv.price <= 3.5 && ttGate.passA) {
+            if (ovEdge >= MIN_EDGE && bestOv.price >= 1.60 && bestOv.price <= 3.5) {
               mkP(`${hm} vs ${aw}`, league.name, `📈 ${aw} TT Over ${line}`, bestOv.price,
                 `Team Total Away: ${(pOver*100).toFixed(1)}% over ${line} (λ=${lambdaAway.toFixed(2)}) | ${bestOv.bookie}: ${bestOv.price} | ${ko}`,
                 Math.round(pOver*100), ovEdge * 0.22, kickoffTime, bestOv.bookie, [...matchSignals, 'team_total_away'], null, fxMetaTtH);
             }
-            if (unEdge >= MIN_EDGE && bestUn.price >= 1.60 && bestUn.price <= 3.5 && ttGate.passB) {
+            if (unEdge >= MIN_EDGE && bestUn.price >= 1.60 && bestUn.price <= 3.5) {
               mkP(`${hm} vs ${aw}`, league.name, `📉 ${aw} TT Under ${line}`, bestUn.price,
                 `Team Total Away: ${(pUnder*100).toFixed(1)}% under ${line} (λ=${lambdaAway.toFixed(2)}) | ${bestUn.bookie}: ${bestUn.price} | ${ko}`,
                 Math.round(pUnder*100), unEdge * 0.22, kickoffTime, bestUn.bookie, [...matchSignals, 'team_total_away'], null, fxMetaTtU);
@@ -5896,19 +5901,25 @@ async function runPrematch(emit) {
                 debug: { sport: 'football', ha, signals: matchSignals, multipliers: { home: cm.home?.multiplier, draw: cm.draw?.multiplier, away: cm.away?.multiplier } },
               });
               if (!runId) return;
+              // v11.3.31 (Codex-finding): sanity_fail reject-reason was onzichtbaar.
+              // 1X2 mkP-calls checken sanityHomeFb/sanityAwayFb/sanityDrawFb.agree,
+              // maar pick_candidates logt die niet mee → near-miss UI blind voor
+              // deze hele rejection-categorie. Nu wel gelogd.
               const evals = [
-                { side: 'home', edge: homeEdge, prob: adjHome2, best: bH, gateOk: (bA.price > BLOWOUT_OPP_MAX) },
-                { side: 'draw', edge: drawEdge, prob: adjDraw || 0, best: bD || { price: 0, bookie: 'none' }, gateOk: true, minThreshold: MIN_EDGE + 0.01 },
-                { side: 'away', edge: awayEdge, prob: adjAway2, best: bA, gateOk: (bH.price > BLOWOUT_OPP_MAX) },
+                { side: 'home', edge: homeEdge, prob: adjHome2, best: bH, gateOk: (bA.price > BLOWOUT_OPP_MAX), sanity: sanityHomeFb },
+                { side: 'draw', edge: drawEdge, prob: adjDraw || 0, best: bD || { price: 0, bookie: 'none' }, gateOk: true, minThreshold: MIN_EDGE + 0.01, sanity: sanityDrawFb },
+                { side: 'away', edge: awayEdge, prob: adjAway2, best: bA, gateOk: (bH.price > BLOWOUT_OPP_MAX), sanity: sanityAwayFb },
               ];
               for (const ev of evals) {
                 const min = ev.minThreshold != null ? ev.minThreshold : MIN_EDGE;
+                const adaptiveMin = adaptiveMinEdge('football', `${ev.side}`, min);
                 let rejected = null;
                 if (!ev.best || ev.best.price <= 0) rejected = 'no_bookie_price';
                 else if (ev.best.price < 1.60) rejected = `price_too_low (${ev.best.price})`;
                 else if (ev.side !== 'draw' && ev.best.price > MAX_WINNER_ODDS) rejected = `price_too_high (${ev.best.price})`;
                 else if (!ev.gateOk) rejected = 'blowout_opp_too_low';
-                else if (ev.edge < min) rejected = `edge_below_min (${(ev.edge * 100).toFixed(1)}% < ${(min * 100).toFixed(1)}%)`;
+                else if (ev.sanity && ev.sanity.agree === false) rejected = `sanity_fail (div ${(ev.sanity.divergence * 100).toFixed(1)}pp > ${(MODEL_MARKET_DIVERGENCE_THRESHOLD * 100).toFixed(1)}pp)`;
+                else if (ev.edge < adaptiveMin) rejected = `edge_below_min (${(ev.edge * 100).toFixed(1)}% < ${(adaptiveMin * 100).toFixed(1)}%)`;
                 snap.writePickCandidate(supabase, {
                   modelRunId: runId, fixtureId: fid, selectionKey: ev.side,
                   bookmaker: ev.best.bookie || 'none', bookmakerOdds: ev.best.price,
@@ -6166,18 +6177,24 @@ async function runPrematch(emit) {
               const fxMetaBttsY = { fixtureId: fid, marketType: 'btts', selectionKey: 'yes', line: null };
               const fxMetaBttsN = { fixtureId: fid, marketType: 'btts', selectionKey: 'no',  line: null };
 
-              // v11.1.2: market-devig sanity gate. Voorheen kon een calcBTTSProb
-              // output van 26% Yes (= 74% Nee) doorgaan terwijl markt-devigged
-              // Yes=40% aangaf → 14pp divergence, fake edge. Operator-report
-              // 2026-04-18 BTTS Nee @ 2.40 (74% model, 42% market) blokkeert nu.
-              const bttsGate = passesDivergence2Way(bttsYesP, bttsNoP, bestYes.price, bestNo.price);
+              // v11.3.31 (Codex-finding): methodologisch correcte gate voor BTTS.
+              // Voorheen: passesDivergence2Way(bttsYesP, marketDevig, 7pp threshold).
+              // Probleem: bttsYesP komt uit calcBTTSProb() (H2H + form-model), NIET
+              // uit market-devig. Die kan inherent 15-25pp van market-devig afliggen
+              // zonder dat dat "fake edge" is — het is gewoon een andere methode.
+              // De Sandefjord-case (74% model vs 42% market @ 2.40) was een DUN-H2H
+              // probleem: h2hN=2, BTTS_H2H_PRIOR_K kon de sample niet voldoende
+              // shrinken. Echte fix: vereis h2hN >= 5 zodat calcBTTSProb op
+              // voldoende data kan steunen. Plus: auditSuspicious in mkP vangt al
+              // grote gaps tussen model en markt-baseline (stake-dampen 0.6×).
+              const bttsDataOk = h2hN >= 5;
 
-              if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60 && bttsGate.passA)
+              if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60 && bttsDataOk)
                 mkP(`${hm} vs ${aw}`, league.name, `🔥 BTTS Ja`, bestYes.price,
                   `BTTS: ${(bttsYesP*100).toFixed(1)}% | ${bestYes.bookie}: ${bestYes.price} | GF: ${hmGFAvg}/${awGFAvg}${h2hStr} | ${ko}`,
                   Math.round(bttsYesP*100), bttsYesEdge * 0.22 * (cm.over?.multiplier ?? 1), kickoffTime, bestYes.bookie, bttsSignals, refereeName, fxMetaBttsY);
 
-              if (bttsNoEdge >= MIN_EDGE && bestNo.price >= 1.60 && bttsGate.passB)
+              if (bttsNoEdge >= MIN_EDGE && bestNo.price >= 1.60 && bttsDataOk)
                 mkP(`${hm} vs ${aw}`, league.name, `🛡️ BTTS Nee`, bestNo.price,
                   `BTTS Nee: ${(bttsNoP*100).toFixed(1)}% | ${bestNo.bookie}: ${bestNo.price} | GF: ${hmGFAvg}/${awGFAvg} | CS: ${hmTS2?.cleanSheetPct ? (hmTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}/${awTS2?.cleanSheetPct ? (awTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}${h2hStr} | ${ko}`,
                   Math.round(bttsNoP*100), bttsNoEdge * 0.20 * (cm.under?.multiplier ?? 1), kickoffTime, bestNo.bookie, bttsSignals, refereeName, fxMetaBttsN);
