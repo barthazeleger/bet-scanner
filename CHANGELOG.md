@@ -2,6 +2,39 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.1.0] - 2026-04-19
+
+**Operator-rapport-cluster · 8 runtime bugs + data-hygiëne fix**
+
+Release gebundelt uit operator-rapport 2026-04-19 avond. Bart meldde bewijs
+van meerdere runtime bugs met directe geldverlies-risico (verkeerde bet-
+settlement, absurde CLV-rapport, verkeerde push-notificaties). Elke fix is
+als eigen commit (v12.1.0-a t/m -h) gepusht zodat rollback granulair is.
+
+### Fixed
+
+- **[P0 · 12.1.0-a]** `index.html` live-sync team-matching + TT-markt skip. Frontend live-sync matchte bet op **eerste woord** van teamnaam → "Tampa Bay Lightning vs Montreal" bet matchte met "Pittsburgh Pirates vs Tampa Bay Rays" MLB fixture op woord "tampa" → push "Under 3.5 gebroken" voor verkeerde wedstrijd. Plus: Team Total markten triggerden op game-total goals (TT meet één team's score, niet sum). Fix: strictere team-match (beide teams verplicht, ≥4 chars substring of laatste-woord nickname ≥5 chars) + sport-filter + TT-markt skip in live O/U-sync.
+- **[P0 · 12.1.0-b]** `lib/clv-match.js` CLV + pre-kickoff check skipt nu TT-markten. `resolveOddFromBookie` en `marketKeyFromBetMarkt` matchten "Under 3.5" via game-total regex → pakte NHL full-game Under line (5.75) voor TT Under 3.5 (1.95) → CLV -66% rapport. Fix: expliciete TT-detect + return null. Liever geen CLV dan foute CLV; TT-CLV vereist aparte snapshot-structuur die er nu niet is.
+- **[P0 · 12.1.0-c]** `lib/runtime/results-checker.js` Team Total settlement. TBL vs MTL 3-4 met bet "TBL TT Under 3.5": tracker toonde L (verloren) terwijl TBL scoorde 3 → Under 3.5 = W. Resultaat: results-checker viel door naar Generic Under, gebruikte total=scoreH+scoreA=7, 7>3.5 → L. Fix: Team Total regex-detect vóór Generic O/U; gebruikt team's individuele score (scoreH óf scoreA) op basis van home/away match.
+- **[P1 · 12.1.0-d]** `lib/runtime/live-board.js` V1_LIVE_STATUSES uitgebreid. Operator: "live NHL werkt niet". Ontbraken: `PT` (penalties/shootout, ~10% NHL games) en `INT` (intermission). Games in die statuses werden niet als live herkend → geen score-update in live-board. Fix: beide statuses toegevoegd.
+- **[P1 · 12.1.0-e]** `lib/learning-loop.js` filter op preferred bookies. Operator: "bookies die uit staan toch meetellen in learning data — niet legaal in NL, zal nooit aanvinken". Voorheen telden ALLE settled bets mee voor calibratie, ongeacht bookie. Nu: learning-data alleen op preferred-bookies via nieuwe `getPreferredBookies` dep. Fail-open bij ontbrekende dep of lege set (backward compat).
+- **[P1 · 12.1.0-f]** `lib/modal-advice.js` unit-advies consistent met score bij betere odds. Operator: "bet geplaatst @ 1.95 ipv 1.86 (+4.8%), score sprong van 6/10 → 10/10 maar unit-advies bleef 0.5U". Voorheen capte tier-5 ('better') altijd op `origUnits` terwijl score op `max(origScore, freshScore)` ging. Fix: bij diffPct ≥ +4% mag units 1 bucket omhoog (gecapt op pureRec). Score volgt de rec-units.
+- **[P2 · 12.1.0-g]** `index.html` signal-performance toont 'shadow' bij weight=0. Operator verwarring "overal 0x". Niet bug maar mislabelling — weight=0 is doctrine-correct voor shadow-mode. Nu explicit label + tooltip.
+- **[P1 · 12.1.0-h]** `lib/routes/admin-signals.js` Model-tab perSport telling. Operator: "aantal bets per sport (voetbal) in Model tab al hoger dan totaal in tracker". Oude `key.slice(0, idx)` pakte 'btts' als sport voor 'btts_yes' (= football-markt), en legacy `home` + nieuwe `football_home` telden BEIDE onder football → dubbele telling. Fix: whitelist-based sport-detection (football/basketball/hockey/baseball/american-football/handball only); alles buiten die whitelist valt onder football.
+
+### Niet in deze release (follow-up)
+
+Operator-vragen met grotere scope:
+- **Early payout** activeren als actieve signal (nu shadow log). Wacht tot data schoon.
+- **SofaScore API / grotere sports-API** evaluatie. Huidige stack is capable; eerst v12.1 stabiel laten draaien.
+- **NHL team total tegenstander-positie + H2H weging**. Legit architectural issue: `λ_home = expHome + 0.023` meet alleen team's eigen output, niet opponent-defense of pace. Volwaardige herziening in v12.2 als apart architectural document.
+- **Vervuilde calibratie-rollback**. Bart kan via tracker UI verkeerd-gesettlede bets (zoals TBL TT Under 3.5 dat als L geboekt staat) handmatig op W zetten — `revertCalibration` wordt dan automatisch getriggerd.
+
+### Tests
+639 passed, 0 failed.
+
+---
+
 ## [12.0.2] - 2026-04-19
 
 **Bugfix · analyse-tab toont nu alle picks (multi-sport) i.p.v. alleen voetbal**
