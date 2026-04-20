@@ -46,7 +46,7 @@ const { resolveBetOutcome } = require('./lib/runtime/results-checker');
 const { logScanEnd } = require('./lib/runtime/scan-logger');
 const { fetchSnapshotClosing } = require('./lib/clv-backfill');
 const { logEarlyPayoutShadow, aggregateEarlyPayoutStats } = require('./lib/signals/early-payout');
-const { marketKeyFromBetMarkt: _marketKeyFromBetMarkt } = require('./lib/clv-match');
+const { marketKeyFromBetMarkt: _marketKeyFromBetMarkt, supportsClvForBetMarkt } = require('./lib/clv-match');
 
 // Snapshot layer (v2 foundation): point-in-time logging voor learning + backtesting
 const snap = require('./lib/snapshots');
@@ -125,7 +125,11 @@ async function refreshKillSwitch() {
   if (!KILL_SWITCH.enabled) { KILL_SWITCH.set.clear(); return; }
   try {
     const bets = await loadSettledBetsOnce();
-    const all = bets.filter(b => typeof b.clv_pct === 'number' && !isNaN(b.clv_pct));
+    const all = bets.filter(b =>
+      typeof b.clv_pct === 'number' &&
+      !isNaN(b.clv_pct) &&
+      supportsClvForBetMarkt(b.markt)
+    );
     const byMarket = {};
     for (const b of all) {
       const s = normalizeSport(b.sport || 'football');
@@ -837,7 +841,12 @@ async function autoTuneSignalsByClv() {
   try {
     const { data: bets } = await supabase.from('bets')
       .select('signals, clv_pct, sport, markt').not('clv_pct', 'is', null);
-    const all = (bets || []).filter(b => typeof b.clv_pct === 'number' && !isNaN(b.clv_pct) && b.signals);
+    const all = (bets || []).filter(b =>
+      typeof b.clv_pct === 'number' &&
+      !isNaN(b.clv_pct) &&
+      b.signals &&
+      supportsClvForBetMarkt(b.markt)
+    );
     if (all.length < 30) return { tuned: 0, adjustments: [], note: 'te weinig CLV data (<30)' };
 
     const signalStats = summarizeSignalMetrics(all.map(b => ({

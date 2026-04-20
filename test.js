@@ -3175,7 +3175,7 @@ test('fairProb als function: per-point devigged consensus werkt', () => {
 // catchte DNB als ML via emoji. Dit veroorzaakte foute CLV% (o.a. Wigan 0%
 // waar echte waarde +16.6% was, en Chesterfield -2.56% waar echte waarde
 // +3.8% was). Deze tests lock de strict matching.
-const { resolveOddFromBookie } = require('./lib/clv-match');
+const { resolveOddFromBookie, marketKeyFromBetMarkt, supportsClvForBetMarkt } = require('./lib/clv-match');
 
 test('CLV: Match Winner strict match — geen Alt Winner fallback', () => {
   const bk = { name: 'Unibet', bets: [
@@ -3339,6 +3339,15 @@ test('CLV resolver: bet.values null/undefined leidt niet tot crash', () => {
   // eerste bet matcht op naam maar values is null → fallback naar tweede
   const odd = resolveOddFromBookie(bk, '🏠 Home wint');
   assert.strictEqual(odd, 1.95, 'skipt null-values en pakt volgende match');
+});
+
+test('CLV resolver: Team Total markt returned null i.p.v. game-total closing line', () => {
+  const bk = {
+    bets: [
+      { name: 'Goals Over/Under', values: [{ value: 'Under 3.5', odd: '5.75' }, { value: 'Over 3.5', odd: '1.15' }] },
+    ],
+  };
+  assert.strictEqual(resolveOddFromBookie(bk, 'Colorado Avalanche TT Under 3.5'), null);
 });
 
 test('detectMarket: alle nieuwe buckets dekken expected labels', () => {
@@ -7279,8 +7288,6 @@ console.log('\n  Sharp reference (Pinnacle/Betfair):');
 // ── CLV SHARP REFERENCE (v10.10.21) ──────────────────────────────────────────
 console.log('\n  CLV sharp reference (Pinnacle closing):');
 
-const { marketKeyFromBetMarkt } = require('./lib/clv-match');
-
 test('marketKeyFromBetMarkt: ML wint → moneyline/home', () => {
   const r = marketKeyFromBetMarkt('🏠 Ajax wint');
   assert.deepStrictEqual(r, { market_type: 'moneyline', selection_key: 'home' });
@@ -7334,6 +7341,12 @@ test('marketKeyFromBetMarkt: 60-min draw → threeway/draw', () => {
 test('marketKeyFromBetMarkt: onbekende markt → null (graceful)', () => {
   assert.strictEqual(marketKeyFromBetMarkt('Exotic Player Prop'), null);
   assert.strictEqual(marketKeyFromBetMarkt(null), null);
+});
+
+test('marketKeyFromBetMarkt: Team Total markt is unsupported voor CLV en returnt null', () => {
+  assert.strictEqual(marketKeyFromBetMarkt('Tampa Bay Lightning TT Under 3.5'), null);
+  assert.strictEqual(supportsClvForBetMarkt('Tampa Bay Lightning TT Under 3.5'), false);
+  assert.strictEqual(supportsClvForBetMarkt('Over 2.5'), true);
 });
 
 test('lineTimeline.isSharpBookie: detecteert Pinnacle/Betfair als sharp', () => {
@@ -7458,6 +7471,53 @@ test('bets-data.readBets mapping preserves userId for global results-check', () 
   };
   assert.strictEqual(mapped.id, 42);
   assert.strictEqual(mapped.userId, 'abc-123');
+});
+
+test('bets-data.readBets masks unsupported TT CLV values from tracker/model consumers', async () => {
+  const createBetsData = require('./lib/bets-data');
+  const mockSupabase = {
+    from: () => ({
+      select: () => ({
+        order: () => ({
+          eq: () => Promise.resolve({
+            data: [{
+              bet_id: 65,
+              user_id: 'u1',
+              uitkomst: 'W',
+              odds: 1.95,
+              units: 0.75,
+              inzet: 18.75,
+              datum: '19-04-2026',
+              tijd: '21:00',
+              sport: 'IJshockey',
+              wedstrijd: 'Colorado Avalanche vs ...',
+              markt: 'Colorado Avalanche TT Under 3.5',
+              tip: 'Bet365',
+              wl: 17.81,
+              clv_pct: -66.09,
+              clv_odds: 5.75,
+              sharp_clv_pct: -63.0,
+              sharp_clv_odds: 5.2,
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  };
+  const bd = createBetsData({
+    supabase: mockSupabase,
+    getUserMoneySettings: async () => ({ unitEur: 25, startBankroll: 500 }),
+    defaultStartBankroll: 500,
+    defaultUnitEur: 25,
+    revertCalibration: async () => {},
+    updateCalibration: async () => {},
+  });
+  const { bets } = await bd.readBets('u1');
+  assert.strictEqual(bets[0].clvPct, null);
+  assert.strictEqual(bets[0].clvOdds, null);
+  assert.strictEqual(bets[0].sharpClvPct, null);
+  assert.strictEqual(bets[0].sharpClvOdds, null);
 });
 
 // F4: isLiveIrreversiblyLost detects Under-broken + BTTS-nee-both-scored.
