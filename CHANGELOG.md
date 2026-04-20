@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.1.5] - 2026-04-20
+
+**Odds-endpoint accepteert nu Dutch sport-label + home/away swap-fallback**
+
+### Fixed
+
+- **[P1]** `/api/bets/:id/current-odds` deed `bet.sport.toLowerCase()` zonder normalisatie; `IJshockey` → `ijshockey` viel daardoor uit de `hostMap` en de endpoint gaf "Sport 'ijshockey' heeft geen odds-endpoint", ook nadat v12.1.4 de fixture succesvol had gekoppeld. Fix: `normalizeSportKey` wordt nu ook in de endpoint toegepast, dus Dutch + English labels werken allebei.
+- **[P2]** Fixture-resolver krijgt extra swap-check: als forward-match (bet-home ↔ fixture-home) geen hit geeft, wordt alsnog (bet-home ↔ fixture-away) geprobeerd. Vangt bets waarin teams in omgekeerde volgorde staan vs. de API-truth in de fixtures-tabel.
+
+### Tests
+646 passed, 0 failed. 1 nieuwe: home/away swap-fallback.
+
+---
+
 ## [12.1.4] - 2026-04-20
 
 **Fixture-resolver matcht nu Dutch sport-labels + varianten in team-naam**

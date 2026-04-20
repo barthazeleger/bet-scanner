@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.1.4');
+  assert.strictEqual(appMeta.APP_VERSION, '12.1.5');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -7563,6 +7563,26 @@ test('resolveFixtureIdForBet: first-word match werkt als fixture-naam afwijkt (v
   const bet = { datum: '21-04-2026', wedstrijd: 'Edmonton Oilers vs Anaheim Ducks', sport: 'hockey' };
   const id = await resolveFixtureIdForBet(mockSupabase, bet);
   assert.strictEqual(id, 555);
+});
+
+test('resolveFixtureIdForBet: home/away swap fallback vindt fixture (v12.1.5)', async () => {
+  const { resolveFixtureIdForBet } = require('./lib/routes/bets-write');
+  const mockSupabase = {
+    from: () => ({
+      select: () => ({
+        eq: function() { return this; },
+        gte: function() { return this; },
+        lte: function() { return this; },
+        limit: () => Promise.resolve({ data: [
+          { id: 999, home_team_name: 'Fiorentina', away_team_name: 'Lecce', start_time: '2026-04-20T18:45:00Z' },
+        ]}),
+      }),
+    }),
+  };
+  // Bet heeft teams in omgekeerde volgorde vs. fixture; swap-check vangt dit.
+  const bet = { datum: '20-04-2026', wedstrijd: 'Lecce vs Fiorentina', sport: 'Voetbal' };
+  const id = await resolveFixtureIdForBet(mockSupabase, bet);
+  assert.strictEqual(id, 999);
 });
 
 test('resolveFixtureIdForBet: no unique match returns null', async () => {
