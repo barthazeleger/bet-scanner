@@ -2,6 +2,23 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.1.6] - 2026-04-20
+
+**Fixture-resolver matcht team-naam varianten (club-prefix strip)**
+
+### Fixed
+
+- **[P1]** `fixtures`-tabel bewaart API-namen met club-prefix (bv. `US Lecce`, `ACF Fiorentina`, `AS Roma`) terwijl `bet.wedstrijd` meestal korte versies bevat (`Lecce`, `Fiorentina`). Resolver matchte daardoor niet. Toegevoegd: token-overlap fallback met strip van diacritics en generic club-codes (FC/SC/AC/AS/US/ACF/AFC/CF/CD/CA/SV/BV/VV/RC/RCD/CS/NK/HK/FK/TSV/RSC/RK/club/team). Echte team-namen (`Oilers`, `Bruins`, etc.) blijven onderscheidend.
+
+### Notes
+
+- Edmonton-bet werkt nu vanaf v12.1.5 (sport-normalisatie). Bij "Geen odds beschikbaar bij api-sports" gaat het om een legitieme API-state (fixture bestaat maar bookies hebben nog geen odds gepubliceerd), niet om een bug.
+
+### Tests
+647 passed, 0 failed. 1 nieuwe: club-prefix variant match (US Lecce ↔ Lecce + ACF Fiorentina ↔ Fiorentina).
+
+---
+
 ## [12.1.5] - 2026-04-20
 
 **Odds-endpoint accepteert nu Dutch sport-label + home/away swap-fallback**
