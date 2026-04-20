@@ -125,7 +125,7 @@
         <div class="scan-panel scan-panel-pm" style="max-width:100%;width:100%;padding:32px 28px">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
             <div>
-              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.1.0</span></div>
+              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.1.1</span></div>
               <div style="font-size:26px;font-weight:800;line-height:1.2;letter-spacing:-.02em" data-i18n-html="scan_headline">Vind de beste bets van dit moment</div>
               <div style="font-size:13px;color:rgba(255,255,255,0.55);margin-top:10px;line-height:1.7" data-i18n-html="scan_desc">
                 Pre-match · Live xG · H2H · Opstellingen · Standen · Predictions<br>
@@ -280,7 +280,7 @@
         </div>
         <div class="field">
           <label>Bookmaker</label>
-          <select id="f-bookie"><option>Bet365</option><option>Unibet</option><option>Toto</option><option>Pinnacle</option><option>Anders</option></select>
+          <select id="f-bookie"><option>Bet365</option><option>Unibet</option><option>Toto</option><option>William Hill</option><option>Pinnacle</option><option>Anders</option></select>
         </div>
         <div class="field">
           <label>Uitkomst</label>
@@ -636,7 +636,7 @@
       <div class="card-hd">
         <div>
           <div class="card-title" style="font-size:17px" data-i18n="card_how_it_works">🎯 EdgePickr — hoe het werkt</div>
-          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.1.0</span> · <span data-i18n="info_date">april 2026</span></div>
+          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.1.1</span> · <span data-i18n="info_date">april 2026</span></div>
         </div>
         <div style="font-size:24px">🤖</div>
       </div>
@@ -1309,7 +1309,7 @@
       </div>
       <div class="field">
         <label>Bookmaker</label>
-        <select id="m-bookie"><option>Bet365</option><option>Unibet</option><option>Toto</option><option>Pinnacle</option><option>Anders</option></select>
+        <select id="m-bookie"><option>Bet365</option><option>Unibet</option><option>Toto</option><option>William Hill</option><option>Pinnacle</option><option>Anders</option></select>
       </div>
     </div>
     <div id="payout-bar" style="display:flex;align-items:center;justify-content:space-between;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.2);border-radius:8px;padding:10px 14px;margin-bottom:4px">
@@ -2306,7 +2306,7 @@ function editSport(id, currentVal) {
 }
 
 function editBookie(id, currentVal) {
-  const bookies = ['Bet365', 'Unibet', 'Toto', 'Pinnacle', 'Anders'];
+  const bookies = ['Bet365', 'Unibet', 'Toto', 'William Hill', 'Pinnacle', 'Anders'];
   const val = prompt(t('prompt_bookie').replace('{val}', currentVal).replace('{list}', bookies.join(', ')), currentVal);
   if (val === null || val === '') return;
   api('/api/bets/' + id, {
@@ -4474,7 +4474,7 @@ function getSelectedScanTimes() {
 function buildBookiePicker(selected) {
   const wrap = document.getElementById('bookie-picker');
   if (!wrap) return;
-  const all = ['Bet365', 'Unibet', 'Toto', 'BetCity', 'Pinnacle', 'DraftKings', 'FanDuel', 'Ladbrokes', 'bwin', '888sport', 'BetMGM', '1xBet'];
+  const all = ['Bet365', 'Unibet', 'Toto', 'BetCity', 'William Hill', 'Pinnacle', 'DraftKings', 'FanDuel', 'Ladbrokes', 'bwin', '888sport', 'BetMGM', '1xBet'];
   const selLower = (selected || []).map(x => (x || '').toLowerCase());
   wrap.innerHTML = all.map(b => {
     const on = selLower.includes(b.toLowerCase());

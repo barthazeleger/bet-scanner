@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.1.1] - 2026-04-19
+
+**Operator-rapport follow-up · William Hill + fixtureId-koppeling**
+
+### Fixed
+
+- **[P1]** William Hill toegevoegd als bookie-optie op 4 plekken in UI: bet-logging select (`#f-bookie` / `#m-bookie`), tracker-edit dropdown, en settings-picker. Voorheen alleen Bet365/Unibet/Toto/Pinnacle in de korte list en William Hill ontbrak ook uit de uitgebreide settings-lijst.
+- **[P1]** Scan-picks geven nu `fixtureId` door naar frontend via orchestrator `toSafe()`. Voorheen werd `p._fixtureMeta.fixtureId` wel intern gebruikt (voor post-scan gate) maar niet geprojecteerd naar de UI-pick. Gevolg: `modalPick.fixtureId = undefined` bij bet-logging → POST /api/bets stuurt `null` → DB-row heeft geen fixture_id → "🔄 Huidige odds ophalen" button toont "Geen fixture_id gekoppeld". Fix: `toSafe()` kopieert nu `fixtureId` naar de safe-pick-projection. Alle nieuwe bets krijgen vanaf nu fixture_id gekoppeld in DB.
+
+### Tests
+639 passed, 0 failed.
+
+---
+
 ## [12.1.0] - 2026-04-19
 
 **Operator-rapport-cluster · 8 runtime bugs + data-hygiëne fix**
