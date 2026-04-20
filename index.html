@@ -4987,7 +4987,7 @@ async function loadSignalPerformance() {
             <div style="font-size:11px;color:var(--muted);margin-top:2px">${r.n} bets · ${r.posCLV_pct}% positief</div>
           </div>
           <div style="text-align:right;min-width:54px;font-weight:700;color:${clvCol}">${r.avgClv > 0 ? '+' : ''}${r.avgClv}%</div>
-          <div style="text-align:right;min-width:40px;font-weight:700">${r.weight}×</div>
+          <div style="text-align:right;min-width:48px;font-weight:700;color:${r.weight > 0 ? 'var(--fg)' : 'var(--muted)'}" title="${r.weight > 0 ? 'Actieve signal-weight boven ingebakken model' : 'Shadow: signal wordt gelogd maar voegt geen extra gewicht toe'}">${r.weight > 0 ? `${r.weight}×` : 'shadow'}</div>
           <div style="text-align:right;flex:0 0 auto;color:${col};font-weight:600;font-size:11px;white-space:nowrap">${statusLabel(r.status)}</div>
         </div>`;
       }).join('')}
