@@ -2,6 +2,24 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.1.8] - 2026-04-23
+
+**Hockey TT CLV + stake-regime consistency**
+
+### Fixed
+
+- **[P1]** NHL team-total `TT Over/Under` odds/CLV lookup matcht nu op de exacte `Home/Away Team Total` markt met wedstrijd-context. De resolver mag niet meer terugvallen naar game-total `Over/Under`, maar kan TT nu wel correct vinden wanneer home/away uit `wedstrijd` afleidbaar is.
+- **[P1]** Current-odds refresh gebruikt voor basketball/hockey/baseball/NFL/handball nu de juiste API-Sports parameter (`game`) in plaats van altijd `fixture`. Dit maakte non-football odds-refresh kwetsbaar.
+- **[P1]** Odds-drift monitor gebruikt nu de centrale strict market resolver en sport-specifieke odds endpoints. Daardoor krijgt NHL TT geen false drift-alerts meer vanuit game totals.
+- **[P2]** Snapshot-CLV fallback filtert nu ook exact op `line`, zodat `Over/Under 2.5` nooit een andere line uit `odds_snapshots` kan pakken.
+- **[P2]** `drawdown_soft` Kelly is verlaagd van `0.40` naar `0.30`. Een win die het systeem uit drawdown haalt schaalt nu logisch omhoog naar `exploratory` (`0.35`) in plaats van omlaag.
+
+### Tests
+
+651 passed, 0 failed.
+
+---
+
 ## [12.1.7] - 2026-04-22
 
 **Scan-volume boost + hockey TT-parity**

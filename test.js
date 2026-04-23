@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.1.7');
+  assert.strictEqual(appMeta.APP_VERSION, '12.1.8');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3341,13 +3341,18 @@ test('CLV resolver: bet.values null/undefined leidt niet tot crash', () => {
   assert.strictEqual(odd, 1.95, 'skipt null-values en pakt volgende match');
 });
 
-test('CLV resolver: Team Total markt returned null i.p.v. game-total closing line', () => {
+test('CLV resolver: Team Total markt matcht alleen exacte home/away TT en nooit game-total', () => {
   const bk = {
     bets: [
       { name: 'Goals Over/Under', values: [{ value: 'Under 3.5', odd: '5.75' }, { value: 'Over 3.5', odd: '1.15' }] },
+      { name: 'Home Team Total', values: [{ value: 'Under 3.5', odd: '1.95' }, { value: 'Over 3.5', odd: '1.85' }] },
     ],
   };
-  assert.strictEqual(resolveOddFromBookie(bk, 'Colorado Avalanche TT Under 3.5'), null);
+  assert.strictEqual(
+    resolveOddFromBookie(bk, 'Colorado Avalanche TT Under 3.5', { matchName: 'Colorado Avalanche vs Edmonton Oilers' }),
+    1.95
+  );
+  assert.strictEqual(resolveOddFromBookie(bk, 'Unknown Team TT Under 3.5'), null);
 });
 
 test('detectMarket: alle nieuwe buckets dekken expected labels', () => {
@@ -5455,7 +5460,8 @@ function buildFakeSupabaseForSnapshots(rows) {
           const filtered = (rows || []).filter(r =>
             (!f.fixture_id || r.fixture_id === f.fixture_id) &&
             (!f.market_type || r.market_type === f.market_type) &&
-            (!f.selection_key || r.selection_key === f.selection_key)
+            (!f.selection_key || r.selection_key === f.selection_key) &&
+            (f.line === undefined || r.line === f.line)
           );
           return { data: filtered, error: null };
         },
@@ -5489,8 +5495,8 @@ test('clv-backfill: preferred bookie row wint van Pinnacle', async () => {
 
 test('clv-backfill: zonder preferred match → Pinnacle als sharp anchor', async () => {
   const sb = buildFakeSupabaseForSnapshots([
-    { fixture_id: 42, market_type: 'total', selection_key: 'over', bookmaker: 'Pinnacle', odds: 1.95, captured_at: '2026-04-10T19:00:00Z' },
-    { fixture_id: 42, market_type: 'total', selection_key: 'over', bookmaker: 'Betway', odds: 1.88, captured_at: '2026-04-10T19:00:00Z' },
+    { fixture_id: 42, market_type: 'total', selection_key: 'over', line: 2.5, bookmaker: 'Pinnacle', odds: 1.95, captured_at: '2026-04-10T19:00:00Z' },
+    { fixture_id: 42, market_type: 'total', selection_key: 'over', line: 2.5, bookmaker: 'Betway', odds: 1.88, captured_at: '2026-04-10T19:00:00Z' },
   ]);
   const r = await clvBackfill.fetchSnapshotClosing(sb, {
     fixtureId: 42, markt: 'Over 2.5', preferredBookie: 'Bet365',
@@ -5501,7 +5507,7 @@ test('clv-backfill: zonder preferred match → Pinnacle als sharp anchor', async
 
 test('clv-backfill: alleen soft-book → snapshot-any fallback', async () => {
   const sb = buildFakeSupabaseForSnapshots([
-    { fixture_id: 42, market_type: 'total', selection_key: 'over', bookmaker: 'Betway', odds: 1.85, captured_at: '2026-04-10T19:00:00Z' },
+    { fixture_id: 42, market_type: 'total', selection_key: 'over', line: 2.5, bookmaker: 'Betway', odds: 1.85, captured_at: '2026-04-10T19:00:00Z' },
   ]);
   const r = await clvBackfill.fetchSnapshotClosing(sb, {
     fixtureId: 42, markt: 'Over 2.5', preferredBookie: 'Bet365',
@@ -5529,14 +5535,28 @@ test('clv-backfill: geen rijen → null', async () => {
 
 test('clv-backfill: ongeldige odds (≤1) worden genegeerd', async () => {
   const sb = buildFakeSupabaseForSnapshots([
-    { fixture_id: 42, market_type: 'total', selection_key: 'over', bookmaker: 'Pinnacle', odds: 0.5, captured_at: '2026-04-10T19:00:00Z' },
-    { fixture_id: 42, market_type: 'total', selection_key: 'over', bookmaker: 'Betway', odds: 1.92, captured_at: '2026-04-10T18:00:00Z' },
+    { fixture_id: 42, market_type: 'total', selection_key: 'over', line: 2.5, bookmaker: 'Pinnacle', odds: 0.5, captured_at: '2026-04-10T19:00:00Z' },
+    { fixture_id: 42, market_type: 'total', selection_key: 'over', line: 2.5, bookmaker: 'Betway', odds: 1.92, captured_at: '2026-04-10T18:00:00Z' },
   ]);
   const r = await clvBackfill.fetchSnapshotClosing(sb, {
     fixtureId: 42, markt: 'Over 2.5', preferredBookie: 'Bet365',
   });
   assert.strictEqual(r.bookieUsed, 'Betway');
   assert.strictEqual(r.closingOdds, 1.92);
+});
+
+test('clv-backfill: filtert exact op line en ondersteunt team-total snapshots met match-context', async () => {
+  const sb = buildFakeSupabaseForSnapshots([
+    { fixture_id: 77, market_type: 'team_total_home', selection_key: 'under', line: 2.5, bookmaker: 'Bet365', odds: 1.55, captured_at: '2026-04-10T18:00:00Z' },
+    { fixture_id: 77, market_type: 'team_total_home', selection_key: 'under', line: 3.5, bookmaker: 'Bet365', odds: 1.95, captured_at: '2026-04-10T19:00:00Z' },
+  ]);
+  const r = await clvBackfill.fetchSnapshotClosing(sb, {
+    fixtureId: 77,
+    markt: 'Colorado Avalanche TT Under 3.5',
+    matchName: 'Colorado Avalanche vs Edmonton Oilers',
+    preferredBookie: 'Bet365',
+  });
+  assert.strictEqual(r.closingOdds, 1.95);
 });
 
 // ── EARLY-PAYOUT RULES DICT (v11.1.0) ────────────────────────────────────────
@@ -6717,13 +6737,13 @@ test('evaluateStakeRegime: drawdown 35% → drawdown_hard (kelly 0.25, unit ×0.
   assert.strictEqual(r.unitMultiplier, 0.5);
 });
 
-test('evaluateStakeRegime: drawdown 22% → drawdown_soft (kelly 0.40)', () => {
+test('evaluateStakeRegime: drawdown 22% → drawdown_soft (kelly 0.30)', () => {
   const r = evaluateStakeRegime({
     totalSettled: 100, longTermClvPct: 1.5,
     drawdownPct: 0.22, bankrollPeak: 1000, currentBankroll: 780,
   });
   assert.strictEqual(r.regime, 'drawdown_soft');
-  assert.strictEqual(r.kellyFraction, 0.40);
+  assert.strictEqual(r.kellyFraction, 0.30);
 });
 
 test('evaluateStakeRegime: 7 consecutive L → consecutive_l regime', () => {
@@ -7343,9 +7363,13 @@ test('marketKeyFromBetMarkt: onbekende markt → null (graceful)', () => {
   assert.strictEqual(marketKeyFromBetMarkt(null), null);
 });
 
-test('marketKeyFromBetMarkt: Team Total markt is unsupported voor CLV en returnt null', () => {
+test('marketKeyFromBetMarkt: Team Total markt mapped alleen met match-context', () => {
   assert.strictEqual(marketKeyFromBetMarkt('Tampa Bay Lightning TT Under 3.5'), null);
-  assert.strictEqual(supportsClvForBetMarkt('Tampa Bay Lightning TT Under 3.5'), false);
+  assert.deepStrictEqual(
+    marketKeyFromBetMarkt('Tampa Bay Lightning TT Under 3.5', { matchName: 'Tampa Bay Lightning vs Toronto Maple Leafs' }),
+    { market_type: 'team_total_home', selection_key: 'under', line: 3.5 }
+  );
+  assert.strictEqual(supportsClvForBetMarkt('Tampa Bay Lightning TT Under 3.5'), true);
   assert.strictEqual(supportsClvForBetMarkt('Over 2.5'), true);
 });
 
@@ -7473,7 +7497,7 @@ test('bets-data.readBets mapping preserves userId for global results-check', () 
   assert.strictEqual(mapped.userId, 'abc-123');
 });
 
-test('bets-data.readBets masks unsupported TT CLV values from tracker/model consumers', async () => {
+test('bets-data.readBets preserves TT CLV now that team-total lookup is supported', async () => {
   const createBetsData = require('./lib/bets-data');
   const mockSupabase = {
     from: () => ({
@@ -7514,10 +7538,10 @@ test('bets-data.readBets masks unsupported TT CLV values from tracker/model cons
     updateCalibration: async () => {},
   });
   const { bets } = await bd.readBets('u1');
-  assert.strictEqual(bets[0].clvPct, null);
-  assert.strictEqual(bets[0].clvOdds, null);
-  assert.strictEqual(bets[0].sharpClvPct, null);
-  assert.strictEqual(bets[0].sharpClvOdds, null);
+  assert.strictEqual(bets[0].clvPct, -66.09);
+  assert.strictEqual(bets[0].clvOdds, 5.75);
+  assert.strictEqual(bets[0].sharpClvPct, -63.0);
+  assert.strictEqual(bets[0].sharpClvOdds, 5.2);
 });
 
 // F4: isLiveIrreversiblyLost detects Under-broken + BTTS-nee-both-scored.

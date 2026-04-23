@@ -7048,7 +7048,10 @@ async function fetchCurrentOdds(sport, gameId, markt, bookmaker, opts = {}) {
   }
   if (!bk) return null;
 
-  return resolveOddFromBookie(bk, markt);
+  return resolveOddFromBookie(bk, markt, {
+    matchName: opts.matchName,
+    sport: normalizeSport(sport),
+  });
 }
 
 async function schedulePreKickoffCheck(bet) {
@@ -7079,7 +7082,7 @@ async function schedulePreKickoffCheck(bet) {
       try {
         const fxId = bet.fixtureId || await findGameId(betSport, matchName);
         // strictBookie:true → geen stille fallback naar Bet365 bij mismatch
-        currentOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip, { strictBookie: true });
+        currentOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip, { strictBookie: true, matchName });
       } catch (e) {
         console.warn(`Pre-kickoff odds fetch failed voor "${matchName}":`, e.message);
       }
@@ -7139,7 +7142,7 @@ async function scheduleCLVCheck(bet) {
       // Gebruik sport-aware helpers voor alle sport APIs
       const betSport = bet.sport || 'football';
       const fxId = bet.fixtureId || await findGameId(betSport, matchName);
-      const closingOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip, { strictBookie: true });
+      const closingOdds = await fetchCurrentOdds(betSport, fxId, markt, bet.tip, { strictBookie: true, matchName });
       const usedBookie = bet.tip || 'onbekend';
 
       if (!closingOdds) {
