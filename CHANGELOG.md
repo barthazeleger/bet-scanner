@@ -2,6 +2,28 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.1.11] - 2026-04-24
+
+**Cap-bypass fix bij uitbreiden preferred-bookies**
+
+### Fixed
+
+- **[P1]** `bestFromArr` gaf altijd de hoogste prijs uit de (preferred) pool terug, ook als die prijs boven de markt-specifieke cap uitkwam (≤ 3.5 voor O/U, MAX_WINNER_ODDS=4.0 voor ML, 8.0/15.0 voor 3-way Draw). Gevolg: bij uitbreiden van de preferred-list (bv. toevoegen 888sport/BetMGM) kon een longshot-quote van de nieuwe bookie de dedupe-winnaar worden → cap-check dropt de héle `(markt, lijn)` pick → Bet365's binnen-cap prijs (bv. 2.10) werd niet meer beschouwd.
+
+### Changed
+
+- `bestFromArr(arr, { maxPrice })` filtert kandidaten boven cap al in de dedupe. Nu wint de hoogste prijs *binnen* cap; valt terug naar next-best binnen cap als top-bookie boven cap zit. Toegepast op 14 call-sites in `server.js`: basketball ML, basketball 1H O/U, hockey ML, hockey 3-way, hockey TT home/away, hockey P1 O/U, baseball ML, F5 ML, NFL ML, NFL 1H O/U, handball ML, handball 3-way. Backwards-compat: call-sites zonder `maxPrice` ongewijzigd.
+
+### Tests
+
+655 passed, 0 failed. 4 nieuwe tests:
+- `bestFromArr maxPrice: hoogste boven cap → fallback naar next-best binnen cap`
+- `bestFromArr maxPrice: geen bookie binnen cap → price=0`
+- `bestFromArr maxPrice: MAX_WINNER_ODDS (4.0) cap voor ML-sites`
+- `bestFromArr maxPrice: geen cap → standaard-gedrag (hoogste wint)`
+
+---
+
 ## [12.1.10] - 2026-04-23
 
 **Inbox cleanup + manual CLV clear**

@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.1.10');
+  assert.strictEqual(appMeta.APP_VERSION, '12.1.11');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3928,6 +3928,54 @@ test('odds-parser: bestFromArr — preferred leeg, market wel → price=0 defaul
   assert.strictEqual(best.marketPrice, 2.10);
   assert.strictEqual(best.marketBookie, 'Pinnacle');
   assert.strictEqual(best.preferredPrice, 0);
+  setPreferredBookies(null);
+});
+
+// v12.1.8: maxPrice cap in bestFromArr — voorkomt dat longshot-quote van nieuwe
+// preferred-bookie de winnaar wordt terwijl er een binnen-cap alternatief is.
+test('bestFromArr maxPrice: hoogste boven cap → fallback naar next-best binnen cap', () => {
+  setPreferredBookies(['bet365', 'unibet', '888sport']);
+  const best = bestFromArr([
+    { price: 2.10, bookie: 'Bet365' },
+    { price: 2.05, bookie: 'Unibet' },
+    { price: 3.80, bookie: '888sport' }, // longshot quote boven cap 3.5
+  ], { maxPrice: 3.5 });
+  // 888sport @ 3.80 > 3.5 → gefilterd voor dedupe. Bet365 @ 2.10 wint.
+  assert.strictEqual(best.price, 2.10);
+  assert.strictEqual(best.bookie, 'Bet365');
+  setPreferredBookies(null);
+});
+
+test('bestFromArr maxPrice: geen bookie binnen cap → price=0', () => {
+  setPreferredBookies(['bet365']);
+  const best = bestFromArr([
+    { price: 5.00, bookie: 'Bet365' },
+    { price: 4.50, bookie: 'Pinnacle' },
+  ], { maxPrice: 3.5 });
+  assert.strictEqual(best.price, 0);
+  assert.strictEqual(best.bookie, '');
+  setPreferredBookies(null);
+});
+
+test('bestFromArr maxPrice: cap op MAX_WINNER_ODDS (4.0) voor ML-sites', () => {
+  setPreferredBookies(['bet365', '888sport']);
+  const best = bestFromArr([
+    { price: 2.50, bookie: 'Bet365' },
+    { price: 5.00, bookie: '888sport' }, // boven MAX_WINNER_ODDS
+  ], { maxPrice: 4.0 });
+  assert.strictEqual(best.price, 2.50);
+  assert.strictEqual(best.bookie, 'Bet365');
+  setPreferredBookies(null);
+});
+
+test('bestFromArr maxPrice: geen cap → standaard-gedrag (hoogste wint, zelfs >3.5)', () => {
+  setPreferredBookies(['bet365', 'unibet']);
+  const best = bestFromArr([
+    { price: 2.10, bookie: 'Bet365' },
+    { price: 4.20, bookie: 'Unibet' },
+  ]);
+  assert.strictEqual(best.price, 4.20);
+  assert.strictEqual(best.bookie, 'Unibet');
   setPreferredBookies(null);
 });
 

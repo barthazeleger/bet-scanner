@@ -2803,8 +2803,12 @@ async function runBasketball(emit) {
         const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + b2bAdj + totalAdv + availabilityAdj + stakesAdj);
         const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - b2bAdj * 0.5 - totalAdv * 0.5 - availabilityAdj * 0.5 - stakesAdj * 0.5);
 
-        const bH = bestFromArr(homeOdds);
-        const bA = bestFromArr(awayOdds);
+        // v12.1.8: maxPrice cap voorkomt dat een longshot-quote van een
+        // nieuwe preferred-bookie (bv. 888sport @ 5.0) de dedupe-winnaar wordt
+        // terwijl Bet365 @ 2.50 binnen cap had gepast. Pick valt dan niet meer
+        // weg op de post-check <= MAX_WINNER_ODDS.
+        const bH = bestFromArr(homeOdds, { maxPrice: MAX_WINNER_ODDS });
+        const bA = bestFromArr(awayOdds, { maxPrice: MAX_WINNER_ODDS });
 
         const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
         const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
@@ -2962,8 +2966,9 @@ async function runBasketball(emit) {
               const h1AvgUnIP = h1Un.reduce((s,o)=>s+1/o.price,0) / h1Un.length;
               const h1TotIP = h1AvgOvIP + h1AvgUnIP;
               const h1OverP = h1TotIP > 0 ? h1AvgOvIP / h1TotIP : 0.5;
-              const h1BestOv = bestFromArr(h1Ov);
-              const h1BestUn = bestFromArr(h1Un);
+              // v12.1.8: maxPrice cap parity met post-check (<= 3.5 voor 1H O/U)
+              const h1BestOv = bestFromArr(h1Ov, { maxPrice: 3.5 });
+              const h1BestUn = bestFromArr(h1Un, { maxPrice: 3.5 });
               const h1OverEdge = h1OverP * h1BestOv.price - 1;
               const h1UnderEdge = (1-h1OverP) * h1BestUn.price - 1;
               // v11.2.1: safety-gate + fxMeta
@@ -3368,8 +3373,11 @@ async function runHockey(emit) {
         const isOTBookieHockey = b => !HOCKEY_60MIN_BOOKIES.some(x => (b||'').toLowerCase().includes(x));
         const homeOddsOT = homeOdds.filter(o => isOTBookieHockey(o.bookie));
         const awayOddsOT = awayOdds.filter(o => isOTBookieHockey(o.bookie));
-        const bH = bestFromArr(homeOddsOT.length ? homeOddsOT : homeOdds);
-        const bA = bestFromArr(awayOddsOT.length ? awayOddsOT : awayOdds);
+        // v12.1.8: maxPrice cap voorkomt dat hockey ML picks verloren gaan
+        // wanneer een nieuwe preferred-bookie een longshot-odd boven
+        // MAX_WINNER_ODDS aanbiedt.
+        const bH = bestFromArr(homeOddsOT.length ? homeOddsOT : homeOdds, { maxPrice: MAX_WINNER_ODDS });
+        const bA = bestFromArr(awayOddsOT.length ? awayOddsOT : awayOdds, { maxPrice: MAX_WINNER_ODDS });
 
         const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
         const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
@@ -3543,9 +3551,10 @@ async function runHockey(emit) {
           const h3 = parsed.threeWay.filter(o => o.side === 'home');
           const d3 = parsed.threeWay.filter(o => o.side === 'draw');
           const a3 = parsed.threeWay.filter(o => o.side === 'away');
-          const bH3 = bestFromArr(h3);
-          const bD3 = bestFromArr(d3);
-          const bA3 = bestFromArr(a3);
+          // v12.1.8: maxPrice cap parity met post-check (Home/Away ≤ 4.0, Draw ≤ 8.0 voor hockey)
+          const bH3 = bestFromArr(h3, { maxPrice: MAX_WINNER_ODDS });
+          const bD3 = bestFromArr(d3, { maxPrice: 8.00 });
+          const bA3 = bestFromArr(a3, { maxPrice: MAX_WINNER_ODDS });
 
           const e3H = bH3.price > 0 ? p3.pHome * bH3.price - 1 : -1;
           const e3D = bD3.price > 0 ? p3.pDraw * bD3.price - 1 : -1;
@@ -3616,8 +3625,9 @@ async function runHockey(emit) {
             const ov = homeTT.filter(o => o.side === 'over' && o.point === line);
             const un = homeTT.filter(o => o.side === 'under' && o.point === line);
             if (!ov.length || !un.length) continue;
-            const bestOv = bestFromArr(ov);
-            const bestUn = bestFromArr(un);
+            // v12.1.8: maxPrice cap parity met post-check (<= 3.5 voor TT O/U)
+            const bestOv = bestFromArr(ov, { maxPrice: 3.5 });
+            const bestUn = bestFromArr(un, { maxPrice: 3.5 });
             if (bestOv.price <= 0 || bestUn.price <= 0) continue;
             const pOver = poissonOver(lambdaHome, line);
             const pUnder = 1 - pOver;
@@ -3641,8 +3651,9 @@ async function runHockey(emit) {
             const ov = awayTT.filter(o => o.side === 'over' && o.point === line);
             const un = awayTT.filter(o => o.side === 'under' && o.point === line);
             if (!ov.length || !un.length) continue;
-            const bestOv = bestFromArr(ov);
-            const bestUn = bestFromArr(un);
+            // v12.1.8: maxPrice cap parity met post-check (<= 3.5 voor TT O/U)
+            const bestOv = bestFromArr(ov, { maxPrice: 3.5 });
+            const bestUn = bestFromArr(un, { maxPrice: 3.5 });
             if (bestOv.price <= 0 || bestUn.price <= 0) continue;
             const pOver = poissonOver(lambdaAway, line);
             const pUnder = 1 - pOver;
@@ -3770,8 +3781,9 @@ async function runHockey(emit) {
               const p1AvgUnIP = p1Un.reduce((s,o)=>s+1/o.price,0) / p1Un.length;
               const p1TotIP = p1AvgOvIP + p1AvgUnIP;
               const p1OverP = p1TotIP > 0 ? p1AvgOvIP / p1TotIP : 0.5;
-              const p1BestOv = bestFromArr(p1Ov);
-              const p1BestUn = bestFromArr(p1Un);
+              // v12.1.8: maxPrice cap parity met post-check (<= 3.5 voor P1 O/U)
+              const p1BestOv = bestFromArr(p1Ov, { maxPrice: 3.5 });
+              const p1BestUn = bestFromArr(p1Un, { maxPrice: 3.5 });
               const p1OverEdge = p1OverP * p1BestOv.price - 1;
               const p1UnderEdge = (1-p1OverP) * p1BestUn.price - 1;
               // v11.2.1: safety-gate + fxMeta
@@ -4181,8 +4193,12 @@ async function runBaseball(emit) {
         const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + totalAdv + mlbInjAdj + stakesAdj);
         const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - mlbInjAdj * 0.5 - stakesAdj * 0.5);
 
-        const bH = bestFromArr(homeOdds);
-        const bA = bestFromArr(awayOdds);
+        // v12.1.8: maxPrice cap voorkomt dat een longshot-quote van een
+        // nieuwe preferred-bookie (bv. 888sport @ 5.0) de dedupe-winnaar wordt
+        // terwijl Bet365 @ 2.50 binnen cap had gepast. Pick valt dan niet meer
+        // weg op de post-check <= MAX_WINNER_ODDS.
+        const bH = bestFromArr(homeOdds, { maxPrice: MAX_WINNER_ODDS });
+        const bA = bestFromArr(awayOdds, { maxPrice: MAX_WINNER_ODDS });
 
         const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
         const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
@@ -4403,8 +4419,9 @@ async function runBaseball(emit) {
 
           const f5H = f5ML.filter(o => o.side === 'home');
           const f5A = f5ML.filter(o => o.side === 'away');
-          const bF5H = bestFromArr(f5H);
-          const bF5A = bestFromArr(f5A);
+          // v12.1.8: F5 ML cap parity met post-check (<= MAX_WINNER_ODDS)
+          const bF5H = bestFromArr(f5H, { maxPrice: MAX_WINNER_ODDS });
+          const bF5A = bestFromArr(f5A, { maxPrice: MAX_WINNER_ODDS });
           const eF5H = bF5H.price > 0 ? f5Home * bF5H.price - 1 : -1;
           const eF5A = bF5A.price > 0 ? f5Away * bF5A.price - 1 : -1;
           const f5MinEdge = starterReliability.factor < 0.8 ? MIN_EDGE + 0.015 : MIN_EDGE;
@@ -4751,8 +4768,12 @@ async function runFootballUS(emit) {
         const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + byeAdj + totalAdv + injAdj + stakesAdj);
         const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - byeAdj * 0.5 - totalAdv * 0.5 - injAdj * 0.5 - stakesAdj * 0.5);
 
-        const bH = bestFromArr(homeOdds);
-        const bA = bestFromArr(awayOdds);
+        // v12.1.8: maxPrice cap voorkomt dat een longshot-quote van een
+        // nieuwe preferred-bookie (bv. 888sport @ 5.0) de dedupe-winnaar wordt
+        // terwijl Bet365 @ 2.50 binnen cap had gepast. Pick valt dan niet meer
+        // weg op de post-check <= MAX_WINNER_ODDS.
+        const bH = bestFromArr(homeOdds, { maxPrice: MAX_WINNER_ODDS });
+        const bA = bestFromArr(awayOdds, { maxPrice: MAX_WINNER_ODDS });
 
         const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
         const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
@@ -4940,8 +4961,9 @@ async function runFootballUS(emit) {
               const h1AvgUnIP = h1Un.reduce((s,o)=>s+1/o.price,0) / h1Un.length;
               const h1TotIP = h1AvgOvIP + h1AvgUnIP;
               const h1OverP = h1TotIP > 0 ? h1AvgOvIP / h1TotIP : 0.5;
-              const h1BestOv = bestFromArr(h1Ov);
-              const h1BestUn = bestFromArr(h1Un);
+              // v12.1.8: maxPrice cap parity met post-check (<= 3.5 voor 1H O/U)
+              const h1BestOv = bestFromArr(h1Ov, { maxPrice: 3.5 });
+              const h1BestUn = bestFromArr(h1Un, { maxPrice: 3.5 });
               const h1OverEdge = h1OverP * h1BestOv.price - 1;
               const h1UnderEdge = (1-h1OverP) * h1BestUn.price - 1;
               // v11.2.1: safety-gate + fxMeta
@@ -5227,8 +5249,12 @@ async function runHandball(emit) {
         const adjHome = Math.min(0.88, fpHome + posAdj + formAdj + totalAdv + hbInjAdj + stakesAdj);
         const adjAway = Math.max(0.08, fpAway - posAdj * 0.5 - formAdj * 0.5 - totalAdv * 0.5 - hbInjAdj * 0.5 - stakesAdj * 0.5);
 
-        const bH = bestFromArr(homeOdds);
-        const bA = bestFromArr(awayOdds);
+        // v12.1.8: maxPrice cap voorkomt dat een longshot-quote van een
+        // nieuwe preferred-bookie (bv. 888sport @ 5.0) de dedupe-winnaar wordt
+        // terwijl Bet365 @ 2.50 binnen cap had gepast. Pick valt dan niet meer
+        // weg op de post-check <= MAX_WINNER_ODDS.
+        const bH = bestFromArr(homeOdds, { maxPrice: MAX_WINNER_ODDS });
+        const bA = bestFromArr(awayOdds, { maxPrice: MAX_WINNER_ODDS });
 
         const homeEdge = bH.price > 0 ? adjHome * bH.price - 1 : -1;
         const awayEdge = bA.price > 0 ? adjAway * bA.price - 1 : -1;
@@ -5267,9 +5293,10 @@ async function runHandball(emit) {
           const h3 = parsed.threeWay.filter(o => o.side === 'home');
           const d3 = parsed.threeWay.filter(o => o.side === 'draw');
           const a3 = parsed.threeWay.filter(o => o.side === 'away');
-          const bH3 = bestFromArr(h3);
-          const bD3 = bestFromArr(d3);
-          const bA3 = bestFromArr(a3);
+          // v12.1.8: maxPrice cap parity met post-check (Home/Away ≤ 4.0, Draw ≤ 15.0 voor handball)
+          const bH3 = bestFromArr(h3, { maxPrice: MAX_WINNER_ODDS });
+          const bD3 = bestFromArr(d3, { maxPrice: 15.00 });
+          const bA3 = bestFromArr(a3, { maxPrice: MAX_WINNER_ODDS });
 
           const e3H = bH3.price > 0 ? p3.pHome * bH3.price - 1 : -1;
           const e3D = bD3.price > 0 ? p3.pDraw * bD3.price - 1 : -1;
