@@ -2,6 +2,16 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.2] - 2026-04-24
+
+**Bookie-balance "+ toevoegen" knop**
+
+### Fixed
+
+- **[P1]** Bookie-bankroll panel had vanuit lege state geen manier om een eerste bookie te initialiseren — enkel "klik-op-bedrag-om-aan-te-passen" werkte, en die knopjes bestonden pas nadat er een bookie was. Toegevoegd: `+ Bookie` knop die via twee prompts een bookie + startsaldo registreert.
+
+---
+
 ## [12.2.1] - 2026-04-24
 
 **iOS Safari hardening voor bottom-nav**
