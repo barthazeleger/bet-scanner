@@ -6727,6 +6727,16 @@ const createBetsData = require('./lib/bets-data');
 // writeBet/updateBetOutcome/deleteBet auto-sync balances.
 const { createBookieBalanceStore } = require('./lib/bookie-balances');
 const bookieBalanceStore = createBookieBalanceStore({ supabase });
+// v12.2.8 (F5): inline isPreferredBookie helper voor writeBet zodat per-bet
+// `was_preferred_at_log_time` point-in-time wordt vastgelegd. Mirror van
+// lib/learning-loop's interne isPreferredBookie maar met server-scope deps.
+function isPreferredBookieAtLogTime(bookieName) {
+  const prefs = (typeof getPreferredBookies === 'function' ? getPreferredBookies() : []) || [];
+  if (!prefs.length) return true; // fail-open bij ontbreken settings
+  const bk = String(bookieName || '').toLowerCase();
+  if (!bk) return true;
+  return prefs.map(s => String(s).toLowerCase()).some(p => bk.includes(p));
+}
 const betsData = createBetsData({
   supabase,
   getUserMoneySettings,
@@ -6738,6 +6748,8 @@ const betsData = createBetsData({
   // v12.2.7 (F3): atomic outcome-flip via calib snapshot/restore
   snapshotCalib,
   restoreCalib,
+  // v12.2.8 (F5): point-in-time preferred-bookie flag bij writeBet
+  isPreferredBookie: isPreferredBookieAtLogTime,
 });
 const calcStats = betsData.calcStats;
 const readBets = betsData.readBets;

@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.7');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.8');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3975,36 +3975,35 @@ test('formatDropReasons: returnt null als alle counts 0 of map leeg', () => {
 // v12.2.7 (F3): calibration-store snapshot/restore atomic flip
 const { createCalibrationStore: _ccs } = require('./lib/calibration-store');
 
-test('calibration-store: snapshot returnt diepe kopie (mutaties op live calib raken snapshot niet)', () => {
-  const store = _ccs({ supabase: null, baseDir: '/tmp', fileName: 'nonexistent.json' });
+test('calibration-store: snapshot returnt diepe kopie (mutaties op live calib raken snapshot niet)', async () => {
+  const fname = `calib-snap-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
+  const store = _ccs({ supabase: null, baseDir: '/tmp', fileName: fname });
   const snap1 = store.snapshot();
-  // Mutate live cache (via save)
-  return store.save({ ...snap1, totalSettled: 999, markets: { home: { n: 5, w: 3, profit: 10, multiplier: 1.2 } } })
-    .then(() => {
-      // snap1 mag niet zijn beïnvloed
-      assert.notStrictEqual(snap1.totalSettled, 999);
-      assert.strictEqual(snap1.totalSettled, 0); // DEFAULT
-    });
+  await store.save({ ...snap1, totalSettled: 999, markets: { home: { n: 5, w: 3, profit: 10, multiplier: 1.2 } } });
+  // snap1 is een diepe kopie genomen vóór save → mag niet beïnvloed zijn
+  assert.notStrictEqual(snap1.totalSettled, 999);
+  assert.strictEqual(snap1.totalSettled, 0);
+  // Cleanup
+  try { require('fs').unlinkSync(`/tmp/${fname}`); } catch (_) {}
 });
 
 test('calibration-store: restore zet calib terug naar snapshot-state', async () => {
-  const store = _ccs({ supabase: null, baseDir: '/tmp', fileName: 'nonexistent2.json' });
+  const fname = `calib-restore-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
+  const store = _ccs({ supabase: null, baseDir: '/tmp', fileName: fname });
   const before = store.snapshot();
   before.totalSettled = 42;
   before.markets.home.n = 7;
   await store.save(before);
-  // Verifieer save effectief
   let now = store.loadSync();
   assert.strictEqual(now.totalSettled, 42);
-  // Mutate verder
   await store.save({ ...now, totalSettled: 99 });
   now = store.loadSync();
   assert.strictEqual(now.totalSettled, 99);
-  // Restore
   await store.restore(before);
   now = store.loadSync();
   assert.strictEqual(now.totalSettled, 42);
   assert.strictEqual(now.markets.home.n, 7);
+  try { require('fs').unlinkSync(`/tmp/${fname}`); } catch (_) {}
 });
 
 // v12.2.0: bookie-balance impact berekeningen

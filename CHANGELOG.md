@@ -2,6 +2,26 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.8] - 2026-04-25
+
+**F5 · point-in-time was_preferred_at_log_time + v12.2.7 hotfix**
+
+### Fixed
+
+- **[CRITICAL hotfix]** v12.2.7's atomic-flip refactor verwijderde per ongeluk de `updateCalibration` call in `updateBetOutcome`. Sinds v12.2.7 werd calibratie bij nieuwe settled bets niet meer ge-update — `totalSettled` zou stoppen met tellen, multipliers blijven hangen. Hersteld in deze release.
+- **[P1]** F5: nieuwe DB-kolom `was_preferred_at_log_time` op `bets` (default true). `writeBet` legt nu point-in-time vast of de bookie preferred was. `updateCalibration` filtert hierop ipv runtime `isPreferredBookie(bet.tip)` — voorkomt dat historische bets retrospectief uit calibratie vallen als operator z'n preferred-set wijzigt.
+- Schema-tier-retry uitgebreid: pre-migratie schemas zonder de nieuwe kolom werken graceful via legacy-payload fallback. Vereiste migratie: `docs/migrations-archive/v12.2.8_was_preferred_at_log_time.sql`.
+
+### Tests
+
+685 passed, 0 failed. Snapshot/restore tests gebruiken nu unique filenames om cross-test pollution te vermijden.
+
+### Notes
+
+`isPreferredBookie` in `learning-loop.js` is nu fail-safe: als bet.was_preferred_at_log_time expliciet `false` is → skip. Indien `undefined` (legacy/pre-migratie bet) → fallback naar runtime check (huidig gedrag).
+
+---
+
 ## [12.2.7] - 2026-04-25
 
 **F3 · atomic outcome-flip met calibration snapshot/restore**
