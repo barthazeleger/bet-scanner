@@ -2,6 +2,36 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.27] - 2026-04-25
+
+**Calibration-monitor canonical wire-up via bet↔pick join (v12.2.21)**
+
+### ⚠️ Migratie vereist
+
+`docs/migrations-archive/v12.2.27_signal_calibration_source_unique.sql` — voegt `probability_source` toe aan unique index op `signal_calibration` zodat canonical (`pick_ep`) en proxy (`ep_proxy`) rijen naast elkaar kunnen bestaan per (signal, sport, market, window).
+
+```bash
+node scripts/migrate.js docs/migrations-archive/v12.2.27_signal_calibration_source_unique.sql
+```
+
+### Changed
+
+- `server.js` `updateCalibrationMonitor()`: per settled bet probeert eerst canonical match via `lib/bets-pick-join.findMatchingPickCandidate(bet, pick_candidates)`. Bij success → fair_prob uit pick_candidate (`probability_source='pick_ep'`). Bij miss → fallback `ep_proxy` (1/odds + signalBoost).
+- Twee aggregatie-passes per run: canonical + proxy. Beide upserten naar dezelfde tabel met respective source-tag.
+- Return-payload geeft nu `canonicalCount`, `proxyCount`, `canonicalCoveragePct` zodat operator zicht heeft op join-laag dekking.
+- onConflict-clause bevat nu `probability_source`. Backwards-compat fallback voor pre-migratie schema (legacy onConflict zonder source).
+
+### Why
+
+- Sinds v10.10.16 schreef calibration-monitor bewust `ep_proxy` omdat de bet↔pick join-laag ontbrak. v12.2.21 leverde de join-laag; deze release koppelt 'm aan calibration-monitor zodat het canonical pad waar mogelijk gebruikt wordt.
+- Doctrine sectie 14.R2.A: probability_source moet `pick_ep` zijn voor canonical model-truth — eindelijk geïmplementeerd.
+- Operator kan post-migratie filteren op `probability_source='pick_ep'` voor zuivere model-Brier ipv proxy-Brier.
+
+### Notes
+
+- Bestaande ep_proxy rijen blijven staan (legacy data). Nieuwe writes vullen pick_ep WAAR canonical match lukt; ep_proxy wordt bijgewerkt voor de rest.
+- 739 tests passed (geen change — pure refactor op bestaande integration code).
+
 ## [12.2.26] - 2026-04-25
 
 **Pick-pipeline · extreme-divergence hard-drop ipv alleen dampen**

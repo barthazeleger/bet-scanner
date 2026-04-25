@@ -7765,61 +7765,124 @@ async function updateCalibrationMonitor() {
   const now = Date.now();
   const cutoffMs = now - 400 * 24 * 60 * 60 * 1000;
   const { data: betsRows, error } = await supabase.from('bets')
-    .select('bet_id, datum, sport, markt, odds, uitkomst, signals, fixture_id')
+    .select('bet_id, datum, sport, markt, odds, tip, uitkomst, signals, fixture_id')
     .in('uitkomst', ['W', 'L'])
     .limit(10000);
   if (error) return { error: error.message, aggregated: 0 };
 
-  const settled = [];
+  const eligible = [];
   for (const b of betsRows || []) {
     const odds = parseFloat(b.odds);
     if (!Number.isFinite(odds) || odds <= 1.0) continue;
     const settledAt = _parseBetDatum(b.datum);
     if (!settledAt || settledAt < cutoffMs) continue;
-
     const signals = _parseSignalsBlob(b.signals);
-    const implied = 1 / odds;
-    const signalBoost = signals
-      .map(s => { const m = /([+-]\d+\.?\d*)%/.exec(String(s)); return m ? parseFloat(m[1]) / 100 : 0; })
-      .reduce((a, c) => a + c, 0);
-    const ep = Math.max(0.02, Math.min(0.95, implied + signalBoost));
+    eligible.push({ raw: b, odds, settledAt, signals });
+  }
 
-    settled.push({
-      ep,
+  if (!eligible.length) return { aggregated: 0, settledCount: 0 };
+
+  // v12.2.27 (canonical wire-up): pull pick_candidates joined met model_runs
+  // voor alle relevante fixtures. Per bet → probeer canonical pick_ep match
+  // via lib/bets-pick-join. Bets zonder fixture_id of zonder match vallen
+  // terug op ep_proxy.
+  const { buildBrierRecords: _bbRec, findMatchingPickCandidate: _findPC } = require('./lib/bets-pick-join');
+  const fixtureIds = [...new Set(eligible.map(e => e.raw.fixture_id).filter(Boolean))];
+  const candByFixture = new Map();
+  if (fixtureIds.length) {
+    try {
+      // Chunk om Supabase URL-limieten te respecteren.
+      for (let i = 0; i < fixtureIds.length; i += 200) {
+        const chunk = fixtureIds.slice(i, i + 200);
+        const { data: cands } = await supabase.from('pick_candidates')
+          .select('id, model_run_id, fixture_id, selection_key, bookmaker, fair_prob, bookmaker_odds, passed_filters, model_runs!inner(market_type, line, captured_at)')
+          .in('fixture_id', chunk)
+          .limit(20000);
+        for (const c of (cands || [])) {
+          const fid = Number(c.fixture_id);
+          if (!candByFixture.has(fid)) candByFixture.set(fid, []);
+          candByFixture.get(fid).push(c);
+        }
+      }
+    } catch (_) { /* fall back to ep_proxy if pull fails */ }
+  }
+
+  const settledCanonical = [];
+  const settledProxy = [];
+  for (const e of eligible) {
+    const b = e.raw;
+    const cands = candByFixture.get(Number(b.fixture_id)) || [];
+    let canonicalMatch = null;
+    if (cands.length) {
+      try { canonicalMatch = _findPC({ fixture_id: b.fixture_id, markt: b.markt, tip: b.tip }, cands); }
+      catch (_) { canonicalMatch = null; }
+    }
+    const baseRow = {
       uitkomst: b.uitkomst,
-      settledAt,
-      signals,
+      settledAt: e.settledAt,
+      signals: e.signals,
       sport: b.sport || null,
       marketType: detectMarket(b.markt || 'other'),
-    });
-  }
-
-  if (!settled.length) return { aggregated: 0, settledCount: 0 };
-
-  const aggregates = _calAggregateBySignal(settled, { now });
-  const rows = _buildCalibrationRows(aggregates, {
-    windowEndMs: now,
-    probabilitySource: 'ep_proxy',
-  });
-  if (!rows.length) return { aggregated: 0, settledCount: settled.length };
-
-  try {
-    for (let i = 0; i < rows.length; i += 500) {
-      const chunk = rows.slice(i, i + 500);
-      const { error: upErr } = await supabase.from('signal_calibration')
-        .upsert(chunk, { onConflict: 'signal_name,sport,market_type,window_key' });
-      if (upErr) {
-        // Tabel kan nog niet bestaan (migratie niet gedraaid). Niet-fataal.
-        if (/relation .* does not exist/i.test(upErr.message || '')) {
-          return { error: 'signal_calibration tabel nog niet gemigreerd', aggregated: 0 };
-        }
-        return { error: upErr.message, aggregated: 0 };
-      }
+    };
+    if (canonicalMatch && Number.isFinite(canonicalMatch.fair_prob) && canonicalMatch.fair_prob > 0 && canonicalMatch.fair_prob < 1) {
+      settledCanonical.push({ ...baseRow, ep: canonicalMatch.fair_prob });
+    } else {
+      const implied = 1 / e.odds;
+      const signalBoost = e.signals
+        .map(s => { const m = /([+-]\d+\.?\d*)%/.exec(String(s)); return m ? parseFloat(m[1]) / 100 : 0; })
+        .reduce((a, c) => a + c, 0);
+      const ep = Math.max(0.02, Math.min(0.95, implied + signalBoost));
+      settledProxy.push({ ...baseRow, ep });
     }
-    return { aggregated: rows.length, settledCount: settled.length };
-  } catch (e) {
-    return { error: e.message, aggregated: 0 };
   }
+
+  const passes = [
+    { settled: settledCanonical, source: 'pick_ep' },
+    { settled: settledProxy, source: 'ep_proxy' },
+  ];
+
+  let totalAggregated = 0;
+  for (const pass of passes) {
+    if (!pass.settled.length) continue;
+    const aggregates = _calAggregateBySignal(pass.settled, { now });
+    const rows = _buildCalibrationRows(aggregates, {
+      windowEndMs: now,
+      probabilitySource: pass.source,
+    });
+    if (!rows.length) continue;
+    try {
+      for (let i = 0; i < rows.length; i += 500) {
+        const chunk = rows.slice(i, i + 500);
+        const { error: upErr } = await supabase.from('signal_calibration')
+          .upsert(chunk, { onConflict: 'signal_name,sport,market_type,window_key,probability_source' });
+        if (upErr) {
+          if (/relation .* does not exist/i.test(upErr.message || '')) {
+            return { error: 'signal_calibration tabel nog niet gemigreerd', aggregated: totalAggregated };
+          }
+          // Pre-v12.2.27 schema heeft nog onConflict zonder probability_source.
+          // Probeer fallback met oude conflict-key zodat upgrade pad werkt.
+          if (/no unique or exclusion constraint/i.test(upErr.message || '')) {
+            const { error: legacyErr } = await supabase.from('signal_calibration')
+              .upsert(chunk, { onConflict: 'signal_name,sport,market_type,window_key' });
+            if (legacyErr) return { error: legacyErr.message, aggregated: totalAggregated };
+          } else {
+            return { error: upErr.message, aggregated: totalAggregated };
+          }
+        }
+      }
+      totalAggregated += rows.length;
+    } catch (e) {
+      return { error: e.message, aggregated: totalAggregated };
+    }
+  }
+
+  return {
+    aggregated: totalAggregated,
+    settledCount: eligible.length,
+    canonicalCount: settledCanonical.length,
+    proxyCount: settledProxy.length,
+    canonicalCoveragePct: eligible.length ? +(settledCanonical.length / eligible.length * 100).toFixed(1) : 0,
+  };
 }
 
 // ── ACTIONABLE TODOS — sticky inbox-items ───────────────────────────────────
