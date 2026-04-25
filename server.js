@@ -7616,6 +7616,69 @@ app.listen(PORT, () => {
   }).catch(() => {});
   setInterval(refreshKillSwitch, 30 * 60 * 1000);
 
+  // v12.2.23 (R4 alerts): periodieke check op sharp-soft execution windows.
+  // Stuurt push + inbox notification voor windows met gap >= 4pp en kickoff
+  // binnen 6u. Dedupe via notifications.body LIKE 'sharpsoft:...'.
+  const { summarizeSharpSoftWindows: _ss } = require('./lib/sharp-soft-windows');
+  const { selectAlertableWindows: _ssAlerts } = require('./lib/sharp-soft-alerts');
+  const { SHARP_BOOKIES: _SHARP } = require('./lib/line-timeline');
+  async function runSharpSoftAlertsCheck() {
+    try {
+      const nowIso = new Date().toISOString();
+      const untilIso = new Date(Date.now() + 6 * 3600 * 1000).toISOString();
+      const sinceIso = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+      const { data: fixtures } = await supabase.from('fixtures')
+        .select('id, start_time, home_team_name, away_team_name, sport')
+        .gte('start_time', nowIso).lte('start_time', untilIso).limit(500);
+      if (!Array.isArray(fixtures) || !fixtures.length) return;
+      const fxMap = new Map(fixtures.map(f => [f.id, f]));
+      const { data: snaps } = await supabase.from('odds_snapshots')
+        .select('fixture_id, captured_at, bookmaker, market_type, selection_key, line, odds')
+        .in('fixture_id', fixtures.map(f => f.id)).gte('captured_at', sinceIso).limit(20000);
+      const adminUserId = await getAdminUserId().catch(() => null);
+      const adminUser = (await loadUsers().catch(() => [])).find(u => u.role === 'admin');
+      const preferred = (adminUser?.settings?.preferredBookies || ['Bet365', 'Unibet'])
+        .map(x => String(x || '').toLowerCase()).filter(Boolean);
+      const windows = _ss({
+        snapshots: Array.isArray(snaps) ? snaps : [],
+        fixtures: fxMap, sharpSet: _SHARP,
+        softSet: new Set(preferred), threshold: 0.04, includeMirror: false,
+      });
+      // Recent alerts (last 12h) — body begint met 'sharpsoft:'.
+      const since12h = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+      const { data: recent } = await supabase.from('notifications')
+        .select('body').eq('type', 'sharp_soft_alert').gte('created_at', since12h).limit(500);
+      const recentKeys = new Set();
+      for (const r of (recent || [])) {
+        const firstLine = String(r.body || '').split('\n')[0];
+        if (firstLine.startsWith('sharpsoft:')) recentKeys.add(firstLine);
+      }
+      const alerts = _ssAlerts({
+        windows, recentAlertKeys: recentKeys,
+        minGapPp: 0.04, maxKickoffHours: 6,
+      });
+      if (!alerts.length) return;
+      // Cap op 5 alerts per check tegen burst-spam.
+      const toSend = alerts.slice(0, 5);
+      for (const a of toSend) {
+        const dbBody = `${a.alertKey}\n${a.body}`;
+        try {
+          await supabase.from('notifications').insert({
+            type: 'sharp_soft_alert', title: a.title, body: dbBody,
+            read: false, user_id: adminUserId,
+          });
+          if (adminUserId) await sendPushToUser(adminUserId, { title: a.title, body: a.body });
+        } catch (e) { console.warn('[sharp-soft alerts] insert/push failed:', e?.message || e); }
+      }
+      console.log(`🎯 Sharp-soft alerts: ${toSend.length} verzonden (van ${alerts.length} kandidaten)`);
+    } catch (e) {
+      console.warn('[sharp-soft alerts] check failed:', e?.message || e);
+    }
+  }
+  // Initiele run + elke 15 min.
+  setTimeout(() => runSharpSoftAlertsCheck().catch(() => {}), 60 * 1000);
+  setInterval(() => runSharpSoftAlertsCheck().catch(() => {}), 15 * 60 * 1000);
+
   // Market sample counts cache voor adaptive MIN_EDGE
   refreshMarketSampleCounts().then(() => {
     const total = Object.values(_marketSampleCache.data).reduce((a, b) => a + b, 0);

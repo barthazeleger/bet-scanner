@@ -2570,7 +2570,7 @@ test('calibration store (D4): zonder supabase-client schrijft save naar file (te
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.22');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.23');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4212,6 +4212,82 @@ test('devig-backtest: 3 bookies met vig 1.91/1.91 → algoritmes wijken minimaal
   assert.strictEqual(r.groupsAnalyzed, 1);
   // Bij symmetrische 50/50 vig zouden beide algoritmes 0.5/0.5 moeten produceren — diff < 0.5pp
   assert.ok(r.meanAbsDiffPp < 0.5, `symmetric: meanAbsDiff = ${r.meanAbsDiffPp}, expected < 0.5pp`);
+});
+
+// v12.2.23 (R4 alerts): sharp-soft alert selection
+const { selectAlertableWindows, buildAlertKey } = require('./lib/sharp-soft-alerts');
+
+const _now = Date.parse('2026-04-25T10:00:00Z');
+const _ko = (offsetH) => new Date(_now + offsetH * 3600000).toISOString();
+
+test('sharp-soft alerts: filtert sharp_undervalues uit (alleen actionable)', () => {
+  const windows = [
+    { fixtureId: 1, fixtureName: 'A vs B', kickoffIso: _ko(2), marketType: 'moneyline',
+      line: null, outcome: 'home', softOdd: 2.0, softBookie: 'Bet365', sharpOdd: 1.85, sharpBookie: 'Pinnacle',
+      gapPp: 0.05, edgeDirection: 'soft_undervalues' },
+    { fixtureId: 1, fixtureName: 'A vs B', kickoffIso: _ko(2), marketType: 'moneyline',
+      line: null, outcome: 'away', softOdd: 1.85, softBookie: 'Bet365', sharpOdd: 2.0, sharpBookie: 'Pinnacle',
+      gapPp: -0.05, edgeDirection: 'sharp_undervalues' },
+  ];
+  const alerts = selectAlertableWindows({ windows, now: _now, minGapPp: 0.04 });
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].window.outcome, 'home');
+});
+
+test('sharp-soft alerts: respecteert minGapPp threshold', () => {
+  const windows = [{
+    fixtureId: 1, fixtureName: 'A vs B', kickoffIso: _ko(2), marketType: 'moneyline',
+    line: null, outcome: 'home', softOdd: 2.0, sharpOdd: 1.95, gapPp: 0.02,
+    edgeDirection: 'soft_undervalues',
+  }];
+  assert.strictEqual(selectAlertableWindows({ windows, now: _now, minGapPp: 0.04 }).length, 0);
+  assert.strictEqual(selectAlertableWindows({ windows, now: _now, minGapPp: 0.01 }).length, 1);
+});
+
+test('sharp-soft alerts: skip kickoff buiten maxKickoffHours window', () => {
+  const baseW = {
+    fixtureId: 1, fixtureName: 'A vs B', marketType: 'moneyline',
+    line: null, outcome: 'home', softOdd: 2.0, sharpOdd: 1.85, gapPp: 0.05,
+    edgeDirection: 'soft_undervalues',
+  };
+  // Te ver in toekomst (24u)
+  assert.strictEqual(selectAlertableWindows({
+    windows: [{ ...baseW, kickoffIso: _ko(24) }], now: _now, maxKickoffHours: 6,
+  }).length, 0);
+  // Al begonnen (-1u)
+  assert.strictEqual(selectAlertableWindows({
+    windows: [{ ...baseW, kickoffIso: _ko(-1) }], now: _now, maxKickoffHours: 6,
+  }).length, 0);
+  // Binnen window (3u)
+  assert.strictEqual(selectAlertableWindows({
+    windows: [{ ...baseW, kickoffIso: _ko(3) }], now: _now, maxKickoffHours: 6,
+  }).length, 1);
+});
+
+test('sharp-soft alerts: dedupe via recentAlertKeys', () => {
+  const w = {
+    fixtureId: 1, fixtureName: 'A vs B', kickoffIso: _ko(2), marketType: 'moneyline',
+    line: null, outcome: 'home', softOdd: 2.0, sharpOdd: 1.85, gapPp: 0.05,
+    edgeDirection: 'soft_undervalues',
+  };
+  const key = buildAlertKey(w);
+  const alerts = selectAlertableWindows({
+    windows: [w], recentAlertKeys: new Set([key]), now: _now,
+  });
+  assert.strictEqual(alerts.length, 0, 'dedupe via recentAlertKeys moet alert blokkeren');
+});
+
+test('sharp-soft alerts: sorteert op |gapPp| descending', () => {
+  const ws = [
+    { fixtureId: 1, fixtureName: 'X', kickoffIso: _ko(2), marketType: 'm', line: null,
+      outcome: 'home', softOdd: 2, sharpOdd: 1.9, gapPp: 0.03, edgeDirection: 'soft_undervalues' },
+    { fixtureId: 2, fixtureName: 'Y', kickoffIso: _ko(2), marketType: 'm', line: null,
+      outcome: 'home', softOdd: 2, sharpOdd: 1.85, gapPp: 0.07, edgeDirection: 'soft_undervalues' },
+    { fixtureId: 3, fixtureName: 'Z', kickoffIso: _ko(2), marketType: 'm', line: null,
+      outcome: 'home', softOdd: 2, sharpOdd: 1.88, gapPp: 0.05, edgeDirection: 'soft_undervalues' },
+  ];
+  const alerts = selectAlertableWindows({ windows: ws, now: _now, minGapPp: 0.02 });
+  assert.deepStrictEqual(alerts.map(a => a.window.fixtureId), [2, 3, 1]);
 });
 
 test('devig-backtest: skip groups onder minBookmakers', () => {

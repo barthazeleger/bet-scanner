@@ -2,6 +2,30 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.23] - 2026-04-25
+
+**R4 alerts · auto-push voor sharp-soft execution windows**
+
+### Added
+
+- `lib/sharp-soft-alerts.js` — pure helper `selectAlertableWindows(args)` filtert windows op:
+  - alleen `soft_undervalues` (actionable kant)
+  - gap >= minGapPp (default 4pp)
+  - kickoff binnen maxKickoffHours (default 6u)
+  - dedupe via `recentAlertKeys` Set
+- `server.js` periodic job: elke 15 min check op nieuwe windows. Stuurt push naar admin + insert notification (type='sharp_soft_alert', body begint met alertKey voor dedup-query). Cap op 5 alerts per check tegen burst-spam. Initiele run 60s na boot.
+- 5 unit tests (filter sharp_undervalues, threshold, kickoff window, dedup, sortering).
+
+### Why
+
+- R4 helpers/endpoint waren in v12.2.17/.18 al gebouwd. Deze release ontsluit het als actionable signal: operator krijgt push wanneer een window opent waar zonder hier proactief in te grijpen execution-edge weglekt. Threshold conservatief (4pp) om spam te voorkomen.
+- Audit-doctrine: "auto-alert edge-window 30 min vóór kickoff bij gap > 4%". Hier 6u-window om voldoende reactietijd te geven.
+
+### Notes
+
+- Threshold via `min_gap_pp`-equivalent in helper (hard-coded 0.04 in scheduler). Tunable later.
+- 731 → 736 tests passed.
+
 ## [12.2.22] - 2026-04-25
 
 **R1 spike · log-margin vs proportional devig backtest harness**
