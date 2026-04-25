@@ -2,6 +2,21 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.24] - 2026-04-25
+
+**Audit · fresh-eyes review document na audit-roadmap completion**
+
+### Added
+
+- `docs/AUDIT_v12.2.23_FRESH_EYES.md` — onafhankelijke pass over wat tussen v12.2.5 en v12.2.23 is geland. Conclusie: geen open P0/P1, alle deferred items hebben heldere triggers, operator heeft nu objectieve diagnostiek (Brier · sharp-soft · devig-backtest) ipv giswerk.
+- 5 P2/P3 observaties + concrete vervolgacties voor Bart komende 14 dagen.
+- Roadmap herwaardering: R1/R2/R3 wachten op live data; R5/R6/R8 expliciet gepark met triggers.
+
+### Notes
+
+- Geen code-change deze release, alleen documentatie.
+- 736 tests passed (ongewijzigd).
+
 ## [12.2.23] - 2026-04-25
 
 **R4 alerts · auto-push voor sharp-soft execution windows**
