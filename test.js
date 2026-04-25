@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.12');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.13');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3970,6 +3970,51 @@ test('formatDropReasons: returnt null als alle counts 0 of map leeg', () => {
   assert.strictEqual(_fmtDrops({}), null);
   assert.strictEqual(_fmtDrops({ no_signals: 0 }), null);
   assert.strictEqual(_fmtDrops(null), null);
+});
+
+// v12.2.13 (R4 MVP): sharp-soft asymmetric edge detection.
+const _sharpSoft = require('./lib/sharp-soft-asymmetry');
+
+test('sharp-soft: calcOverround vig-loos 2.00/2.00 → 0', () => {
+  assert.strictEqual(_sharpSoft.calcOverround([2.00, 2.00]), 0);
+});
+
+test('sharp-soft: calcOverround 5% vig 1.91/1.91 → ~0.0471', () => {
+  // 1/1.91 + 1/1.91 = 1.0471 → vig = 0.0471
+  const v = _sharpSoft.calcOverround([1.91, 1.91]);
+  assert.strictEqual(+v.toFixed(4), 0.0471);
+});
+
+test('sharp-soft: compareOverrounds soft hogere vig dan sharp → softTighter=false', () => {
+  const r = _sharpSoft.compareOverrounds([1.91, 1.91], [1.96, 1.96]);
+  assert.ok(r);
+  assert.ok(r.softVig > r.sharpVig);
+  assert.strictEqual(r.softTighter, false);
+});
+
+test('sharp-soft: findExecutionEdge — soft undervalues home → hasEdge=true op home', () => {
+  // Sharp: 1.95/1.95 (~50/50). Soft: 2.20/1.75 (soft denkt home minder waarschijnlijk).
+  // Sharp fair home = ~0.50, soft fair home = ~0.45 → gap +0.05pp → soft undervalues home.
+  const edges = _sharpSoft.findExecutionEdge({
+    softOdds: [2.20, 1.75],
+    sharpOdds: [1.95, 1.95],
+    threshold: 0.02,
+  });
+  assert.ok(edges.length >= 1);
+  const homeEdge = edges.find(e => e.outcomeIndex === 0);
+  assert.ok(homeEdge);
+  assert.strictEqual(homeEdge.hasEdge, true);
+  assert.strictEqual(homeEdge.edgeDirection, 'soft_undervalues');
+});
+
+test('sharp-soft: findExecutionEdge geen significante gap → lege array', () => {
+  // Beide books eens over kansen → geen edge boven threshold
+  const edges = _sharpSoft.findExecutionEdge({
+    softOdds: [1.95, 1.95],
+    sharpOdds: [1.95, 1.95],
+    threshold: 0.02,
+  });
+  assert.strictEqual(edges.length, 0);
 });
 
 // v12.2.11 (R1 spike): devig-algorithms — proportionele vs log-margin.

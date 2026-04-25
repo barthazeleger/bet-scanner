@@ -2,6 +2,27 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.13] - 2026-04-25
+
+**R4 MVP · sharp-soft asymmetric edge detection helpers**
+
+### Added
+
+- `lib/sharp-soft-asymmetry.js` met pure helpers voor het detecteren van execution-edge wanneer een soft-bookie achterloopt op de sharp consensus:
+  - `calcOverround(odds[])` — vig (margin) berekening: Σ(1/odd) - 1
+  - `compareOverrounds(softOdds, sharpOdds)` — vergelijkt vig + identificeert wanneer soft strakker is dan sharp (zeldzaam, signaal van stale lijn)
+  - `findExecutionEdge({softOdds, sharpOdds, threshold})` — per outcome: hoeveel onder/over schat soft-book de fair-prob? Returnt actionable edges boven threshold (default 2pp)
+
+### Notes
+
+**Geen pipeline-integratie in deze release** — alleen pure helpers. Toekomstige integratie: per scan een 30-min-pre-kickoff alert wanneer soft-book significant gunstiger staat dan Pinnacle/Betfair consensus. Voor nu beschikbaar als testbaar component voor backtest-scenarios.
+
+### Tests
+
+701 passed, 0 failed. 5 nieuwe tests voor calcOverround + compareOverrounds + findExecutionEdge.
+
+---
+
 ## [12.2.12] - 2026-04-25
 
 **D2 · unit_at_time backfill voor legacy bets**
