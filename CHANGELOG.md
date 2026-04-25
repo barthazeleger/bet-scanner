@@ -2,6 +2,25 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.37] - 2026-04-25
+
+**v2 totals coverage compleet · NBA + NFL + handball O/U toegevoegd**
+
+### Added
+
+- NBA O/U → v2 (recordTotalsEvaluation).
+- NFL O/U → v2.
+- Handball O/U → v2.
+
+### Why
+
+- v12.2.32-33 wired hockey/voetbal/MLB/F5; deze release rond de v2-coverage rollout af voor alle 6 sporten + main markten. `/admin/v2/scan-by-sport` reflecteert nu volledig wat de v1 pipeline produceert.
+
+### Notes
+
+- BTTS, threeway, DC, 1H/F5 splits nog niet in v2. Volgen als specifieke shape-helpers (BTTS is yes/no zonder line; threeway is 3-way devig).
+- 742 tests passed.
+
 ## [12.2.36] - 2026-04-25
 
 **Concept-drift monitoring · `/admin/v2/concept-drift` endpoint**

@@ -2909,6 +2909,16 @@ async function runBasketball(emit) {
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} pts`, bestUn.price,
                   `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals, null, fxMetaUnBb);
+              // v12.2.37: NBA O/U → v2.
+              if (_currentModelVersionId) {
+                snap.recordTotalsEvaluation({
+                  supabase, modelVersionId: _currentModelVersionId, fixtureId: gameId,
+                  marketType: 'total', line,
+                  pOver: overP, pUnder: 1 - overP,
+                  bestOv, bestUn, ovEdge: overEdge, unEdge: underEdge, minEdge: MIN_EDGE,
+                  matchSignals, debug: { sport: 'basketball' },
+                }).catch(() => {});
+              }
             }
           }
         }
@@ -4943,6 +4953,16 @@ async function runFootballUS(emit) {
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} pts`, bestUn.price,
                   `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals, null, fxMetaNflUn);
+              // v12.2.37: NFL O/U → v2.
+              if (_currentModelVersionId) {
+                snap.recordTotalsEvaluation({
+                  supabase, modelVersionId: _currentModelVersionId, fixtureId: gameId,
+                  marketType: 'total', line,
+                  pOver: overP, pUnder: 1 - overP,
+                  bestOv, bestUn, ovEdge: overEdge, unEdge: underEdge, minEdge: MIN_EDGE,
+                  matchSignals, debug: { sport: 'american-football' },
+                }).catch(() => {});
+              }
             }
           }
         }
@@ -5468,6 +5488,16 @@ async function runHandball(emit) {
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} goals`, bestUn.price,
                   `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals, null, fxMetaHbUn);
+              // v12.2.37: handball O/U → v2.
+              if (_currentModelVersionId) {
+                snap.recordTotalsEvaluation({
+                  supabase, modelVersionId: _currentModelVersionId, fixtureId: gameId,
+                  marketType: 'total', line,
+                  pOver: overP, pUnder: 1 - overP,
+                  bestOv, bestUn, ovEdge: overEdge, unEdge: underEdge, minEdge: MIN_EDGE,
+                  matchSignals, debug: { sport: 'handball' },
+                }).catch(() => {});
+              }
             }
           }
         }
