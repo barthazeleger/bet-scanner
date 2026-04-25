@@ -2,6 +2,20 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.7] - 2026-04-25
+
+**F3 · atomic outcome-flip met calibration snapshot/restore**
+
+### Fixed
+
+- **[P1]** `updateBetOutcome` voerde bij outcome-flip (W → L of vice versa) `revertCalibration` + `updateCalibration` na elkaar uit, zonder atomariteit. Als de tweede call gooide (Supabase-glitch, schema-mismatch) bleef calib half-gereverted: `totalSettled` telt fout, market-multipliers staan in onbekende staat.
+- Fix: `lib/calibration-store.js` exporteert nu `snapshot()` (diepe-kopie van calib) en `restore(snap)` (atomic save terug). `lib/bets-data.js` `updateBetOutcome` neemt snapshot pre-flip; bij exception in revert/update wordt automatisch gerestored. Backwards-compat: snapshot/restore zijn optionele deps — zonder die deps blijft de oude flow.
+
+### Tests
+685 passed, 0 failed. 2 nieuwe: snapshot is diepe kopie + restore zet calib terug.
+
+---
+
 ## [12.2.6] - 2026-04-25
 
 **F2 · Atomic bookie-balance via Postgres RPC (race-condition fix)**

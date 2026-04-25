@@ -726,6 +726,9 @@ const calibrationStore = createCalibrationStore({ supabase, baseDir: __dirname }
 const loadCalib = calibrationStore.loadSync;
 const loadCalibAsync = calibrationStore.load;
 const saveCalib = calibrationStore.save;
+// v12.2.7 (F3): atomic outcome-flip. Geinjecteerd in createBetsData.
+const snapshotCalib = calibrationStore.snapshot;
+const restoreCalib = calibrationStore.restore;
 
 // detectMarket() komt uit lib/model-math.js
 
@@ -6732,6 +6735,9 @@ const betsData = createBetsData({
   revertCalibration,
   updateCalibration,
   bookieBalanceStore,
+  // v12.2.7 (F3): atomic outcome-flip via calib snapshot/restore
+  snapshotCalib,
+  restoreCalib,
 });
 const calcStats = betsData.calcStats;
 const readBets = betsData.readBets;
