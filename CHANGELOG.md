@@ -2,6 +2,27 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.29] - 2026-04-25
+
+**UI fix · "✓ Gelogd" badge precieze matching**
+
+### Fixed
+
+- `index.html` pick-card: "✓ Gelogd" badge matchde voorheen op `wedstrijd + eerste woord van label`. Voor pick "📈 Dallas Stars TT Over 2.5" was eerste woord "Dallas" (teamnaam), waardoor ELKE oude bet op dezelfde wedstrijd met "Dallas" in markt als "gelogd" werd gemarkeerd.
+- Nieuwe matching:
+  - Alleen bets met `uitkomst='Open'` tellen (settled/cancelled bets niet).
+  - Full normalized markt-string match (geen first-word heuristiek).
+  - Line moet matchen als beide labels een line hebben (TT Over 2.5 ≠ TT Over 3.5).
+
+### Why
+
+- Bart's screenshot (v12.2.27): Dallas Stars TT Over 2.5 toonde "✓ Gelogd" terwijl pick nog niet gelogd was. Vorige Dallas-pick uit playoffs (TT Over 3.5) was de "false-positive" match.
+- Doctrine "auditability": een verkeerde "Gelogd" stempel is een correctness-bug die operator kan misleiden om dubbel of niet te loggen.
+
+### Impact
+
+- 739 tests passed (UI-only fix, geen test-coverage uitgebreid; HTML-pad ontbreekt unit-tests in deze codebase).
+
 ## [12.2.28] - 2026-04-25
 
 **F5 calibration-bucket separation · audit P3 fix**

@@ -125,7 +125,7 @@
         <div class="scan-panel scan-panel-pm" style="max-width:100%;width:100%;padding:32px 28px">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
             <div>
-              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.2.28</span></div>
+              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.2.29</span></div>
               <div style="font-size:26px;font-weight:800;line-height:1.2;letter-spacing:-.02em" data-i18n-html="scan_headline">Vind de beste bets van dit moment</div>
               <div style="font-size:13px;color:rgba(255,255,255,0.55);margin-top:10px;line-height:1.7" data-i18n-html="scan_desc">
                 Pre-match · Live xG · H2H · Opstellingen · Standen · Predictions<br>
@@ -654,7 +654,7 @@
       <div class="card-hd">
         <div>
           <div class="card-title" style="font-size:17px" data-i18n="card_how_it_works">🎯 EdgePickr — hoe het werkt</div>
-          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.2.28</span> · <span data-i18n="info_date">april 2026</span></div>
+          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.2.29</span> · <span data-i18n="info_date">april 2026</span></div>
         </div>
         <div style="font-size:24px">🤖</div>
       </div>
@@ -1600,10 +1600,28 @@ function renderPicks(el, picks) {
           return `<div style="margin-top:6px;padding:3px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.03em;text-align:center;background:${bg};color:${fg}" title="${escHtml(p.bookie)}">${escHtml(p.bookie)}</div>`;
         })() : ''}
         <div class="pick-log-btn">${(() => {
-          const alGelogd = betData && (betData.bets||[]).some(b =>
-            b.wedstrijd.toLowerCase() === (p.match||'').toLowerCase() &&
-            b.markt.toLowerCase().includes((p.label||'').toLowerCase().replace(/^[^\w]+/,'').split(' ')[0])
-          );
+          // v12.2.29: precieze matching — voorheen "first-word match" zoals
+          // "Dallas Stars TT Over 2.5" → eerste woord "Dallas" → matched op
+          // ELKE oude bet op dezelfde wedstrijd met "Dallas" in markt.
+          // Fix: (a) alleen Open bets tellen, (b) full normalized markt-match.
+          const normPick = s => (s||'').toLowerCase().replace(/[^\w\s.]/g, ' ').replace(/\s+/g, ' ').trim();
+          const pn = normPick(p.label);
+          const alGelogd = betData && (betData.bets||[]).some(b => {
+            if (String(b.uitkomst||'').toUpperCase() !== 'OPEN') return false;
+            if (b.wedstrijd.toLowerCase() !== (p.match||'').toLowerCase()) return false;
+            const bn = normPick(b.markt);
+            // Exact normalized match OF één bevat de ander (line-variaties).
+            if (bn === pn) return true;
+            // Voorkom dat 'tt over' op zich zelf cross-matched (vereis line)
+            if (pn.length >= 6 && bn.length >= 6 && (bn.includes(pn) || pn.includes(bn))) {
+              // Extra check: als beide een line hebben (e.g. "2.5"), moeten die gelijk zijn
+              const lp = (pn.match(/(\d+\.?\d*)/)||[])[1];
+              const lb = (bn.match(/(\d+\.?\d*)/)||[])[1];
+              if (lp && lb) return lp === lb;
+              return true;
+            }
+            return false;
+          });
           return alGelogd
             ? `<span style="font-size:11px;color:#34d399;font-weight:700">✓ Gelogd</span>`
             : `<button class="btn btn-success btn-sm" data-action="openModal" data-idx="${i}" data-label="${escHtml(p.label||'')}" onclick="openModal(+this.dataset.idx, this.dataset.label)">+ Log</button>`;
