@@ -2,6 +2,24 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.25] - 2026-04-25
+
+**Hockey 2-way ML pick-label · expliciete `(inc-OT)` scope-marker**
+
+### Changed
+
+- `server.js` ijshockey 2-way ML labels: `🏠 ${hm} wint` → `🏠 ${hm} wint (inc-OT)` (en idem voor away). Voorkomt operator-verwarring met 60-min regulation product op andere bookies (Unibet/Toto/Betcity/Ladbrokes — `HOCKEY_60MIN_BOOKIES`).
+
+### Why
+
+- Bart's observatie op v12.2.16: een hockey ML pick @ Bet365 2.70 leek onverklaarbaar terwijl Unibet @ 2.87 noteerde. Diagnose: doctrine-conform (inc-OT vs 60-min reg = verschillende producten, nooit mengen) maar pick-label gaf geen scope-context.
+- 3-weg ML labels hebben al `(60-min)` marker; deze release brengt 2-way ML in lijn met expliciete scope.
+
+### Notes
+
+- Geen behavior-change op pick-pipeline. Cosmetisch + cognitief.
+- 736 tests passed (ongewijzigd; label-string staat niet in tests).
+
 ## [12.2.24] - 2026-04-25
 
 **Audit · fresh-eyes review document na audit-roadmap completion**

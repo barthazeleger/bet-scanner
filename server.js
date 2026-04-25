@@ -3536,13 +3536,16 @@ async function runHockey(emit) {
           const fxMetaHkA = { fixtureId: gameId, marketType: 'moneyline', selectionKey: 'away', line: null };
           if (homeEdge >= MIN_EDGE && bH.price >= 1.60 && bH.price <= MAX_WINNER_ODDS
               && isOTBookieHockey(bH.bookie) && sanityHome.agree) {
-            mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint`, bH.price,
+            // v12.2.25: explicit (inc-OT) tag op hockey 2-way ML labels.
+            // Voorkomt verwarring met 60-min regulation product op andere bookies
+            // (bv. Unibet/Toto). Doctrine: nooit mengen — pick-label moet scope tonen.
+            mkP(`${hm} vs ${aw}`, league.name, `🏠 ${hm} wint (inc-OT)`, bH.price,
               `Consensus: ${(fpHome*100).toFixed(1)}%→${(adjHome*100).toFixed(1)}% | Markt-fair: ${(marketFairIncOT.home*100).toFixed(1)}% | ${bH.bookie}: ${bH.price}${sharedNotes} | ${ko}`,
               Math.round(adjHome*100), homeEdge * 0.28, kickoffTime, bH.bookie, [...matchSignals, 'sanity_ok'], null, fxMetaHkH);
           }
           if (awayEdge >= MIN_EDGE && bA.price >= 1.60 && bA.price <= MAX_WINNER_ODDS
               && isOTBookieHockey(bA.bookie) && sanityAway.agree) {
-            mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint`, bA.price,
+            mkP(`${hm} vs ${aw}`, league.name, `✈️ ${aw} wint (inc-OT)`, bA.price,
               `Consensus: ${(fpAway*100).toFixed(1)}%→${(adjAway*100).toFixed(1)}% | Markt-fair: ${(marketFairIncOT.away*100).toFixed(1)}% | ${bA.bookie}: ${bA.price}${sharedNotes} | ${ko}`,
               Math.round(adjAway*100), awayEdge * 0.28, kickoffTime, bA.bookie, [...matchSignals, 'sanity_ok'], null, fxMetaHkA);
           }
