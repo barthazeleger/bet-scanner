@@ -3750,6 +3750,16 @@ async function runHockey(emit) {
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} goals`, bestUn.price,
                   `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals, null, fxMetaHkUn);
+              // v12.2.33: hockey main O/U → v2 pick_candidates.
+              if (_currentModelVersionId) {
+                snap.recordTotalsEvaluation({
+                  supabase, modelVersionId: _currentModelVersionId, fixtureId: gameId,
+                  marketType: 'total', line,
+                  pOver: overP, pUnder: 1 - overP,
+                  bestOv, bestUn, ovEdge: overEdge, unEdge: underEdge, minEdge: MIN_EDGE,
+                  matchSignals, debug: { sport: 'hockey' },
+                }).catch(() => {});
+              }
             }
           }
         }
@@ -4335,6 +4345,16 @@ async function runBaseball(emit) {
                 mkP(`${hm} vs ${aw}`, league.name, `🔒 Under ${line} runs`, bestUn.price,
                   `O/U: ${((1-overP)*100).toFixed(1)}% under | ${bestUn.bookie}: ${bestUn.price}${sharedNotes} | ${ko}`,
                   Math.round((1-overP)*100), underEdge * 0.22, kickoffTime, bestUn.bookie, matchSignals, null, fxMetaMlbUn);
+              // v12.2.33: MLB main O/U → v2.
+              if (_currentModelVersionId) {
+                snap.recordTotalsEvaluation({
+                  supabase, modelVersionId: _currentModelVersionId, fixtureId: gameId,
+                  marketType: 'total', line,
+                  pOver: overP, pUnder: 1 - overP,
+                  bestOv, bestUn, ovEdge: overEdge, unEdge: underEdge, minEdge: MIN_EDGE,
+                  matchSignals, debug: { sport: 'baseball', weatherAdj: mlbWeatherAdj },
+                }).catch(() => {});
+              }
             }
           }
         }
@@ -4523,6 +4543,17 @@ async function runBaseball(emit) {
                 mkP(`${hm} vs ${aw}`, league.name, `⚾ F5 Under ${line}`, bestUn.price,
                   `F5 Total: ${((1-adjOverP)*100).toFixed(1)}% under ${line} | ${bestUn.bookie}: ${bestUn.price} | ${ko}`,
                   Math.round((1-adjOverP)*100), eUn * 0.20, kickoffTime, bestUn.bookie, [...matchSignals, 'f5_total'], null, fxMetaF5Un);
+              // v12.2.33: F5 totals → v2.
+              if (_currentModelVersionId) {
+                snap.recordTotalsEvaluation({
+                  supabase, modelVersionId: _currentModelVersionId, fixtureId: gameId,
+                  marketType: 'f5_total', line,
+                  pOver: adjOverP, pUnder: 1 - adjOverP,
+                  bestOv, bestUn, ovEdge: eOv, unEdge: eUn, minEdge: MIN_EDGE,
+                  matchSignals: [...matchSignals, 'f5_total'],
+                  debug: { sport: 'baseball' },
+                }).catch(() => {});
+              }
             }
           }
         }
@@ -6184,6 +6215,17 @@ async function runPrematch(emit) {
             mkP(`${hm} vs ${aw}`, league.name, `🔒 Under 2.5 goals`, under.best.price,
               `O/U consensus: ${((1-overP)*100).toFixed(1)}% under | ${under.best.bookie}: ${under.best.price}${tsNote}${weatherOUNote}${poissonOUNote} | ${ko}`,
               Math.round((1-overP)*100), underEdge * 0.22 * (cm.under?.multiplier ?? 1), kickoffTime, under.best.bookie, ouSignals, refereeName, fxMetaUnder);
+          // v12.2.33: voetbal main O/U → v2 (grootste volume → biggest visibility win).
+          if (_currentModelVersionId) {
+            snap.recordTotalsEvaluation({
+              supabase, modelVersionId: _currentModelVersionId, fixtureId: fid,
+              marketType: 'total', line: 2.5,
+              pOver: overP, pUnder: 1 - overP,
+              bestOv: over.best, bestUn: under.best,
+              ovEdge: overEdge, unEdge: underEdge, minEdge: MIN_EDGE,
+              matchSignals: ouSignals, debug: { sport: 'football' },
+            }).catch(() => {});
+          }
         }
 
         // ── BTTS (Both Teams To Score) ────────────────────────────────

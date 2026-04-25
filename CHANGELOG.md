@@ -2,6 +2,27 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.33] - 2026-04-25
+
+**v2 totals coverage uitgerold · hockey O/U + voetbal O/U + MLB O/U + F5 totals**
+
+### Added
+
+- Hockey main O/U → v2.
+- MLB main O/U → v2 (incl. weatherAdj in debug).
+- MLB F5 totals → v2.
+- Voetbal main O/U 2.5 → v2 (grootste volume — biggest visibility win voor `/admin/v2/scan-by-sport`).
+
+### Why
+
+- v12.2.32 wired hockey TT als proof. Deze release rolt hetzelfde patroon uit voor de andere O/U-style markten zodat operator-dashboards eerlijk reality reflecteren.
+- Resterend nog niet gewired: NBA totals, NFL totals, handball totals, BTTS, threeway, DC. Volgen in v12.2.34+ als de huidige wiring stabiel blijkt.
+
+### Impact
+
+- 740 tests passed.
+- Geen behavior-change op pick-pipeline; alleen extra writes naar v2 pick_candidates.
+
 ## [12.2.32] - 2026-04-25
 
 **v2 coverage gap dichten · hockey TT → pick_candidates**
