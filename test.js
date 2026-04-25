@@ -2954,6 +2954,69 @@ test('release metadata: index fallbackversies matchen app-meta', () => {
   assert.ok(html.includes(`id="app-version-str">versie ${appMeta.APP_VERSION}<`), 'app-version fallback should match app-meta');
 });
 
+// v12.3.1 hotfix gate · zie CHANGELOG. Een U+200B (zero-width space) in
+// index.html sloopte alle front-end JS in v12.3.0. Server-boot + npm test
+// (Node) hadden geen zicht op de browser-parser, dus we voegen die zichtbaarheid
+// hier expliciet toe. Twee tests, allebei strikt:
+//   1. Geen onzichtbare format-control chars in JS/HTML-bronnen.
+//   2. Elke inline <script> in index.html moet syntactisch parseren.
+test('source hygiene (v12.3.1 G1): geen onzichtbare format-control chars in JS/HTML-bronnen', () => {
+  // U+200B/200C/200D/2060/FEFF zijn legitiem in tekst (Arabic, emoji-modifiers,
+  // BOM) maar nooit in deze codebase: NL-content, ASCII-identifiers, geen BOM.
+  // Wanneer ze tóch verschijnen is het altijd een copy-paste-ongeluk dat de
+  // JS-parser silenter kan slopen (zie v12.3.0 → v12.3.1).
+  const BAD = /[\u200B\u200C\u200D\u2060\uFEFF]/g;
+  const sources = ['index.html', 'login.html', 'server.js', 'test.js', 'sw.js'];
+  const walk = (rel) => {
+    const abs = path.join(__dirname, rel);
+    if (!fs.existsSync(abs)) return [];
+    const out = [];
+    for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+      const child = path.join(rel, e.name);
+      if (e.isDirectory()) out.push(...walk(child));
+      else if (/\.(js|html|css)$/.test(e.name)) out.push(child);
+    }
+    return out;
+  };
+  for (const sub of ['lib', 'js']) sources.push(...walk(sub));
+  const offenders = [];
+  for (const rel of sources) {
+    const txt = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+    BAD.lastIndex = 0;
+    let m;
+    while ((m = BAD.exec(txt)) !== null) {
+      const line = txt.slice(0, m.index).split('\n').length;
+      const cp = 'U+' + m[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+      offenders.push(`${rel}:${line} ${cp}`);
+    }
+  }
+  assert.deepStrictEqual(offenders, [], 'invisible chars found:\n' + offenders.join('\n'));
+});
+
+test('source hygiene (v12.3.1 G2): index.html inline <script> blokken parsen syntactisch', () => {
+  const vm = require('vm');
+  const txt = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  const errors = [];
+  let m;
+  let idx = 0;
+  while ((m = re.exec(txt)) !== null) {
+    idx++;
+    const attrs = m[1] || '';
+    const body = m[2] || '';
+    if (/\bsrc\s*=/.test(attrs)) continue;
+    if (/\btype\s*=\s*["']?(application\/(ld\+)?json|importmap|module)/i.test(attrs)) continue;
+    if (!body.trim()) continue;
+    try {
+      new vm.Script(body, { filename: `index.html#script-${idx}` });
+    } catch (e) {
+      const lineMatch = (e.stack || '').match(/index\.html#script-\d+:(\d+)/);
+      errors.push(`script #${idx}: ${e.message}${lineMatch ? ` (body line ${lineMatch[1]})` : ''}`);
+    }
+  }
+  assert.deepStrictEqual(errors, [], 'inline script syntax errors:\n' + errors.join('\n'));
+});
+
 test('residualModelDelta: zonder coefficients → 0 (skeleton)', () => {
   assert.strictEqual(residualModelDelta({}, null), 0);
   assert.strictEqual(residualModelDelta({}, { weights: [] }), 0);

@@ -16,7 +16,14 @@ Operator-rapport: "Sinds 12.3.0 doet de app het niet echt meer. Net nog wel (12.
 
 ### Hardened
 
-- Geen. Pure 1-character-fix.
+- **Pre-push gates voor inline-JS in HTML** — `test.js` G1 + G2 (773 → 775 tests):
+  - **G1 · source hygiene scan**: doorloopt `index.html`, `login.html`, `server.js`, `test.js`, `sw.js`, `lib/**/*.js|html|css`, `js/**/*.js|html|css` en faalt op elke U+200B / U+200C / U+200D / U+2060 / U+FEFF. Deze codepoints zijn legitiem in tekst maar nooit in deze codebase (NL-content, ASCII-identifiers, geen BOM).
+  - **G2 · inline-script syntax-parse**: extract elke `<script>` zonder `src=` en zonder `type=module|json|importmap` uit `index.html`, parseert via `new vm.Script()` (script-context, geen execute) en faalt bij SyntaxError. Vangt élke browser-parser-bug, niet alleen ZWSP.
+  - Sanity-check uitgevoerd: een tijdelijk geïnjecteerde U+200B liet allebei de gates correct rood worden vóór commit.
+
+### Verified
+
+- Restore na injectie: `grep -cP '\x{200B}' index.html` → 0. 775/775 groen.
 
 **Fresh-eyes audit pass · 2 UX-fixes + 3 P2 hardenings + 3 test additions**
 
