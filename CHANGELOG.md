@@ -2,6 +2,32 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.17] - 2026-04-25
+
+**R4 wiring · sharp-soft execution-edge windows admin endpoint**
+
+### Added
+
+- `lib/sharp-soft-windows.js` — pure helper `summarizeSharpSoftWindows({ snapshots, fixtures, sharpSet, softSet, threshold })`. Groepeert `odds_snapshots` per fixture × market_type × line, neemt latest snapshot per bookmaker × selection_key, splitst sharp/soft buckets en draait `findExecutionEdge` per groep. Gesorteerd op |gapPp| desc.
+- `GET /api/admin/v2/sharp-soft-windows` — admin route. Pulls fixtures in `[now, now+lookahead_hours]` + odds_snapshots over laatste `lookback_hours`, returnt top-100 windows. Query params: `lookahead_hours` (1-72, default 24), `lookback_hours` (1-24, default 6), `min_gap_pp` (0.005-0.20, default 0.02 = 2pp).
+- 4 nieuwe unit tests voor windows-aggregator (groupering, partial-data skip, latest-snapshot-per-bookmaker, route-construct).
+
+### Why
+
+- R4 helpers (`lib/sharp-soft-asymmetry.js`) bestonden al sinds v12.2.13 maar
+  zonder consumer hadden ze geen operationele waarde. Deze wiring exposeert
+  ze als read-only admin signal: operator ziet welke fixtures momenteel een
+  exploitabel verschil hebben tussen sharp consensus (Pinnacle/Betfair) en
+  best preferred-bookie odd (Bet365/Unibet).
+- Geen behavior change op pick-pipeline. Pure observability.
+
+### Notes
+
+- Auto-alert (web push) bij gap > threshold blijft expliciet deferred —
+  eerst data verzamelen om het juiste alert-threshold te kalibreren zonder
+  notification-spam.
+- 707 → 710 tests passed.
+
 ## [12.2.16] - 2026-04-25
 
 **R7 · concurrency-tests + fixture-resolver inflight dedup**

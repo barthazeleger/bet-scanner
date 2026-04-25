@@ -6896,7 +6896,7 @@ app.use('/api', createAdminQualityRouter({
 // v11.3.3 Phase 5.4k: autotune-clv + snapshot-counts verhuisd naar
 // lib/routes/admin-snapshots.js.
 const createAdminSnapshotsRouter = require('./lib/routes/admin-snapshots');
-app.use('/api', createAdminSnapshotsRouter({ supabase, requireAdmin, autoTuneSignalsByClv }));
+app.use('/api', createAdminSnapshotsRouter({ supabase, requireAdmin, autoTuneSignalsByClv, loadUsers }));
 
 // ── PUSH + INBOX NOTIFICATIONS ─────────────────────────────────────────────
 // v11.2.0 Phase 5.1: handlers verhuisd naar lib/routes/notifications.js via

@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.16');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.17');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4079,6 +4079,80 @@ test('sharp-soft: findExecutionEdge geen significante gap → lege array', () =>
     threshold: 0.02,
   });
   assert.strictEqual(edges.length, 0);
+});
+
+// v12.2.17 (R4 wiring): summarizeSharpSoftWindows aggregates snapshots → window-list.
+const { summarizeSharpSoftWindows } = require('./lib/sharp-soft-windows');
+
+test('sharp-soft windows: groupeert snapshots per fixture×market en filtert significante gap', () => {
+  const snapshots = [
+    // fixture 1, moneyline. soft (Bet365) heeft hogere odd op home dan sharp (Pinnacle).
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle',  market_type: 'moneyline', selection_key: 'home', line: null, odds: 1.85 },
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle',  market_type: 'moneyline', selection_key: 'away', line: null, odds: 2.05 },
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',    market_type: 'moneyline', selection_key: 'home', line: null, odds: 2.00 },
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',    market_type: 'moneyline', selection_key: 'away', line: null, odds: 1.85 },
+    // fixture 2, moneyline. Beide books eens — geen window.
+    { fixture_id: 2, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle',  market_type: 'moneyline', selection_key: 'home', line: null, odds: 1.95 },
+    { fixture_id: 2, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle',  market_type: 'moneyline', selection_key: 'away', line: null, odds: 1.95 },
+    { fixture_id: 2, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',    market_type: 'moneyline', selection_key: 'home', line: null, odds: 1.95 },
+    { fixture_id: 2, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',    market_type: 'moneyline', selection_key: 'away', line: null, odds: 1.95 },
+  ];
+  const fixtures = new Map([
+    [1, { start_time: '2026-04-25T20:00:00Z', home_team_name: 'Bayern', away_team_name: 'Dortmund' }],
+    [2, { start_time: '2026-04-25T20:30:00Z', home_team_name: 'Ajax',   away_team_name: 'PSV' }],
+  ]);
+  const windows = summarizeSharpSoftWindows({
+    snapshots,
+    fixtures,
+    sharpSet: new Set(['pinnacle']),
+    softSet: new Set(['bet365']),
+    threshold: 0.02,
+  });
+  assert(windows.length >= 1, `verwacht ≥1 window, kreeg ${windows.length}`);
+  const homeWindow = windows.find(w => w.fixtureId === 1 && w.outcome === 'home');
+  assert(homeWindow, 'fixture 1 home moet window opleveren');
+  assert.strictEqual(homeWindow.fixtureName, 'Bayern vs Dortmund');
+  assert.strictEqual(homeWindow.softOdd, 2.00);
+  assert.strictEqual(homeWindow.sharpOdd, 1.85);
+  assert.strictEqual(homeWindow.edgeDirection, 'soft_undervalues');
+  // fixture 2 mag NIET in resultaat (geen significante gap)
+  assert(!windows.some(w => w.fixtureId === 2), 'fixture 2 mag geen window opleveren');
+});
+
+test('sharp-soft windows: only-sharp-data of only-soft-data wordt geskipt (geen partial)', () => {
+  const snapshots = [
+    // fixture 3: alleen sharp data, geen soft → skip
+    { fixture_id: 3, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle', market_type: 'moneyline', selection_key: 'home', line: null, odds: 1.85 },
+    { fixture_id: 3, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle', market_type: 'moneyline', selection_key: 'away', line: null, odds: 2.05 },
+  ];
+  const windows = summarizeSharpSoftWindows({
+    snapshots,
+    fixtures: new Map(),
+    sharpSet: new Set(['pinnacle']),
+    softSet: new Set(['bet365']),
+    threshold: 0.02,
+  });
+  assert.strictEqual(windows.length, 0);
+});
+
+test('sharp-soft windows: gebruikt latest snapshot per bookmaker bij meerdere captures', () => {
+  const snapshots = [
+    { fixture_id: 4, captured_at: '2026-04-25T08:00:00Z', bookmaker: 'Pinnacle', market_type: 'moneyline', selection_key: 'home', line: null, odds: 1.50 }, // ouder
+    { fixture_id: 4, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle', market_type: 'moneyline', selection_key: 'home', line: null, odds: 1.85 }, // nieuwer (gebruikt)
+    { fixture_id: 4, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle', market_type: 'moneyline', selection_key: 'away', line: null, odds: 2.05 },
+    { fixture_id: 4, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',   market_type: 'moneyline', selection_key: 'home', line: null, odds: 2.00 },
+    { fixture_id: 4, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',   market_type: 'moneyline', selection_key: 'away', line: null, odds: 1.85 },
+  ];
+  const windows = summarizeSharpSoftWindows({
+    snapshots,
+    fixtures: new Map(),
+    sharpSet: new Set(['pinnacle']),
+    softSet: new Set(['bet365']),
+    threshold: 0.02,
+  });
+  const home = windows.find(w => w.fixtureId === 4 && w.outcome === 'home');
+  assert(home, 'fixture 4 home window ontbreekt');
+  assert.strictEqual(home.sharpOdd, 1.85, 'latest sharp odd moet 1.85 zijn (niet 1.50 uit oudere snapshot)');
 });
 
 // v12.2.11 (R1 spike): devig-algorithms — proportionele vs log-margin.
@@ -5912,15 +5986,17 @@ test('admin-snapshots router: throws bij missing deps', () => {
   assert.throws(() => createAdminSnapshotsRouter({}), /missing required dep/);
 });
 
-test('admin-snapshots router: construct met valid deps + 2 routes', () => {
+test('admin-snapshots router: construct met valid deps + 3 routes', () => {
   const router = createAdminSnapshotsRouter({
     supabase: { from: () => ({ select: () => ({}) }) },
     requireAdmin: (req, res, next) => next(),
     autoTuneSignalsByClv: async () => ({ ok: true }),
+    loadUsers: async () => [],
   });
   const routes = router.stack.filter(l => l.route).map(l => l.route.path);
   assert.ok(routes.includes('/admin/v2/autotune-clv'));
   assert.ok(routes.includes('/admin/v2/snapshot-counts'));
+  assert.ok(routes.includes('/admin/v2/sharp-soft-windows'));
 });
 
 test('admin-controls router: throws bij missing deps', () => {
