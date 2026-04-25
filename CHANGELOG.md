@@ -2,6 +2,30 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.48] - 2026-04-25
+
+**R8 step 1 · `lib/kill-switch.js` extract uit server.js**
+
+### Changed
+
+- `lib/kill-switch.js` (nieuw) — factory `createKillSwitch({supabase, loadSettledBets, normalizeSport, detectMarket, supportsClvForBetMarkt})`. Returnt object met `set/thresholds/lastRefreshed/enabled/refresh()/isMarketKilled()/setEnabled()`.
+- `server.js` KILL_SWITCH global object + `refreshKillSwitch()` + `isMarketKilled()` functies geëxtraheerd → server.js shrink ~80 regels.
+- Backwards-compat: top-level `KILL_SWITCH`, `refreshKillSwitch`, `isMarketKilled` namen blijven werken via aliassen voor existing call-sites.
+
+### Why
+
+- Audit R8 (next-sprint deferred): "createApp(deps) factory + global state object". Eerste stap: kill-switch (meest zelfstandige globale state met duidelijke methoden).
+- Testbaarheid: kill-switch nu te mocken in tests (zie 5 nieuwe tests). Voorheen kon dat alleen via volledige server.js boot.
+
+### Tests
+
+- 5 unit tests via `createKillSwitch`: missing deps, kill-trigger above threshold, no-kill below threshold, disable wist set, isMarketKilled gating.
+
+### Impact
+
+- 761 → 766 tests passed.
+- Geen behavior-change (kill-switch state-machine ongewijzigd).
+
 ## [12.2.47] - 2026-04-25
 
 **v2 Double Chance coverage · football DC**

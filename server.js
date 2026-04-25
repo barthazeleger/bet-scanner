@@ -96,19 +96,12 @@ async function saveOperatorState() {
   } catch (e) { /* swallow */ }
 }
 
-// ── KILL-SWITCH CACHE ──────────────────────────────────────────────────────
-// Set van market-keys (sport_market) die geblokkeerd zijn op basis van negatieve CLV.
-// Refreshed elke 30 min uit /api/admin/v2/clv-stats logica.
-const KILL_SWITCH = {
-  set: new Set(),
-  thresholds: { kill_min_n: 30, watchlist_clv: -2.0, auto_disable_clv: -5.0 },
-  lastRefreshed: 0,
-  enabled: true, // master flag; admin kan dit later via UI uitzetten
-};
-
-// v10.10.22 fase 3: gecombineerde bets-refresh. Voorheen 3 aparte full-table
-// scans (refreshKillSwitch, refreshMarketSampleCounts, refreshSportCaps) die
-// elk dezelfde tabel opvroegen. Nu: één query, drie consumers.
+// ── KILL-SWITCH (v12.2.48 R8: extracted naar lib/kill-switch.js) ────────────
+// Set van market-keys (sport_market) die geblokkeerd zijn op basis van
+// negatieve CLV. Refreshed elke 30 min via setInterval(refreshKillSwitch).
+//
+// v10.10.22 fase 3: gecombineerde bets-refresh — één Supabase query, drie
+// consumers (kill-switch, market-sample-counts, sport-caps).
 let _settledBetsCache = { rows: [], at: 0 };
 const SETTLED_BETS_TTL_MS = 5 * 60 * 1000;
 async function loadSettledBetsOnce() {
@@ -122,69 +115,19 @@ async function loadSettledBetsOnce() {
   } catch { return _settledBetsCache.rows; }
 }
 
-async function refreshKillSwitch() {
-  if (!KILL_SWITCH.enabled) { KILL_SWITCH.set.clear(); return; }
-  try {
-    const bets = await loadSettledBetsOnce();
-    const all = bets.filter(b =>
-      typeof b.clv_pct === 'number' &&
-      !isNaN(b.clv_pct) &&
-      supportsClvForBetMarkt(b.markt)
-    );
-    const byMarket = {};
-    for (const b of all) {
-      const s = normalizeSport(b.sport || 'football');
-      const mk = detectMarket(b.markt || 'other');
-      const key = `${s}_${mk}`;
-      if (!byMarket[key]) byMarket[key] = { n: 0, sumClv: 0 };
-      byMarket[key].n++;
-      byMarket[key].sumClv += b.clv_pct;
-    }
-    const newSet = new Set();
-    const newKills = []; // markten die nu nieuw geblokkeerd zijn
-    for (const [k, d] of Object.entries(byMarket)) {
-      const avgClv = d.sumClv / d.n;
-      if (d.n >= KILL_SWITCH.thresholds.kill_min_n && avgClv < KILL_SWITCH.thresholds.auto_disable_clv) {
-        newSet.add(k);
-        if (!KILL_SWITCH.set.has(k)) newKills.push({ key: k, avgClv: avgClv.toFixed(2), n: d.n });
-      }
-    }
-    const previousSet = KILL_SWITCH.set;
-    KILL_SWITCH.set = newSet;
-    KILL_SWITCH.lastRefreshed = Date.now();
-    if (newSet.size) console.log(`🛑 Kill-switch: ${newSet.size} markten geblokkeerd: ${[...newSet].join(', ')}`);
-    // Inbox-notification per nieuw geblokkeerde markt
-    for (const k of newKills) {
-      try {
-        await supabase.from('notifications').insert({
-          type: 'kill_switch',
-          title: `🛑 Markt geblokkeerd: ${k.key}`,
-          body: `Auto-disable: gemiddelde CLV ${k.avgClv}% over ${k.n} settled bets is onder threshold (${KILL_SWITCH.thresholds.auto_disable_clv}%). Picks uit deze markt worden niet meer getoond. Override via admin endpoint.`,
-          read: false, user_id: null,
-        });
-      } catch { /* swallow */ }
-    }
-    // Notification als markt weer "leeft" (uit kill-set verdwenen)
-    for (const k of previousSet) {
-      if (!newSet.has(k)) {
-        try {
-          await supabase.from('notifications').insert({
-            type: 'kill_switch',
-            title: `✅ Markt heropend: ${k}`,
-            body: `Auto-restored: gemiddelde CLV is hersteld boven threshold. Picks uit deze markt zijn weer toegestaan.`,
-            read: false, user_id: null,
-          });
-        } catch { /* swallow */ }
-      }
-    }
-  } catch (e) { /* swallow */ }
-}
+const { createKillSwitch } = require('./lib/kill-switch');
+const KILL_SWITCH = createKillSwitch({
+  supabase,
+  loadSettledBets: loadSettledBetsOnce,
+  normalizeSport,
+  detectMarket,
+  supportsClvForBetMarkt,
+});
 
-function isMarketKilled(sport, marktLabel) {
-  if (!KILL_SWITCH.enabled || !KILL_SWITCH.set.size) return false;
-  const key = `${normalizeSport(sport)}_${detectMarket(marktLabel || 'other')}`;
-  return KILL_SWITCH.set.has(key);
-}
+// Backwards-compat aliassen voor server.js call-sites die nog top-level
+// functienamen gebruiken (refreshKillSwitch / isMarketKilled).
+const refreshKillSwitch = () => KILL_SWITCH.refresh();
+const isMarketKilled = (sport, markt) => KILL_SWITCH.isMarketKilled(sport, markt);
 
 // Adaptive MIN_EDGE: voor markten met weinig settled bets vereisen we strenger
 // edge (8% i.p.v. 5.5%) zodat we niet vroeg te veel risico nemen op markten

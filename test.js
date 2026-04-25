@@ -2065,6 +2065,79 @@ test('recordTotalsEvaluation: schrijft model_run + 2 pick_candidates (over/under
   assert.match(writes.cands[1].rejected_reason, /edge_below_min/);
 });
 
+// v12.2.48 (R8): kill-switch factory tests
+const { createKillSwitch } = require('./lib/kill-switch');
+
+test('createKillSwitch: throws bij missing deps', () => {
+  assert.throws(() => createKillSwitch({}), /missing required dep/);
+});
+
+test('createKillSwitch: refresh blokkeert markt met avg CLV < threshold + min_n', async () => {
+  const inserted = [];
+  const mockSupabase = {
+    from: () => ({ insert: async (row) => { inserted.push(row); return { error: null }; } }),
+  };
+  // 35 settled bets met avg CLV -8% — boven kill_min_n (30) en onder auto_disable (-5%) → KILL.
+  const bets = Array.from({ length: 35 }, () => ({
+    sport: 'football', markt: '🏠 Bayern wint', uitkomst: 'W', clv_pct: -8.0,
+  }));
+  const ks = createKillSwitch({
+    supabase: mockSupabase,
+    loadSettledBets: async () => bets,
+    normalizeSport: (s) => s,
+    detectMarket: () => 'home',
+    supportsClvForBetMarkt: () => true,
+  });
+  await ks.refresh();
+  assert.strictEqual(ks.set.size, 1, 'home-football moet geblokkeerd zijn');
+  assert.ok(ks.set.has('football_home'));
+  assert.strictEqual(inserted.filter(n => n.type === 'kill_switch').length, 1, 'kill_switch notification verzonden');
+});
+
+test('createKillSwitch: refresh laat markt door bij avg CLV boven threshold', async () => {
+  const bets = Array.from({ length: 35 }, () => ({
+    sport: 'football', markt: '🏠 Bayern wint', uitkomst: 'W', clv_pct: -3.0,
+  }));
+  const ks = createKillSwitch({
+    supabase: { from: () => ({ insert: async () => ({ error: null }) }) },
+    loadSettledBets: async () => bets,
+    normalizeSport: (s) => s,
+    detectMarket: () => 'home',
+    supportsClvForBetMarkt: () => true,
+  });
+  await ks.refresh();
+  assert.strictEqual(ks.set.size, 0, 'CLV -3% > threshold -5% → niet geblokkeerd');
+});
+
+test('createKillSwitch: refresh skipt bij enabled=false', async () => {
+  const ks = createKillSwitch({
+    supabase: { from: () => ({}) },
+    loadSettledBets: async () => [],
+    normalizeSport: (s) => s,
+    detectMarket: () => 'home',
+    supportsClvForBetMarkt: () => true,
+  });
+  ks.set.add('football_home'); // pre-populate
+  ks.setEnabled(false);
+  await ks.refresh();
+  assert.strictEqual(ks.set.size, 0, 'set moet gewist zijn als enabled=false');
+});
+
+test('createKillSwitch: isMarketKilled returnt false bij empty set / disabled', () => {
+  const ks = createKillSwitch({
+    supabase: { from: () => ({}) },
+    loadSettledBets: async () => [],
+    normalizeSport: (s) => s,
+    detectMarket: () => 'home',
+    supportsClvForBetMarkt: () => true,
+  });
+  assert.strictEqual(ks.isMarketKilled('football', '🏠 Bayern wint'), false);
+  ks.set.add('football_home');
+  assert.strictEqual(ks.isMarketKilled('football', '🏠 Bayern wint'), true);
+  ks.setEnabled(false);
+  assert.strictEqual(ks.isMarketKilled('football', '🏠 Bayern wint'), false);
+});
+
 test('recordDoubleChanceEvaluation: schrijft model_run + 3 pick_candidates (1x/12/x2)', async () => {
   const writes = { runs: [], cands: [] };
   const fakeSupabase = (table) => {
@@ -2776,7 +2849,7 @@ test('calibration store (D4): zonder supabase-client schrijft save naar file (te
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.47');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.48');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
