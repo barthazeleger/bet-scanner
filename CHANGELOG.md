@@ -2,6 +2,21 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.10] - 2026-04-25
+
+**R7 · regressie-tests voor outcome-flip + bet-flow**
+
+### Added
+
+- `updateBetOutcome roept updateCalibration aan voor newSettled` — anti-regressie voor de v12.2.7 hotfix-trigger (waar updateCalibration per ongeluk werd verwijderd door een refactor).
+- `updateBetOutcome flip W→L: revert + update beide aangeroepen` — verifieert atomic flip-flow.
+- `updateBetOutcome restore-on-exception` — verifieert dat `restoreCalib(snapshot)` aangeroepen wordt als `updateCalibration` gooit (F3 atomic flip).
+
+### Tests
+688 passed, 0 failed.
+
+---
+
 ## [12.2.9] - 2026-04-25
 
 **F6 · 2FA-codes persistent (Supabase + Map-cache)**

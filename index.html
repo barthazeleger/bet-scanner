@@ -125,7 +125,7 @@
         <div class="scan-panel scan-panel-pm" style="max-width:100%;width:100%;padding:32px 28px">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
             <div>
-              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.2.9</span></div>
+              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.2.10</span></div>
               <div style="font-size:26px;font-weight:800;line-height:1.2;letter-spacing:-.02em" data-i18n-html="scan_headline">Vind de beste bets van dit moment</div>
               <div style="font-size:13px;color:rgba(255,255,255,0.55);margin-top:10px;line-height:1.7" data-i18n-html="scan_desc">
                 Pre-match · Live xG · H2H · Opstellingen · Standen · Predictions<br>
@@ -221,7 +221,7 @@
     <div class="stat-box"><div class="stat-val green" id="s-pot-win">—</div><div class="stat-lbl" data-i18n="pot_win_today">Pot. winst vandaag</div></div>
   </div>
 
-  <!-- v12.2.9: per-bookie bankroll tracking -->
+  <!-- v12.2.10: per-bookie bankroll tracking -->
   <div class="card" id="bookie-balances-card" style="margin-bottom:14px;padding:14px 16px">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <div>
@@ -654,7 +654,7 @@
       <div class="card-hd">
         <div>
           <div class="card-title" style="font-size:17px" data-i18n="card_how_it_works">🎯 EdgePickr — hoe het werkt</div>
-          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.2.9</span> · <span data-i18n="info_date">april 2026</span></div>
+          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.2.10</span> · <span data-i18n="info_date">april 2026</span></div>
         </div>
         <div style="font-size:24px">🤖</div>
       </div>
@@ -2178,13 +2178,13 @@ function refreshBets(bets) {
   const toVal = document.getElementById('f-to')?.value;
   if (fromVal || toVal) { applyPeriodFilter(); }
   else renderBetsTable((betData && betData.bets) || bets || []);
-  // v12.2.9: sync balance-panel na elke bet-refresh (log/update/delete triggert dit).
+  // v12.2.10: sync balance-panel na elke bet-refresh (log/update/delete triggert dit).
   if (typeof refreshBookieBalances === 'function' && document.getElementById('bookie-balances-card')) {
     refreshBookieBalances();
   }
 }
 
-// v12.2.9: per-bookie bankroll tracking UI.
+// v12.2.10: per-bookie bankroll tracking UI.
 async function refreshBookieBalances() {
   const listEl = document.getElementById('bookie-balance-list');
   const totalEl = document.getElementById('bookie-balance-total');
@@ -2381,7 +2381,7 @@ async function refreshCurrentOdds(id, btn) {
     const col = d.deltaAbs > 0 ? '#34d399' : d.deltaAbs < 0 ? '#f87171' : 'var(--muted)';
     const arrow = d.deltaAbs > 0 ? '↑' : d.deltaAbs < 0 ? '↓' : '=';
     const sign = d.deltaAbs > 0 ? '+' : '';
-    // v12.2.9 (F7): toon symbool dat aangeeft of vergelijking apples-vs-apples is.
+    // v12.2.10 (F7): toon symbool dat aangeeft of vergelijking apples-vs-apples is.
     // ✓ = exact zelfde bookie als gelogd, ⚡ = andere preferred-bookie, ⚠️ = niet preferred.
     const sourceMark = d.priceSource === 'logged_bookie' ? '' : d.priceSource === 'other_preferred' ? ' ⚡' : ' ⚠️';
     const sourceTip = d.priceSource === 'logged_bookie' ? `eigen bookie (${d.currentBookie})`

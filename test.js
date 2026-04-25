@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.9');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.10');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3970,6 +3970,97 @@ test('formatDropReasons: returnt null als alle counts 0 of map leeg', () => {
   assert.strictEqual(_fmtDrops({}), null);
   assert.strictEqual(_fmtDrops({ no_signals: 0 }), null);
   assert.strictEqual(_fmtDrops(null), null);
+});
+
+// v12.2.10 (R7): regressie-tests voor outcome-flip + bet-flow hooks.
+// Specifiek: garandeert dat v12.2.7's hotfix-trigger (verwijderde
+// updateCalibration call) niet ongemerkt terug kan komen.
+test('updateBetOutcome roept updateCalibration aan voor newSettled (anti-v12.2.7-regressie)', async () => {
+  const createBetsData = require('./lib/bets-data');
+  const calls = { revert: 0, update: 0 };
+  const mockSupabase = {
+    from: (tbl) => {
+      if (tbl === 'bets') {
+        return {
+          select: () => ({
+            eq: function() { return this; },
+            single: () => Promise.resolve({ data: { bet_id: 1, odds: 2.0, units: 1, inzet: 25, uitkomst: 'Open', user_id: null, datum: '01-01-2026', wedstrijd: 'A vs B', markt: 'ML', sport: 'football', tip: 'Bet365', wl: 0 }, error: null }),
+          }),
+          update: () => ({ eq: function() { return this; } }),
+        };
+      }
+      return { select: () => ({ eq: function() { return this; }, limit: () => Promise.resolve({ data: [], error: null }) }) };
+    },
+  };
+  const bd = createBetsData({
+    supabase: mockSupabase,
+    getUserMoneySettings: async () => ({ unitEur: 25, startBankroll: 1000 }),
+    defaultStartBankroll: 1000,
+    defaultUnitEur: 25,
+    revertCalibration: async () => { calls.revert++; },
+    updateCalibration: async () => { calls.update++; },
+  });
+  await bd.updateBetOutcome(1, 'W', null);
+  // newSettled=true (W) → updateCalibration MOET aangeroepen zijn
+  assert.strictEqual(calls.update, 1, 'updateCalibration moet aangeroepen worden voor settled outcome');
+  assert.strictEqual(calls.revert, 0, 'revertCalibration niet nodig (geen flip vanuit prevSettled)');
+});
+
+test('updateBetOutcome flip W→L: revert + update beide aangeroepen', async () => {
+  const createBetsData = require('./lib/bets-data');
+  const calls = { revert: 0, update: 0 };
+  const mockSupabase = {
+    from: () => ({
+      select: () => ({
+        eq: function() { return this; },
+        single: () => Promise.resolve({ data: { bet_id: 1, odds: 2.0, units: 1, inzet: 25, uitkomst: 'W', user_id: null, datum: '01-01-2026', wedstrijd: 'A vs B', markt: 'ML', sport: 'football', tip: 'Bet365', wl: 25 }, error: null }),
+      }),
+      update: () => ({ eq: function() { return this; } }),
+      limit: () => Promise.resolve({ data: [], error: null }),
+    }),
+  };
+  const bd = createBetsData({
+    supabase: mockSupabase,
+    getUserMoneySettings: async () => ({ unitEur: 25, startBankroll: 1000 }),
+    defaultStartBankroll: 1000,
+    defaultUnitEur: 25,
+    revertCalibration: async () => { calls.revert++; },
+    updateCalibration: async () => { calls.update++; },
+  });
+  await bd.updateBetOutcome(1, 'L', null);
+  assert.strictEqual(calls.revert, 1, 'revertCalibration moet aangeroepen worden bij W→L flip');
+  assert.strictEqual(calls.update, 1, 'updateCalibration moet ook aangeroepen worden voor nieuwe L');
+});
+
+test('updateBetOutcome restore-on-exception: snapshot wordt teruggezet als updateCalibration faalt', async () => {
+  const createBetsData = require('./lib/bets-data');
+  let snapshotsTaken = 0;
+  let restoresCalled = 0;
+  const calls = { update: 0 };
+  const mockSupabase = {
+    from: () => ({
+      select: () => ({
+        eq: function() { return this; },
+        single: () => Promise.resolve({ data: { bet_id: 1, odds: 2.0, units: 1, inzet: 25, uitkomst: 'Open', user_id: null, datum: '01-01-2026', wedstrijd: 'A vs B', markt: 'ML', sport: 'football', tip: 'Bet365', wl: 0 }, error: null }),
+      }),
+      update: () => ({ eq: function() { return this; } }),
+      limit: () => Promise.resolve({ data: [], error: null }),
+    }),
+  };
+  const bd = createBetsData({
+    supabase: mockSupabase,
+    getUserMoneySettings: async () => ({ unitEur: 25, startBankroll: 1000 }),
+    defaultStartBankroll: 1000,
+    defaultUnitEur: 25,
+    revertCalibration: async () => {},
+    updateCalibration: async () => { calls.update++; throw new Error('simulated supabase glitch'); },
+    snapshotCalib: () => { snapshotsTaken++; return { totalSettled: 42 }; },
+    restoreCalib: async () => { restoresCalled++; },
+  });
+  await assert.rejects(() => bd.updateBetOutcome(1, 'W', null), /simulated/);
+  assert.strictEqual(snapshotsTaken, 1, 'snapshot moet zijn genomen vóór flip');
+  assert.strictEqual(calls.update, 1, 'updateCalibration is wel aangeroepen (en gooide)');
+  assert.strictEqual(restoresCalled, 1, 'restoreCalib moet aangeroepen zijn na exception');
 });
 
 // v12.2.7 (F3): calibration-store snapshot/restore atomic flip
