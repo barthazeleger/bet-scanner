@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.17');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.18');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4133,6 +4133,32 @@ test('sharp-soft windows: only-sharp-data of only-soft-data wordt geskipt (geen 
     threshold: 0.02,
   });
   assert.strictEqual(windows.length, 0);
+});
+
+test('sharp-soft windows: default filtert sharp_undervalues mirror-side weg (alleen actionable kant)', () => {
+  // 2-way devig is symmetrisch: soft_undervalues op home impliceert
+  // sharp_undervalues op away. Operator wil alleen de actionable kant.
+  const snapshots = [
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle', market_type: 'moneyline', selection_key: 'home', line: null, odds: 1.85 },
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Pinnacle', market_type: 'moneyline', selection_key: 'away', line: null, odds: 2.05 },
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',   market_type: 'moneyline', selection_key: 'home', line: null, odds: 2.00 },
+    { fixture_id: 1, captured_at: '2026-04-25T10:00:00Z', bookmaker: 'Bet365',   market_type: 'moneyline', selection_key: 'away', line: null, odds: 1.85 },
+  ];
+  const def = summarizeSharpSoftWindows({
+    snapshots, fixtures: new Map(),
+    sharpSet: new Set(['pinnacle']), softSet: new Set(['bet365']),
+    threshold: 0.02,
+  });
+  assert(def.every(w => w.edgeDirection === 'soft_undervalues'), 'default mode mag alleen soft_undervalues returnen');
+  // include_mirror=true → beide kanten zichtbaar
+  const all = summarizeSharpSoftWindows({
+    snapshots, fixtures: new Map(),
+    sharpSet: new Set(['pinnacle']), softSet: new Set(['bet365']),
+    threshold: 0.02, includeMirror: true,
+  });
+  const dirs = new Set(all.map(w => w.edgeDirection));
+  assert(dirs.has('soft_undervalues') && dirs.has('sharp_undervalues'), 'includeMirror=true moet beide kanten teruggeven');
+  assert.strictEqual(all.length, def.length * 2, 'mirror-mode = 2× default');
 });
 
 test('sharp-soft windows: gebruikt latest snapshot per bookmaker bij meerdere captures', () => {

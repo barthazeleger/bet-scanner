@@ -2,6 +2,23 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.18] - 2026-04-25
+
+**R4 wiring · sharp-soft mirror-filter (default actionable kant)**
+
+### Changed
+
+- `lib/sharp-soft-windows.js` · `summarizeSharpSoftWindows()` accepteert nu `includeMirror` flag (default false). 2-way devig is symmetrisch — een `soft_undervalues` op home impliceert automatisch `sharp_undervalues` op away. Default: alleen `soft_undervalues` (operator-actionable kant).
+- `GET /api/admin/v2/sharp-soft-windows?include_mirror=1` voor research-mode (beide kanten).
+
+### Why
+
+- Eerste live test op v12.2.17 gaf 8 windows over 4 fixtures, allemaal in spiegel-paren. Cognitive load verdubbelde zonder waarde — operator zet alleen op de soft-undervalues kant. Default filter halveert ruis.
+
+### Impact
+
+- 710 → 711 tests passed (1 nieuwe filter-assertie).
+
 ## [12.2.17] - 2026-04-25
 
 **R4 wiring · sharp-soft execution-edge windows admin endpoint**
