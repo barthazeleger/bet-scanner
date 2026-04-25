@@ -2705,7 +2705,7 @@ test('calibration store (D4): zonder supabase-client schrijft save naar file (te
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.44');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.45');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -4432,6 +4432,66 @@ test('devig-backtest: skip groups onder minBookmakers', () => {
   ];
   const r = compareDevigOnSnapshots(snaps, { minBookmakers: 3 });
   assert.strictEqual(r.groupsAnalyzed, 0);
+});
+
+// v12.2.45 (audit P2.4): diagnoseJoinFailure breakdown
+const { diagnoseJoinFailure } = require('./lib/bets-pick-join');
+
+test('diagnoseJoinFailure: lege candidates → no_candidate', () => {
+  const bet = { fixture_id: 1, markt: '🏠 Bayern wint', tip: 'Bet365' };
+  assert.strictEqual(diagnoseJoinFailure(bet, []).category, 'no_candidate');
+});
+
+test('diagnoseJoinFailure: bet zonder geldige markt → bet_unparseable', () => {
+  const bet = { fixture_id: 1, markt: 'onbekende markt', tip: 'Bet365' };
+  // 'onbekende markt' produceert geen clvShape via market-keys.
+  const cat = diagnoseJoinFailure(bet, []).category;
+  assert.ok(cat === 'bet_unparseable' || cat === 'no_candidate', `verwacht bet_unparseable of no_candidate, kreeg ${cat}`);
+});
+
+test('diagnoseJoinFailure: market_type mismatch → market_mismatch', () => {
+  const bet = { fixture_id: 1, markt: '📈 Over 2.5', tip: 'Bet365' };
+  const cands = [
+    { fixture_id: 1, selection_key: 'home', bookmaker: 'Bet365',
+      model_runs: { market_type: 'moneyline', line: null } },
+  ];
+  assert.strictEqual(diagnoseJoinFailure(bet, cands).category, 'market_mismatch');
+});
+
+test('diagnoseJoinFailure: selection_key mismatch → selection_mismatch', () => {
+  const bet = { fixture_id: 1, markt: '🏠 Bayern wint', tip: 'Bet365' };
+  const cands = [
+    { fixture_id: 1, selection_key: 'away', bookmaker: 'Bet365',
+      model_runs: { market_type: 'moneyline', line: null } },
+  ];
+  assert.strictEqual(diagnoseJoinFailure(bet, cands).category, 'selection_mismatch');
+});
+
+test('diagnoseJoinFailure: line mismatch → line_mismatch', () => {
+  const bet = { fixture_id: 1, markt: '📈 Over 2.5', tip: 'Bet365' };
+  const cands = [
+    { fixture_id: 1, selection_key: 'over', bookmaker: 'Bet365',
+      model_runs: { market_type: 'total', line: 3.5 } },
+  ];
+  assert.strictEqual(diagnoseJoinFailure(bet, cands).category, 'line_mismatch');
+});
+
+test('diagnoseJoinFailure: bookmaker mismatch → bookmaker_mismatch', () => {
+  const bet = { fixture_id: 1, markt: '🏠 Bayern wint', tip: 'Holland Casino' };
+  const cands = [
+    { fixture_id: 1, selection_key: 'home', bookmaker: 'Bet365',
+      model_runs: { market_type: 'moneyline', line: null } },
+  ];
+  assert.strictEqual(diagnoseJoinFailure(bet, cands).category, 'bookmaker_mismatch');
+});
+
+test('diagnoseJoinFailure: alles match → matched', () => {
+  const bet = { fixture_id: 1, markt: '🏠 Bayern wint', tip: 'Bet365' };
+  const cands = [
+    { fixture_id: 1, selection_key: 'home', bookmaker: 'Bet365', fair_prob: 0.55,
+      model_runs: { market_type: 'moneyline', line: null } },
+  ];
+  assert.strictEqual(diagnoseJoinFailure(bet, cands).category, 'matched');
 });
 
 test('bets-pick-join: buildBrierRecords splitst model vs market source', () => {

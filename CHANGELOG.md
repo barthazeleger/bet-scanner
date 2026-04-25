@@ -2,6 +2,25 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.45] - 2026-04-25
+
+**Brier endpoint coverage breakdown · audit P2.4 fix**
+
+### Added
+
+- `lib/bets-pick-join.js` `diagnoseJoinFailure(bet, candidates)` — returnt categorie waarom join faalde: `matched | no_candidate | market_mismatch | selection_mismatch | line_mismatch | bookmaker_mismatch | bet_unparseable`.
+- `/admin/v2/model-brier` response bevat nu `joinCoverage.failureBreakdown` met counts per categorie. Operator ziet direct WAAROM coverage laag is (bv. 80% bookmaker_mismatch → bet ergens anders gelogd dan scan zag).
+- 7 unit tests voor diagnoseJoinFailure.
+
+### Why
+
+- Audit AUDIT_v12.2.23_FRESH_EYES.md sectie 2.4: "Brier-endpoint kan misleidend laag-coverage rapporteren zonder uitleg waarom". Operator moest gokken: bookmaker-mismatch / passed_filters=false / no candidate.
+
+### Impact
+
+- 752 → 759 tests passed.
+- Geen breaking change op endpoint shape (alleen extra key).
+
 ## [12.2.44] - 2026-04-25
 
 **Sessie-summary doc · finale handoff**
