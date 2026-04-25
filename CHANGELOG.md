@@ -2,6 +2,19 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.15] - 2026-04-25
+
+**F4 lite · market-keys cross-consistency tests (no behavior change)**
+
+### Added
+
+- `test.js`: cross-consistency suite tussen `detectMarket` (calibration-bucket, `lib/model-math.js`) en `marketKeyFromBetMarkt` (CLV snapshot-shape, `lib/clv-match.js`). Per markt-string assertion dat beide functies consistent en niet-leeg zijn.
+- Regression-trigger test: gaat broken als ooit het asymmetrische `f5_total` → `'over'` mapping pad geraakt wordt zonder eigen calibration bucket. Beschermt tegen stille drift.
+
+### Notes
+
+- Volledige F4 (één canonical `lib/market-keys.js` met `normalizeMarketKey()`) blijft expliciet deferred — vereist breaking change op calibration buckets + data migration. Lite-variant levert al >80% van de defensieve waarde door inconsistentie zichtbaar te maken in CI.
+
 ## [12.2.14] - 2026-04-25
 
 **D1 · persistent scheduled jobs (pre-kickoff + CLV checks)**

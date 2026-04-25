@@ -2531,7 +2531,7 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.14');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.15');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -3970,6 +3970,70 @@ test('formatDropReasons: returnt null als alle counts 0 of map leeg', () => {
   assert.strictEqual(_fmtDrops({}), null);
   assert.strictEqual(_fmtDrops({ no_signals: 0 }), null);
   assert.strictEqual(_fmtDrops(null), null);
+});
+
+// v12.2.15 (F4 lite): cross-consistency tussen detectMarket (learning-bucket)
+// en marketKeyFromBetMarkt (CLV snapshot-shape). Catcht toekomstige drift
+// tussen de twee parallelle parsers.
+const { detectMarket: _detectMarket } = require('./lib/model-math');
+const { marketKeyFromBetMarkt: _mkKey } = require('./lib/clv-match');
+
+// Realistische markt-strings zoals scan-bodies ze produceren (server.js labels).
+const _MARKET_CONSISTENCY_CASES = [
+  // [markt-string, expected detectMarket bucket, expected mkKey market_type]
+  ['🏠 Bayern wint',             'home',       'moneyline'],
+  ['✈️ Real Madrid wint',        'away',       'moneyline'],
+  ['📈 Over 2.5',                'over',       'total'],
+  ['📉 Under 3.5',               'under',      'total'],
+  ['BTTS Ja',                    'btts_yes',   'btts'],
+  ['🛡️ BTTS Nee',                'btts_no',    'btts'],
+  ['🕐 Bayern wint (60-min)',    'home60',     'threeway'],
+  ['🕐 Gelijkspel (60-min)',     'draw60',     'threeway'],
+  // F5: detectMarket plat in 'over' (deferd), mkKey ziet f5_total. Bekende asymmetrie.
+  ['F5 Over 4.5 runs',           'over',       'f5_total'],
+];
+
+test('market-keys consistency: detectMarket bucket en mkKey market_type aligneren op cat (bekende asymmetrieën expliciet)', () => {
+  const knownAsymmetries = new Set([
+    // F5 over → 'over' bucket (gemixt met game-over) maar f5_total clv-key
+    'F5 Over 4.5 runs',
+  ]);
+  for (const [markt, expectedBucket, expectedClvType] of _MARKET_CONSISTENCY_CASES) {
+    const bucket = _detectMarket(markt);
+    const clvKey = _mkKey(markt);
+    assert.strictEqual(bucket, expectedBucket, `detectMarket("${markt}") = "${bucket}", expected "${expectedBucket}"`);
+    if (expectedClvType === null) {
+      assert.strictEqual(clvKey, null, `mkKey("${markt}") moet null zijn`);
+    } else {
+      assert.ok(clvKey, `mkKey("${markt}") returnt null — verwacht ${expectedClvType}`);
+      assert.strictEqual(clvKey.market_type, expectedClvType, `mkKey("${markt}").market_type = "${clvKey.market_type}", expected "${expectedClvType}"`);
+    }
+    // Asymmetrie-check: alleen voor bekende cases mag bucket en market_type
+    // niet 1-op-1 mappen. Voor de rest moet er een logische correspondentie
+    // zijn (bv. 'over' bucket ↔ 'total' market_type, 'home' ↔ 'moneyline').
+    if (!knownAsymmetries.has(markt) && clvKey) {
+      const aligned =
+        (bucket === 'home' && clvKey.market_type === 'moneyline') ||
+        (bucket === 'away' && clvKey.market_type === 'moneyline') ||
+        (bucket === 'home60' && clvKey.market_type === 'threeway') ||
+        (bucket === 'away60' && clvKey.market_type === 'threeway') ||
+        (bucket === 'draw60' && clvKey.market_type === 'threeway') ||
+        (bucket === 'over' && clvKey.market_type === 'total') ||
+        (bucket === 'under' && clvKey.market_type === 'total') ||
+        (bucket.startsWith('btts') && clvKey.market_type === 'btts') ||
+        (bucket === 'nrfi' && clvKey.market_type === 'nrfi') ||
+        (bucket === 'yrfi' && clvKey.market_type === 'nrfi');
+      assert.ok(aligned, `bucket "${bucket}" ↔ market_type "${clvKey.market_type}" niet aligned voor "${markt}"`);
+    }
+  }
+});
+
+test('market-keys: F5/1H asymmetrie is gedocumenteerd (regressie-trigger als per ongeluk gefixed)', () => {
+  // Deze test SCHIET als detectMarket ooit F5 apart gaat handelen — dat is
+  // signaal dat we moeten reviewen of bestaande calibration-buckets
+  // herzien moeten worden (data-migratie nodig).
+  const f5Bucket = _detectMarket('F5 Over 4.5');
+  assert.strictEqual(f5Bucket, 'over', 'F5 wordt nog steeds in `over` bucket geplakt — als dit faalt, herzie F4 deferral');
 });
 
 // v12.2.13 (R4 MVP): sharp-soft asymmetric edge detection.
