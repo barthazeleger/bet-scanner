@@ -2,6 +2,26 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.36] - 2026-04-25
+
+**Concept-drift monitoring · `/admin/v2/concept-drift` endpoint**
+
+### Added
+
+- `GET /api/admin/v2/concept-drift?source=pick_ep&min_n=20&drift_threshold=0.02` — vergelijkt Brier scores per (signal × sport × market) tussen 30d / 90d / 365d windows. Detecteert signals waar recente prestatie (30d) materieel slechter is dan langere baseline → mogelijke concept-drift.
+- Output: top-100 drifting signals gesorteerd op delta(30d − 90d). Per signaal: brier per window, n per window, delta-30v90, delta-30v365, drift-flags.
+
+### Why
+
+- Audit (memory backlog): "concept-drift monitoring (rolling 90d vs 365d windows)" was deferred. Operator heeft nu early-warning voor model-degradatie zonder handmatige analyse.
+- Doctrine: signal-promotion auto-demote bij drift. Deze endpoint maakt drift zichtbaar; demote-actie volgt apart als drift bewezen is.
+
+### Notes
+
+- Endpoint pure read op `signal_calibration`. Geen schema change.
+- `source=pick_ep` (canonical, default) of `source=ep_proxy` (legacy fallback).
+- 742 tests passed (HTTP-only endpoint, geen unit-coverage uitgebreid).
+
 ## [12.2.35] - 2026-04-25
 
 **Tests · `recordTotalsEvaluation` unit-coverage**
