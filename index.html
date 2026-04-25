@@ -125,7 +125,7 @@
         <div class="scan-panel scan-panel-pm" style="max-width:100%;width:100%;padding:32px 28px">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
             <div>
-              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.2.33</span></div>
+              <div style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:8px">EdgePickr · v<span id="scan-version">12.2.34</span></div>
               <div style="font-size:26px;font-weight:800;line-height:1.2;letter-spacing:-.02em" data-i18n-html="scan_headline">Vind de beste bets van dit moment</div>
               <div style="font-size:13px;color:rgba(255,255,255,0.55);margin-top:10px;line-height:1.7" data-i18n-html="scan_desc">
                 Pre-match · Live xG · H2H · Opstellingen · Standen · Predictions<br>
@@ -654,7 +654,7 @@
       <div class="card-hd">
         <div>
           <div class="card-title" style="font-size:17px" data-i18n="card_how_it_works">🎯 EdgePickr — hoe het werkt</div>
-          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.2.33</span> · <span data-i18n="info_date">april 2026</span></div>
+          <div class="card-sub"><span data-i18n="info_subtitle">Private operator betting terminal</span> · <span id="app-version-str">versie 12.2.34</span> · <span data-i18n="info_date">april 2026</span></div>
         </div>
         <div style="font-size:24px">🤖</div>
       </div>
@@ -1475,26 +1475,30 @@ function renderPicks(el, picks) {
   // zonder selected.
   picks = all.filter(p => p.selected !== false && !p.isCombi);
   const combiAlternatives = all.filter(p => p.isCombi === true && !p.selected);
-  // ── Deduplication: group by match, show strongest as primary ──
+  // v12.2.34: sort op p.kelly (post-dampening conviction) ipv expectedEur.
+  // expectedEur = uNum * unit * edge * dataConf is correlated maar bias-vol:
+  // een suspicious pick met hoge edge + lage dataConf kan toch hoog scoren.
+  // p.kelly daarentegen is al gedampened door auditSuspicious × dataConf ×
+  // executionMultipliers. Doctrine: kwaliteit > volume, sorteer op conviction.
+  const pickStrength = p => Number.isFinite(p?.kelly) ? p.kelly : 0;
+
   const matchGroups = {};
   picks.forEach(p => {
     const key = (p.match || '').toLowerCase().trim();
     if (!matchGroups[key]) matchGroups[key] = [];
     matchGroups[key].push(p);
   });
-  // Sort each group by expectedEur descending, keep primary + secondary
   const dedupedPicks = [];
-  const secondaryMap = new Map(); // primary index -> array of secondary picks
+  const secondaryMap = new Map();
   Object.values(matchGroups).forEach(group => {
-    group.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
+    group.sort((a, b) => pickStrength(b) - pickStrength(a));
     const primary = group[0];
     dedupedPicks.push(primary);
     if (group.length > 1) {
       secondaryMap.set(primary, group.slice(1));
     }
   });
-  // Re-sort deduped picks by expectedEur descending
-  dedupedPicks.sort((a, b) => (b.expectedEur || 0) - (a.expectedEur || 0));
+  dedupedPicks.sort((a, b) => pickStrength(b) - pickStrength(a));
 
   const totalCount = picks.length;
   const hdrText = totalCount === 0

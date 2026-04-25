@@ -2,6 +2,24 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.34] - 2026-04-25
+
+**UI · pick-sortering op `kelly` (post-dampening conviction) ipv `expectedEur`**
+
+### Changed
+
+- `index.html` `renderPicks()`: pick-sortering (zowel match-group dedup als final order) gebruikt nu `p.kelly` als pickStrength ipv `p.expectedEur`.
+
+### Why
+
+- `expectedEur = uNum * unit * edge * dataConf` is correlated met conviction maar niet identiek: een suspicious pick met grote edge + lage dataConf kan toch hoog scoren omdat de edge-multiplier domineert. `p.kelly` is reeds gedampened door `auditDampen × dataConf × executionMultipliers`, dus reflecteert post-filter conviction direct.
+- Doctrine "kwaliteit > volume": operator wil de meest *zekere* pick bovenaan, niet de meest *winst-belovende* (= grootste gok). Bart's hockey TT 2.5 picks (audit-suspicious, gedampened) komen nu lager te staan dan een schone voetbal-pick met kleinere edge.
+
+### Impact
+
+- 740 tests passed (UI-only sort change).
+- Backwards-compat: `p.kelly` wordt al sinds v10 op elke pick geschreven.
+
 ## [12.2.33] - 2026-04-25
 
 **v2 totals coverage uitgerold · hockey O/U + voetbal O/U + MLB O/U + F5 totals**
