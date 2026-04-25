@@ -2530,8 +2530,47 @@ test('calibration store: save warmt cache en schrijft naar supabase', async () =
   assert.strictEqual(store.loadSync().totalSettled, 23);
 });
 
+// v12.2.20 (D4): Supabase = single source of truth.
+test('calibration store (D4): bij Supabase-success schrijft save GEEN file (single-source)', async () => {
+  const fname = `calib-d4-success-${Date.now()}.json`;
+  const fakeSupabase = {
+    from: () => ({ upsert: async () => ({ error: null }) }),
+  };
+  const store = createCalibrationStore({ supabase: fakeSupabase, baseDir: '/tmp', fileName: fname });
+  // Verwijder file als die toch bestaat
+  try { require('fs').unlinkSync(`/tmp/${fname}`); } catch (_) {}
+  const next = { version: 1, totalSettled: 99, markets: {}, epBuckets: {}, leagues: {}, lossLog: [] };
+  await store.save(next);
+  // File mag NIET geschreven zijn — Supabase had succes
+  const fileExists = require('fs').existsSync(`/tmp/${fname}`);
+  assert.strictEqual(fileExists, false, 'file mag niet geschreven zijn als Supabase upsert succeed');
+});
+
+test('calibration store (D4): bij Supabase-error valt save terug op file-write (outage-resilience)', async () => {
+  const fname = `calib-d4-fallback-${Date.now()}.json`;
+  const fakeSupabase = {
+    from: () => ({ upsert: async () => ({ error: { message: 'simulated outage' } }) }),
+  };
+  const store = createCalibrationStore({ supabase: fakeSupabase, baseDir: '/tmp', fileName: fname });
+  const next = { version: 1, totalSettled: 88, markets: {}, epBuckets: {}, leagues: {}, lossLog: [] };
+  await store.save(next);
+  const persisted = JSON.parse(require('fs').readFileSync(`/tmp/${fname}`, 'utf8'));
+  assert.strictEqual(persisted.totalSettled, 88, 'fallback-file moet de save-data bevatten bij Supabase-outage');
+  try { require('fs').unlinkSync(`/tmp/${fname}`); } catch (_) {}
+});
+
+test('calibration store (D4): zonder supabase-client schrijft save naar file (test/cold-boot mode)', async () => {
+  const fname = `calib-d4-noclient-${Date.now()}.json`;
+  const store = createCalibrationStore({ baseDir: '/tmp', fileName: fname });
+  const next = { version: 1, totalSettled: 7, markets: {}, epBuckets: {}, leagues: {}, lossLog: [] };
+  await store.save(next);
+  const persisted = JSON.parse(require('fs').readFileSync(`/tmp/${fname}`, 'utf8'));
+  assert.strictEqual(persisted.totalSettled, 7);
+  try { require('fs').unlinkSync(`/tmp/${fname}`); } catch (_) {}
+});
+
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.19');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.20');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);

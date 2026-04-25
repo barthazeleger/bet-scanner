@@ -2,6 +2,32 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.20] - 2026-04-25
+
+**D4 · calibration-store Supabase als single source of truth**
+
+### Changed
+
+- `lib/calibration-store.js` `save()`: Supabase upsert eerst, file-write alleen fallback bij Supabase-error of als er geen Supabase-client is (test/cold-boot mode).
+- Voorheen schreef elke save dual-persist (Supabase + file altijd). Race-window: concurrent updateBetOutcome + autotune kunnen elkaar overschrijven via interleave op fs.writeFileSync.
+- Bij Supabase-outage valt save terug op file-write (outage-resilience). Volgende success save synct alles weer.
+
+### Added
+
+- 3 unit tests:
+  - Supabase-success → géén file-write (single-source bewijs)
+  - Supabase-error → file-fallback wel geschreven (outage-resilience)
+  - Geen Supabase-client → file-write (test/cold-boot mode)
+
+### Why
+
+- Audit D4 (P3): dual-persist zonder lock = race-corruption-risk bij concurrent writes. In de praktijk klein (Render single-instance, calls maar paar per minuut) maar geen reden om het te accepteren.
+
+### Impact
+
+- 718 → 721 tests passed.
+- Geen behavior-change voor consumer-code: `load()`/`loadSync()`/`save()` API ongewijzigd. Alleen interne write-strategie.
+
 ## [12.2.19] - 2026-04-25
 
 **F4 · canonieke lib/market-keys.js (single-source met asymmetry-detection)**
