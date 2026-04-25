@@ -2012,6 +2012,72 @@ test('consensusQualityScore: hoge overround penalt', () => {
   assert.ok(med >= 0.85);
 });
 
+// v12.2.32+: recordTotalsEvaluation wiring tests
+test('recordTotalsEvaluation: schrijft model_run + 2 pick_candidates (over/under)', async () => {
+  const writes = { runs: [], cands: [] };
+  const fakeSupabase = {
+    from: (table) => ({
+      insert: (row) => ({
+        select: () => ({ single: async () => {
+          if (table === 'model_runs') {
+            writes.runs.push(row);
+            return { data: { id: 999 + writes.runs.length }, error: null };
+          }
+          return { data: row, error: null };
+        }}),
+      }),
+      // Fallback voor pick_candidates die geen .select gebruikt:
+    }),
+  };
+  // pick_candidates insert gaat zonder .select(); patch alleen voor pick_candidates
+  fakeSupabase.from = (table) => {
+    if (table === 'pick_candidates') {
+      return { insert: async (row) => { writes.cands.push(row); return { error: null }; } };
+    }
+    if (table === 'model_runs') {
+      return {
+        insert: (row) => ({ select: () => ({ single: async () => {
+          writes.runs.push(row);
+          return { data: { id: 1000 + writes.runs.length }, error: null };
+        }}) }),
+      };
+    }
+    return { insert: async () => ({ error: null }) };
+  };
+  await snap.recordTotalsEvaluation({
+    supabase: fakeSupabase, modelVersionId: 1, fixtureId: 42,
+    marketType: 'team_total_home', line: 2.5,
+    pOver: 0.65, pUnder: 0.35,
+    bestOv: { price: 1.80, bookie: 'Bet365' },
+    bestUn: { price: 2.10, bookie: 'Bet365' },
+    ovEdge: 0.17, unEdge: -0.27, minEdge: 0.05,
+    matchSignals: ['team_total_home'],
+    debug: { sport: 'hockey', side: 'home' },
+  });
+  assert.strictEqual(writes.runs.length, 1);
+  assert.strictEqual(writes.runs[0].market_type, 'team_total_home');
+  assert.strictEqual(Number(writes.runs[0].line), 2.5);
+  assert.strictEqual(writes.cands.length, 2);
+  assert.strictEqual(writes.cands[0].selection_key, 'over');
+  assert.strictEqual(writes.cands[1].selection_key, 'under');
+  assert.strictEqual(writes.cands[0].passed_filters, true, 'over edge 17% > min 5% → passed');
+  assert.strictEqual(writes.cands[1].passed_filters, false, 'under negatieve edge → rejected');
+  assert.match(writes.cands[1].rejected_reason, /edge_below_min/);
+});
+
+test('recordTotalsEvaluation: ontbrekende deps → graceful no-op', async () => {
+  // Geen supabase, geen modelVersionId — moet niet crashen.
+  await snap.recordTotalsEvaluation({
+    supabase: null, modelVersionId: null, fixtureId: 1,
+    marketType: 'total', line: 2.5,
+    pOver: 0.5, pUnder: 0.5,
+    bestOv: { price: 2.0, bookie: 'Bet365' },
+    bestUn: { price: 2.0, bookie: 'Bet365' },
+    ovEdge: 0, unEdge: 0, minEdge: 0.05,
+  });
+  // Geen exceptie = success
+});
+
 test('snapshot writers: zijn no-op bij ontbrekende data (geen exceptions)', async () => {
   // Mock supabase die exception zou gooien als gebeld → mag niet
   const fakeSupabase = { from: () => { throw new Error('should not be called'); } };
@@ -2604,7 +2670,7 @@ test('calibration store (D4): zonder supabase-client schrijft save naar file (te
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.2.34');
+  assert.strictEqual(appMeta.APP_VERSION, '12.2.35');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);

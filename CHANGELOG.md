@@ -2,6 +2,24 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.2.35] - 2026-04-25
+
+**Tests · `recordTotalsEvaluation` unit-coverage**
+
+### Added
+
+- 2 unit tests voor `lib/snapshots.js` `recordTotalsEvaluation`:
+  - happy-path: schrijft model_run + 2 pick_candidates (over passed, under rejected via edge_below_min)
+  - graceful no-op bij ontbrekende deps (geen crash op null supabase / null modelVersionId)
+
+### Why
+
+- v12.2.32-33 wired het in 4 markten zonder unit-coverage. Defense-in-depth tegen toekomstige refactors die de write-shape per ongeluk breken.
+
+### Impact
+
+- 740 → 742 tests passed.
+
 ## [12.2.34] - 2026-04-25
 
 **UI · pick-sortering op `kelly` (post-dampening conviction) ipv `expectedEur`**
