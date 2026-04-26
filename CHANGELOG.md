@@ -2,6 +2,73 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.4.0] - 2026-04-26
+
+**Markt-parity fix · paper-trading shadow infrastructure · per-scan markt-mix telemetrie**
+
+Aanleiding: operator-observatie dat picks bijna altijd BTTS YES/NO waren, zelden 1X2 ("To win") of O/U. Diagnose: BTTS had geen 7pp divergence-sanity-gate (1X2 + O/U + DNB wel), DC + handicap zaten niet in de post-scan execution-gate `marketTypes` acceptlist (en analoog voor 5 niet-football sporten waar alléén `moneyline` gegated werd), en hockey/handball threeway + hockey odd_even hadden geen `_fixtureMeta` waardoor ze door de gate slipten.
+
+Doctrine: signal-promotion-doctrine (shadow → CLV+Brier-bewijs → live promote) extended naar markt-types. Geen kunstmatige caps op BTTS — eerst meten welke markten echt presteren, dan auto-promoten in volgende slice.
+
+### Fixed (parity-fix · live)
+
+- **BTTS sanity-gate symmetrie** — `server.js` BTTS-blok (~L6240-6402): `passesDivergence2Way(bttsYesP, bttsNoP, bestYes.price, bestNo.price)` gate toegevoegd vóór beide mkP-calls. v11.3.31-skip (methodologisch-anders argument) terug-gedraaid: signaal-stack `bttsAdj + csBoost + bttWeatherAdj + bttsPoissonAdj + aggBTTSAdj` kan ~15pp afwijken van markt-implied; bttsDataOk + auditSuspicious blijven primair, gate is derde laag.
+- **`applyPostScanGate` marketTypes** uitgebreid in alle 6 sport-scans:
+  - Football L6691: `['1x2','total','btts','dnb','double_chance','handicap']`
+  - Basketball L3019: `['moneyline','total','spread','half_total','half_spread']`
+  - Hockey L3903: `['moneyline','threeway','total','team_total','team_total_home','team_total_away','puck_line','period_total','odd_even']` (incl. team_total alias-mismatch met odds_snapshots)
+  - Baseball L4564: `['moneyline','total','run_line','nrfi','f5_ml','f5_total']`
+  - American-football L5066: `['moneyline','total','spread','half_total','half_spread']`
+  - Handball L5535: `['moneyline','threeway','total','handicap']`
+- **`_fixtureMeta` toegevoegd** aan: hockey threeway (3 mkP-calls L3557-3568), hockey odd_even (2 mkP-calls), handball threeway (3 mkP-calls). Voorheen liepen die door de execution-gate als no-op.
+
+### Added (paper-trading shadow infrastructure)
+
+- **`lib/paper-trading.js`** (NIEUW) — `buildMarktLabel()` reconstrueert resolveBetOutcome-compatible labels uit (marketType, selectionKey, line, sport, teams). `writePaperTradingCandidate()` wrapper rond `snap.writePickCandidate` met shadow/final_top5/markt_label/kickoff_ms/sport velden. `settlePaperTradingCandidate()` rekent af tegen api-sports event-data via `resolveBetOutcome` + `fetchSnapshotClosing`. `runPaperTradingSweep()` batch-loop voor cron-aanhaakpunt.
+- **`lib/market-telemetry.js`** (NIEUW) — `createScanTelemetry()` factory: per-sport in-memory funnel-counters per markt-type (generated → sanity_pass → divergence_pass → exec_gate_pass → top5). `formatLine()` produceert één leesbare scan-log regel; `persist()` doet één bulk-insert in `market_scan_telemetry` voor cross-scan trend-analyse.
+- **`lib/picks.js` `mkP` factory-callback** — `buildPickFactory({ onCandidate })` ontvangt callbacks voor zowel pushed als bumpDrop'd kandidaten met `{pushed, dropReason, fixtureMeta, label, sport, pick}`. Backwards-compat: callers zonder `onCandidate` ongewijzigd. `dropPick(reason)` interne wrapper combineert `bumpDrop` + emit zonder mkP-signature te wijzigen.
+- **`lib/runtime/scan-gate.js` `stats.byMarket`** — applyPostScanGate aggregateert nu per markt-type (`gated/skipped/dampened/playabilityDropped/playabilityShadowed`). Caller `mergeFromGateStats(stats.byMarket)` roll-up zonder dubbele iteratie.
+- **`lib/snapshots.js` `writePickCandidate`** — extra velden ondersteunen: `shadow`, `final_top5`, `market_type`, `line`, `markt_label`, `kickoff_ms`, `sport`. Backwards-compat (alleen geschreven als args ze meegeven).
+
+### Added (per-scan markt-mix telemetrie)
+
+- Elke 6 sport-scans (football/basketball/hockey/baseball/american-football/handball) maakt nu `createScanTelemetry({sport, scanAnchorMs})` aan, geeft `onCandidate` mee aan `buildPickFactory`, mergt scan-gate stats, en logt + persisteert na finalPicks-cut: `📊 Markt-mix {sport}: 1x2[gen=42 div=33 gate=29 top5=2] btts[…] dc[…] …`.
+- Operator ziet nu direct welke markten worden gegenereerd vs welke top-5 halen — basis voor later auto-promote.
+
+### Schema
+
+- **`docs/migrations-archive/v12.4.0_paper_trading.sql`** (NIEUW):
+  - `pick_candidates` ALTER ADD: `shadow boolean default false`, `final_top5 boolean default false`, `market_type text`, `line numeric(8,2)`, `markt_label text`, `kickoff_ms bigint`, `closing_odds numeric(10,4)`, `closing_bookie text`, `closing_source text`, `clv_pct numeric(10,4)`, `result text`, `settled_at timestamptz`, `sport text`.
+  - Nieuwe indices: `pick_candidates_unsettled_idx (kickoff_ms) WHERE result IS NULL`, `pick_candidates_market_idx (sport, market_type, created_at desc)`, `pick_candidates_shadow_idx (shadow, final_top5, created_at desc)`.
+  - Nieuwe tabel `market_scan_telemetry` (id, scan_id, scan_anchor_ms, sport, market_type, generated, sanity_passed, divergence_passed, exec_gate_passed, top5_count, created_at) + RLS service_role policy + 2 indices.
+  - Idempotent (`add column if not exists` + `create table if not exists`); geen DROP/TRUNCATE/DELETE.
+- Run via: `node scripts/migrate.js docs/migrations-archive/v12.4.0_paper_trading.sql`
+
+### Deferred (volgende slice · v12.5.0)
+
+- **Actieve top5-mark + sweep-cron**: shadow-flow infrastructure staat klaar (`lib/paper-trading.js` + schema-migratie), maar de UPDATE-pass die `final_top5=true` / `shadow=true` op recent geschreven pick_candidates rows zet is bewust uit deze PR. Reden: race-conditie tussen async `recordXxxEvaluation` (`.catch(()=>{}) `, geen await) en de UPDATE-pass moet eerst opgelost via `Promise.allSettled()` collectie of `await` op alle 12 evaluation-call-sites. Eerlijker om dat in een schone slice te doen dan halve garanties hier.
+- **Auto-promote/demote-harness**: wacht op ≥100 settled shadow-rows per markt × sport met positieve CLV + Brier ≤ baseline. Web-push transitie kanaal sluit aan bij bestaande signal-transition flow.
+
+### Files
+
+- `server.js` — BTTS sanity-gate, 6× marketTypes-uitbreiding, 3× fxMeta toevoeging, 6× telemetrie-integratie, 1× wrapper-arg uitbreiding (extraCtx)
+- `lib/picks.js` — onCandidate factory-option + dropPick helper
+- `lib/runtime/scan-gate.js` — stats.byMarket aggregaten
+- `lib/snapshots.js` — writePickCandidate denormalisatie-velden
+- `lib/paper-trading.js` (NIEUW)
+- `lib/market-telemetry.js` (NIEUW)
+- `docs/migrations-archive/v12.4.0_paper_trading.sql` (NIEUW)
+- 7 version-pin files (lib/app-meta.js, package.json, package-lock.json, index.html ×2, README.md, docs/PRIVATE_OPERATING_MODEL.md, test.js)
+
+### Impact
+
+- BTTS-dominantie verminderd: BTTS picks moeten nu door dezelfde 7pp gate als alle andere markten. Verwacht effect: 30-50% minder BTTS in top-5 op bestaande BTTS-zware scans.
+- DC + handicap (football) en threeway/total/spread/half_*/team_total/period_total/odd_even/run_line/nrfi/f5_* (5 niet-football sporten) krijgen nu `applyExecutionGate` → kelly-demping op stale-line/overround/playability i.p.v. ongated door te glippen.
+- Per-scan log toont nu funnel-data per markt × sport — operator kan zien welke markten consistent picks produceren vs welke filters wegfilteren. Auto-promote-input voor v12.5+.
+- Smoke-test (`SUPABASE_URL=test … node -e "require('./lib/paper-trading'); require('./lib/market-telemetry'); ..."`) boot zonder TDZ.
+- Geen UI-prominentie voor shadow (puur data-laag).
+- Migratie idempotent + RLS afgevangen — bestaande pick_candidates-flow ongewijzigd.
+
 ## [12.3.0] - 2026-04-26
 
 **Fresh-eyes audit pass · 2 UX-fixes + 3 P2 hardenings + 3 test additions**
