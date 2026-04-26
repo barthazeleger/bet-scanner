@@ -69,6 +69,29 @@ Doctrine: signal-promotion-doctrine (shadow → CLV+Brier-bewijs → live promot
 - Geen UI-prominentie voor shadow (puur data-laag).
 - Migratie idempotent + RLS afgevangen — bestaande pick_candidates-flow ongewijzigd.
 
+## [12.3.1] - 2026-04-25
+
+**HOTFIX · front-end stuk sinds v12.3.0 door zero-width space in inline JS**
+
+Operator-rapport: "Sinds 12.3.0 doet de app het niet echt meer. Net nog wel (12.2.50)."
+
+### Fixed
+
+- **`index.html` regel 1484** — onzichtbare U+200B (zero-width space, byte-sequence `0xE2 0x80 0x8B`) stond aan het begin van een commentregel binnen `renderPicks.pickStrength`. U+200B is geen geldig whitespace-token in ECMA-262, dus de browser brak het hele inline `<script>`-blok af met `SyntaxError: Invalid or unexpected token` — alle front-end JS dood. Server boot + `npm test` (Node) merkten het niet op omdat Node geen HTML parseert.
+  - Karakter is in v12.3.0 ingeslopen bij de P2-edit "warn bij ontbrekend kelly-veld". Diff toonde het ook al, maar viel niet op (zichtbaar als rare leading whitespace).
+  - Pre-push smoke-test van v12.3.0 dekte alleen Node-pad (server.js require), niet browser-pad. LESSON: voor index.html-edits ook een script-extractie-syntaxcheck of een handmatige browser-load.
+
+### Hardened
+
+- **Pre-push gates voor inline-JS in HTML** — `test.js` G1 + G2 (773 → 775 tests):
+  - **G1 · source hygiene scan**: doorloopt `index.html`, `login.html`, `server.js`, `test.js`, `sw.js`, `lib/**/*.js|html|css`, `js/**/*.js|html|css` en faalt op elke U+200B / U+200C / U+200D / U+2060 / U+FEFF. Deze codepoints zijn legitiem in tekst maar nooit in deze codebase (NL-content, ASCII-identifiers, geen BOM).
+  - **G2 · inline-script syntax-parse**: extract elke `<script>` zonder `src=` en zonder `type=module|json|importmap` uit `index.html`, parseert via `new vm.Script()` (script-context, geen execute) en faalt bij SyntaxError. Vangt élke browser-parser-bug, niet alleen ZWSP.
+  - Sanity-check uitgevoerd: een tijdelijk geïnjecteerde U+200B liet allebei de gates correct rood worden vóór commit.
+
+### Verified
+
+- Restore na injectie: `grep -cP '\x{200B}' index.html` → 0. 775/775 groen.
+
 ## [12.3.0] - 2026-04-26
 
 **Fresh-eyes audit pass · 2 UX-fixes + 3 P2 hardenings + 3 test additions**

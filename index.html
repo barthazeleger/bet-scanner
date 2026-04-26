@@ -1481,7 +1481,7 @@ function renderPicks(el, picks) {
   // p.kelly daarentegen is al gedampened door auditSuspicious × dataConf ×
   // executionMultipliers. Doctrine: kwaliteit > volume, sorteer op conviction.
   // v12.3.0 P2: warn bij ontbrekend kelly-veld (legacy scan_history payloads
-​  // of server-side regressie). Runtime fallt door naar 0; dev-aid alleen.
+  // of server-side regressie). Runtime fallt door naar 0; dev-aid alleen.
   const pickStrength = p => {
     if (!Number.isFinite(p?.kelly)) {
       if (p && typeof console !== 'undefined') console.warn('renderPicks: pick missing kelly field', p?.match || '?');
