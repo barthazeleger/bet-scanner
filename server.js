@@ -48,6 +48,7 @@ const { logScanEnd } = require('./lib/runtime/scan-logger');
 const { fetchSnapshotClosing } = require('./lib/clv-backfill');
 const { logEarlyPayoutShadow, aggregateEarlyPayoutStats } = require('./lib/signals/early-payout');
 const { marketKeyFromBetMarkt: _marketKeyFromBetMarkt, supportsClvForBetMarkt } = require('./lib/clv-match');
+const { createScanTelemetry } = require('./lib/market-telemetry');
 
 // Snapshot layer (v2 foundation): point-in-time logging voor learning + backtesting
 const snap = require('./lib/snapshots');
@@ -1412,16 +1413,19 @@ function getDrawdownMultiplier() {
   return 1.0;
 }
 
-function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'football') {
+function buildPickFactory(MIN_ODDS = 1.60, calibEpBuckets = {}, sport = 'football', extraCtx = {}) {
   // v10.12.8: execution-gate draait nu als post-scan pass
   // (lib/runtime/scan-gate.js). buildPickFactory blijft daarom lean en
   // aan mkP-kant: fixtureMeta wordt alleen doorgegeven + opgeslagen op de
   // pick. Geen resolveExecutionMetrics meer hier.
+  // v12.4.0: extraCtx (4e arg) propageert onCandidate-hook naar createPickContext
+  // zodat sport-scans markt-telemetrie kunnen counten zonder mkP-signature te wijzigen.
   const ctx = createPickContext({
     sport,
     drawdownMultiplier: getDrawdownMultiplier,
     activeUnitEur: getActiveUnitEur(),
     adaptiveMinEdge,
+    ...extraCtx,
   });
   return createPickFactory(MIN_ODDS, calibEpBuckets, ctx);
 }
@@ -2408,7 +2412,15 @@ async function runBasketball(emit) {
   emit({ log: `🏀 Basketball scan · ${NBA_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'basketball');
+  // v12.4.0: per-scan markt-mix telemetrie (zie market-telemetry.js).
+  const _basketballMarketTel = createScanTelemetry({ sport: 'basketball', scanAnchorMs: Date.now() });
+  const _basketballOnCandidate = ({ pushed, fixtureMeta }) => {
+    const mt = fixtureMeta?.marketType;
+    if (!mt) return;
+    _basketballMarketTel.bumpGenerated(mt);
+    if (pushed) _basketballMarketTel.bumpDivergencePass(mt);
+  };
+  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'basketball', { onCandidate: _basketballOnCandidate });
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -3016,16 +3028,27 @@ async function runBasketball(emit) {
       preferredBookies,
       scanAnchorMs: Date.now(),
       activeUnitEur: getActiveUnitEur(),
-      marketTypes: ['moneyline'],
+      // v12.4.0: parity — alle markten met _fixtureMeta passeren nu de
+      // execution-gate (overround/stale-line/playability). Voorheen lekten
+      // total/spread/half_* picks ongetoetst door.
+      marketTypes: ['moneyline','total','spread','half_total','half_spread'],
       kellyToUnits,
     });
     gatedPicks = res.picks;
     if (res.stats.dampened || res.stats.skipped) {
       emit({ log: `🏀 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
     }
+    _basketballMarketTel.mergeFromGateStats(res.stats.byMarket);
   } catch (err) {
     emit({ log: `⚠️ Basketball execution-gate mislukt: ${err.message}` });
   }
+
+  for (const p of gatedPicks) {
+    const mt = p?._fixtureMeta?.marketType;
+    if (mt) _basketballMarketTel.bumpTop5(mt);
+  }
+  emit({ log: _basketballMarketTel.formatLine() });
+  _basketballMarketTel.persist(supabase).catch(() => {});
 
   emit({ log: `🏀 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedPicks.length} basketball picks` });
   // v12.2.3: drop-reasons telemetrie. Toont waarom picks niet doorkwamen
@@ -3052,7 +3075,15 @@ async function runHockey(emit) {
   emit({ log: `🏒 Hockey scan · ${NHL_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'hockey');
+  // v12.4.0: per-scan markt-mix telemetrie.
+  const _hockeyMarketTel = createScanTelemetry({ sport: 'hockey', scanAnchorMs: Date.now() });
+  const _hockeyOnCandidate = ({ pushed, fixtureMeta }) => {
+    const mt = fixtureMeta?.marketType;
+    if (!mt) return;
+    _hockeyMarketTel.bumpGenerated(mt);
+    if (pushed) _hockeyMarketTel.bumpDivergencePass(mt);
+  };
+  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'hockey', { onCandidate: _hockeyOnCandidate });
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -3551,18 +3582,23 @@ async function runHockey(emit) {
           const sanA3 = marketFairReg ? modelMarketSanityCheck(p3.pAway, marketFairReg.away) : { agree: true };
 
           const threeNote = ` | λh:${expHome.toFixed(2)} λa:${expAway.toFixed(2)} | 60-min`;
+          // v12.4.0: parity met andere markten — fxMeta zodat post-scan gate
+          // ook hockey threeway picks (60-min) line-timeline-evalueert.
+          const fxMetaHk3H = { fixtureId: gameId, marketType: 'threeway', selectionKey: 'home', line: null };
+          const fxMetaHk3D = { fixtureId: gameId, marketType: 'threeway', selectionKey: 'draw', line: null };
+          const fxMetaHk3A = { fixtureId: gameId, marketType: 'threeway', selectionKey: 'away', line: null };
           if (e3H >= MIN_EDGE && bH3.price >= 1.60 && bH3.price <= MAX_WINNER_ODDS && sanH3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${hm} wint (60-min)`, bH3.price,
               `3-way: ${(p3.pHome*100).toFixed(1)}% | Markt: ${marketFairReg ? (marketFairReg.home*100).toFixed(1)+'%' : 'n/a'} | ${bH3.bookie}: ${bH3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml', 'sanity_ok'], null, fxMetaHk3H);
           if (e3D >= MIN_EDGE && bD3.price >= 2.80 && bD3.price <= 8.00 && sanD3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 Gelijkspel (60-min)`, bD3.price,
               `3-way: ${(p3.pDraw*100).toFixed(1)}% gelijk | Markt: ${marketFairReg ? (marketFairReg.draw*100).toFixed(1)+'%' : 'n/a'} | ${bD3.bookie}: ${bD3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pDraw*100), e3D * 0.20, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+              Math.round(p3.pDraw*100), e3D * 0.20, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml', 'sanity_ok'], null, fxMetaHk3D);
           if (e3A >= MIN_EDGE && bA3.price >= 1.60 && bA3.price <= MAX_WINNER_ODDS && sanA3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${aw} wint (60-min)`, bA3.price,
               `3-way: ${(p3.pAway*100).toFixed(1)}% | Markt: ${marketFairReg ? (marketFairReg.away*100).toFixed(1)+'%' : 'n/a'} | ${bA3.bookie}: ${bA3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml', 'sanity_ok'], null, fxMetaHk3A);
           // v12.2.46: hockey threeway → v2.
           if (_currentModelVersionId) {
             snap.recordThreewayEvaluation({
@@ -3851,15 +3887,18 @@ async function runHockey(emit) {
             const oddEdge = oddP * bestOdd.price - 1;
             const evenEdge = (1-oddP) * bestEven.price - 1;
             const oeGate = passesDivergence2Way(oddP, 1-oddP, bestOdd.price, bestEven.price);
+            // v12.4.0: parity — odd_even fxMeta voor post-scan gate.
+            const fxMetaOeOdd  = { fixtureId: gameId, marketType: 'odd_even', selectionKey: 'odd',  line: null };
+            const fxMetaOeEven = { fixtureId: gameId, marketType: 'odd_even', selectionKey: 'even', line: null };
 
             if (oddEdge >= MIN_EDGE && bestOdd.price >= 1.60 && oeGate.passA)
               mkP(`${hm} vs ${aw}`, league.name, `🎲 Odd Total`, bestOdd.price,
                 `Odd/Even: ${(oddP*100).toFixed(1)}% odd | ${bestOdd.bookie}: ${bestOdd.price}${sharedNotes} | ${ko}`,
-                Math.round(oddP*100), oddEdge * 0.16, kickoffTime, bestOdd.bookie, matchSignals);
+                Math.round(oddP*100), oddEdge * 0.16, kickoffTime, bestOdd.bookie, matchSignals, null, fxMetaOeOdd);
             if (evenEdge >= MIN_EDGE && bestEven.price >= 1.60 && oeGate.passB)
               mkP(`${hm} vs ${aw}`, league.name, `🎲 Even Total`, bestEven.price,
                 `Odd/Even: ${((1-oddP)*100).toFixed(1)}% even | ${bestEven.bookie}: ${bestEven.price}${sharedNotes} | ${ko}`,
-                Math.round((1-oddP)*100), evenEdge * 0.16, kickoffTime, bestEven.bookie, matchSignals);
+                Math.round((1-oddP)*100), evenEdge * 0.16, kickoffTime, bestEven.bookie, matchSignals, null, fxMetaOeEven);
           }
         }
 
@@ -3900,15 +3939,27 @@ async function runHockey(emit) {
     const before = gatedHockeyPicks.length;
     const res = await applyPostScanGate(gatedHockeyPicks, supabase, {
       preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
-      marketTypes: ['moneyline'], kellyToUnits,
+      // v12.4.0: parity. team_total mismatch open: fxMeta='team_total' maar
+      // odds_snapshots schrijft 'team_total_home'/'team_total_away' (snapshots.js:97).
+      // Beide aliassen hier zodat lookup óf geen-match-passthrough doet, óf hit.
+      marketTypes: ['moneyline','threeway','total','team_total','team_total_home','team_total_away','puck_line','period_total','odd_even'],
+      kellyToUnits,
     });
     gatedHockeyPicks = res.picks;
     if (res.stats.dampened || res.stats.skipped) {
       emit({ log: `🏒 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
     }
+    _hockeyMarketTel.mergeFromGateStats(res.stats.byMarket);
   } catch (err) {
     emit({ log: `⚠️ Hockey execution-gate mislukt: ${err.message}` });
   }
+
+  for (const p of gatedHockeyPicks) {
+    const mt = p?._fixtureMeta?.marketType;
+    if (mt) _hockeyMarketTel.bumpTop5(mt);
+  }
+  emit({ log: _hockeyMarketTel.formatLine() });
+  _hockeyMarketTel.persist(supabase).catch(() => {});
 
   emit({ log: `🏒 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedHockeyPicks.length} hockey picks` });
   // v12.2.3: drop-reasons telemetrie.
@@ -3948,7 +3999,15 @@ async function runBaseball(emit) {
   };
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'baseball');
+  // v12.4.0: per-scan markt-mix telemetrie.
+  const _baseballMarketTel = createScanTelemetry({ sport: 'baseball', scanAnchorMs: Date.now() });
+  const _baseballOnCandidate = ({ pushed, fixtureMeta }) => {
+    const mt = fixtureMeta?.marketType;
+    if (!mt) return;
+    _baseballMarketTel.bumpGenerated(mt);
+    if (pushed) _baseballMarketTel.bumpDivergencePass(mt);
+  };
+  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'baseball', { onCandidate: _baseballOnCandidate });
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -4561,15 +4620,25 @@ async function runBaseball(emit) {
     const before = gatedMlbPicks.length;
     const res = await applyPostScanGate(gatedMlbPicks, supabase, {
       preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
-      marketTypes: ['moneyline'], kellyToUnits,
+      // v12.4.0: parity — total/run_line/nrfi/f5_* erbij.
+      marketTypes: ['moneyline','total','run_line','nrfi','f5_ml','f5_total'],
+      kellyToUnits,
     });
     gatedMlbPicks = res.picks;
     if (res.stats.dampened || res.stats.skipped) {
       emit({ log: `⚾ Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
     }
+    _baseballMarketTel.mergeFromGateStats(res.stats.byMarket);
   } catch (err) {
     emit({ log: `⚠️ Baseball execution-gate mislukt: ${err.message}` });
   }
+
+  for (const p of gatedMlbPicks) {
+    const mt = p?._fixtureMeta?.marketType;
+    if (mt) _baseballMarketTel.bumpTop5(mt);
+  }
+  emit({ log: _baseballMarketTel.formatLine() });
+  _baseballMarketTel.persist(supabase).catch(() => {});
 
   emit({ log: `⚾ ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedMlbPicks.length} baseball picks` });
   // v12.2.3: drop-reasons telemetrie.
@@ -4590,7 +4659,15 @@ async function runFootballUS(emit) {
   emit({ log: `🏈 NFL scan · ${NFL_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'american-football');
+  // v12.4.0: per-scan markt-mix telemetrie.
+  const _nflMarketTel = createScanTelemetry({ sport: 'american-football', scanAnchorMs: Date.now() });
+  const _nflOnCandidate = ({ pushed, fixtureMeta }) => {
+    const mt = fixtureMeta?.marketType;
+    if (!mt) return;
+    _nflMarketTel.bumpGenerated(mt);
+    if (pushed) _nflMarketTel.bumpDivergencePass(mt);
+  };
+  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'american-football', { onCandidate: _nflOnCandidate });
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -5063,15 +5140,25 @@ async function runFootballUS(emit) {
     const before = gatedNflPicks.length;
     const res = await applyPostScanGate(gatedNflPicks, supabase, {
       preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
-      marketTypes: ['moneyline'], kellyToUnits,
+      // v12.4.0: parity — total/spread/half_* erbij.
+      marketTypes: ['moneyline','total','spread','half_total','half_spread'],
+      kellyToUnits,
     });
     gatedNflPicks = res.picks;
     if (res.stats.dampened || res.stats.skipped) {
       emit({ log: `🏈 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
     }
+    _nflMarketTel.mergeFromGateStats(res.stats.byMarket);
   } catch (err) {
     emit({ log: `⚠️ NFL execution-gate mislukt: ${err.message}` });
   }
+
+  for (const p of gatedNflPicks) {
+    const mt = p?._fixtureMeta?.marketType;
+    if (mt) _nflMarketTel.bumpTop5(mt);
+  }
+  emit({ log: _nflMarketTel.formatLine() });
+  _nflMarketTel.persist(supabase).catch(() => {});
 
   emit({ log: `🏈 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedNflPicks.length} NFL picks` });
   // v12.2.3: drop-reasons telemetrie.
@@ -5092,7 +5179,15 @@ async function runHandball(emit) {
   emit({ log: `🤾 Handball scan · ${HANDBALL_LEAGUES.length} competities` });
 
   const calib = loadCalib();
-  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'handball');
+  // v12.4.0: per-scan markt-mix telemetrie.
+  const _handballMarketTel = createScanTelemetry({ sport: 'handball', scanAnchorMs: Date.now() });
+  const _handballOnCandidate = ({ pushed, fixtureMeta }) => {
+    const mt = fixtureMeta?.marketType;
+    if (!mt) return;
+    _handballMarketTel.bumpGenerated(mt);
+    if (pushed) _handballMarketTel.bumpDivergencePass(mt);
+  };
+  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'handball', { onCandidate: _handballOnCandidate });
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = 0;
@@ -5372,18 +5467,23 @@ async function runHandball(emit) {
           const sanA3 = marketFairHb ? modelMarketSanityCheck(p3.pAway, marketFairHb.away) : { agree: true };
 
           const threeNote = ` | λh:${expHome.toFixed(1)} λa:${expAway.toFixed(1)} | 60-min`;
+          // v12.4.0: parity met andere markten — fxMeta zodat post-scan gate
+          // ook handball threeway picks (60-min) line-timeline-evalueert.
+          const fxMetaHb3H = { fixtureId: gameId, marketType: 'threeway', selectionKey: 'home', line: null };
+          const fxMetaHb3D = { fixtureId: gameId, marketType: 'threeway', selectionKey: 'draw', line: null };
+          const fxMetaHb3A = { fixtureId: gameId, marketType: 'threeway', selectionKey: 'away', line: null };
           if (e3H >= MIN_EDGE && bH3.price >= 1.60 && bH3.price <= MAX_WINNER_ODDS && sanH3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${hm} wint (60-min)`, bH3.price,
               `3-way: ${(p3.pHome*100).toFixed(1)}% | Markt: ${marketFairHb ? (marketFairHb.home*100).toFixed(1)+'%' : 'n/a'} | ${bH3.bookie}: ${bH3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+              Math.round(p3.pHome*100), e3H * 0.26, kickoffTime, bH3.bookie, [...matchSignals, '3way_ml', 'sanity_ok'], null, fxMetaHb3H);
           if (e3D >= MIN_EDGE && bD3.price >= 4.00 && bD3.price <= 15.00 && sanD3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 Gelijkspel (60-min)`, bD3.price,
               `3-way: ${(p3.pDraw*100).toFixed(1)}% gelijk | Markt: ${marketFairHb ? (marketFairHb.draw*100).toFixed(1)+'%' : 'n/a'} | ${bD3.bookie}: ${bD3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pDraw*100), e3D * 0.18, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+              Math.round(p3.pDraw*100), e3D * 0.18, kickoffTime, bD3.bookie, [...matchSignals, '3way_ml', 'sanity_ok'], null, fxMetaHb3D);
           if (e3A >= MIN_EDGE && bA3.price >= 1.60 && bA3.price <= MAX_WINNER_ODDS && sanA3.agree)
             mkP(`${hm} vs ${aw}`, league.name, `🕐 ${aw} wint (60-min)`, bA3.price,
               `3-way: ${(p3.pAway*100).toFixed(1)}% | Markt: ${marketFairHb ? (marketFairHb.away*100).toFixed(1)+'%' : 'n/a'} | ${bA3.bookie}: ${bA3.price}${threeNote} | ${ko}`,
-              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml', 'sanity_ok']);
+              Math.round(p3.pAway*100), e3A * 0.26, kickoffTime, bA3.bookie, [...matchSignals, '3way_ml', 'sanity_ok'], null, fxMetaHb3A);
           // v12.2.46: handball threeway → v2.
           if (_currentModelVersionId) {
             snap.recordThreewayEvaluation({
@@ -5532,15 +5632,25 @@ async function runHandball(emit) {
     const before = gatedHbPicks.length;
     const res = await applyPostScanGate(gatedHbPicks, supabase, {
       preferredBookies, scanAnchorMs: Date.now(), activeUnitEur: getActiveUnitEur(),
-      marketTypes: ['moneyline'], kellyToUnits,
+      // v12.4.0: parity — threeway/total/handicap erbij.
+      marketTypes: ['moneyline','threeway','total','handicap'],
+      kellyToUnits,
     });
     gatedHbPicks = res.picks;
     if (res.stats.dampened || res.stats.skipped) {
       emit({ log: `🤾 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
     }
+    _handballMarketTel.mergeFromGateStats(res.stats.byMarket);
   } catch (err) {
     emit({ log: `⚠️ Handball execution-gate mislukt: ${err.message}` });
   }
+
+  for (const p of gatedHbPicks) {
+    const mt = p?._fixtureMeta?.marketType;
+    if (mt) _handballMarketTel.bumpTop5(mt);
+  }
+  emit({ log: _handballMarketTel.formatLine() });
+  _handballMarketTel.persist(supabase).catch(() => {});
 
   emit({ log: `🤾 ${totalEvents} wedstrijden geanalyseerd (${apiCallsUsed} API calls) | ${gatedHbPicks.length} handball picks` });
   // v12.2.3: drop-reasons telemetrie.
@@ -5623,7 +5733,18 @@ async function runPrematch(emit) {
     }
   }
 
-  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'football');
+  // v12.4.0: per-scan markt-mix telemetrie. Counters worden gebumpt door
+  // mkP onCandidate-hook (generated/divergence_pass) en post-scan gate stats.
+  // Persisteert na scan in market_scan_telemetry zodat we cross-scan trends
+  // per markt × sport hebben (auto-promote-input voor v12.5+).
+  const _footballMarketTel = createScanTelemetry({ sport: 'football', scanAnchorMs: Date.now() });
+  const _footballOnCandidate = ({ pushed, fixtureMeta }) => {
+    const mt = fixtureMeta?.marketType;
+    if (!mt) return;
+    _footballMarketTel.bumpGenerated(mt);
+    if (pushed) _footballMarketTel.bumpDivergencePass(mt);
+  };
+  const { picks, combiPool, mkP, dropReasons } = buildPickFactory(1.60, calib.epBuckets || {}, 'football', { onCandidate: _footballOnCandidate });
   const MIN_EDGE = 0.055;
   let totalEvents = 0;
   let apiCallsUsed = AF_FOOTBALL_LEAGUES.length; // 1 call/league gebruikt in pre-fetch
@@ -6361,29 +6482,30 @@ async function runPrematch(emit) {
               const fxMetaBttsY = { fixtureId: fid, marketType: 'btts', selectionKey: 'yes', line: null };
               const fxMetaBttsN = { fixtureId: fid, marketType: 'btts', selectionKey: 'no',  line: null };
 
-              // v11.3.31 (Codex-finding): methodologisch correcte gate voor BTTS.
-              // Voorheen: passesDivergence2Way(bttsYesP, marketDevig, 7pp threshold).
-              // Probleem: bttsYesP komt uit calcBTTSProb() (H2H + form-model), NIET
-              // uit market-devig. Die kan inherent 15-25pp van market-devig afliggen
-              // zonder dat dat "fake edge" is — het is gewoon een andere methode.
-              // De Sandefjord-case (74% model vs 42% market @ 2.40) was een DUN-H2H
-              // probleem: h2hN=2, BTTS_H2H_PRIOR_K kon de sample niet voldoende
-              // shrinken. Echte fix: vereis h2hN >= 5 zodat calcBTTSProb op
-              // voldoende data kan steunen. Plus: auditSuspicious in mkP vangt al
-              // grote gaps tussen model en markt-baseline (stake-dampen 0.6×).
+              // v11.3.31: bttsDataOk vangt dunne H2H-samples (Sandefjord-case
+              // h2hN=2 @ 74% model vs 42% market). Houden — addresseert input-
+              // kwaliteit, niet output-divergentie.
               const bttsDataOk = h2hN >= 5;
+
+              // v12.4.0: parity met O/U/DNB sanity-gate. Operator-rapport
+              // 2026-04-26: BTTS domineerde top-5 omdat signaal-stack
+              // (calcBTTSProb + cs/weather/poisson/agg ≈ 15pp) ongetoetst door
+              // mocht — andere markten hadden 7pp-threshold via
+              // passesDivergence2Way. bttsDataOk + auditSuspicious bleven, dit
+              // is de derde laag tegen door-signaal-gepushte fake edges.
+              const bttsGate = passesDivergence2Way(bttsYesP, bttsNoP, bestYes.price, bestNo.price);
 
               // v12.0.0 (Codex P1 + Claude P0): BTTS gebruikt nu eigen
               // calibratie-buckets. Voorheen las scan cm.over / cm.under, terwijl
               // learning-loop al naar football_btts_yes/no schreef → cross-market
               // contamination. Nu end-to-end consistent: schrijven en lezen beide
               // via btts_yes / btts_no keys.
-              if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60 && bttsDataOk)
+              if (bttsYesEdge >= MIN_EDGE && bestYes.price >= 1.60 && bttsDataOk && bttsGate.passA)
                 mkP(`${hm} vs ${aw}`, league.name, `🔥 BTTS Ja`, bestYes.price,
                   `BTTS: ${(bttsYesP*100).toFixed(1)}% | ${bestYes.bookie}: ${bestYes.price} | GF: ${hmGFAvg}/${awGFAvg}${h2hStr} | ${ko}`,
                   Math.round(bttsYesP*100), bttsYesEdge * 0.22 * (cm.btts_yes?.multiplier ?? 1), kickoffTime, bestYes.bookie, bttsSignals, refereeName, fxMetaBttsY);
 
-              if (bttsNoEdge >= MIN_EDGE && bestNo.price >= 1.60 && bttsDataOk)
+              if (bttsNoEdge >= MIN_EDGE && bestNo.price >= 1.60 && bttsDataOk && bttsGate.passB)
                 mkP(`${hm} vs ${aw}`, league.name, `🛡️ BTTS Nee`, bestNo.price,
                   `BTTS Nee: ${(bttsNoP*100).toFixed(1)}% | ${bestNo.bookie}: ${bestNo.price} | GF: ${hmGFAvg}/${awGFAvg} | CS: ${hmTS2?.cleanSheetPct ? (hmTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}/${awTS2?.cleanSheetPct ? (awTS2.cleanSheetPct*100).toFixed(0)+'%' : '?'}${h2hStr} | ${ko}`,
                   Math.round(bttsNoP*100), bttsNoEdge * 0.20 * (cm.btts_no?.multiplier ?? 1), kickoffTime, bestNo.bookie, bttsSignals, refereeName, fxMetaBttsN);
@@ -6687,7 +6809,9 @@ async function runPrematch(emit) {
       kickoffByFixtureId: _scanKickoffByFixture,
       scanAnchorMs: Date.now(),
       activeUnitEur: getActiveUnitEur(),
-      marketTypes: ['1x2', 'total', 'btts', 'dnb'],
+      // v12.4.0: parity — DC + handicap erbij. Voorheen lekten die zonder
+      // execution-gate door (geen overround/stale-line/playability check).
+      marketTypes: ['1x2','total','btts','dnb','double_chance','handicap'],
       kellyToUnits,
     });
     allCandidates = res.picks;
@@ -6696,11 +6820,18 @@ async function runPrematch(emit) {
     if (res.stats.dampened || res.stats.skipped) {
       emit({ log: `📉 Execution-gate: ${res.stats.dampened} gedempt · ${res.stats.skipped} geskipt (van ${before})` });
     }
+    _footballMarketTel.mergeFromGateStats(res.stats.byMarket);
   } catch (err) {
     emit({ log: `⚠️ Execution-gate pass mislukt (picks ongewijzigd): ${err.message}` });
   }
 
   const finalPicks = allCandidates.slice(0, 5);
+  for (const p of finalPicks) {
+    const mt = p?._fixtureMeta?.marketType;
+    if (mt) _footballMarketTel.bumpTop5(mt);
+  }
+  emit({ log: _footballMarketTel.formatLine() });
+  _footballMarketTel.persist(supabase).catch(() => {});
 
   const weakCount = allCandidates.length - finalPicks.length;
 
