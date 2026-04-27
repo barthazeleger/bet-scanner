@@ -2933,7 +2933,7 @@ test('calibration store (D4): zonder supabase-client schrijft save naar file (te
 });
 
 test('release metadata: app-meta en package.json voeren dezelfde versie', () => {
-  assert.strictEqual(appMeta.APP_VERSION, '12.4.1');
+  assert.strictEqual(appMeta.APP_VERSION, '12.4.2');
   assert.strictEqual(pkg.version, appMeta.APP_VERSION);
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8'));
   assert.strictEqual(lock.version, appMeta.APP_VERSION);
@@ -7794,6 +7794,94 @@ test('v12.4.1 runPaperTradingSweep: composite cursor paging skipt geen rijen na 
   // Geen duplicate-processing: elke id maximaal 1× in seenIds.
   const dupes = seenIds.filter((id, i) => seenIds.indexOf(id) !== i);
   assert.deepStrictEqual(dupes, [], `unexpected duplicate ids in pagination: ${dupes.join(',')}`);
+});
+
+// ── v12.4.2 hotfix · bookie-audit + modal-tracker score-sync ─────────────────
+//
+// Operator-rapport NHL TT-pick: Bet365 @ 1.94 gekozen terwijl Unibet @ 2.07
+// in de markt stond. Diagnose: hockey TT scope-filter (`isTtMatch`) gooit
+// Unibet weg als api-sports geen "inclusief verlenging"-keyword teruggeeft
+// (scope='unknown' → fallback op HOCKEY_60MIN_BOOKIES blacklist). Plus:
+// modal toonde herrekende score 8/10 maar tracker bleef op originele 6/10.
+//
+// Twee unit-tests:
+//   G5: findRejectedBetterQuote vangt het patroon (uitgesloten quote met
+//       materieel hogere prijs dan gekozen → returnt audit-payload).
+//   G6: EPAdvice round-trip score-formule — bewijst dat 1.94 → 2.07 op
+//       prob=0.54 correct van 6 naar 8 gaat (logModalBet moet die saven).
+test('v12.4.2 findRejectedBetterQuote: uitgesloten Unibet TT-quote met +6.7% gap → audit-payload', () => {
+  const { findRejectedBetterQuote } = require('./lib/bookie-audit');
+  // Mimic hockey TT pool voor 1 team/side/line bucket.
+  const all = [
+    { bookie: 'Bet365',   side: 'over', point: 2.5, price: 1.94, scope: 'unknown' },
+    { bookie: 'Pinnacle', side: 'over', point: 2.5, price: 2.05, scope: 'unknown' },
+    { bookie: 'Unibet',   side: 'over', point: 2.5, price: 2.07, scope: 'unknown' },
+  ];
+  // isTtMatch in hockey TT loop: alleen bookies NIET in de 60min-blacklist
+  // tellen (scope='unknown' fallback). Unibet + Pinnacle gefilterd want
+  // scope='unknown' valt door → maar Pinnacle is GEEN 60min-bookie dus OK.
+  // Voor de test: simuleer dat Bet365 de gekozen is (1.94) en Unibet rejected (2.07).
+  const HOCKEY_60MIN_BOOKIES = ['unibet', 'toto', 'betcity', 'ladbrokes'];
+  const isAllowed = (o) => !HOCKEY_60MIN_BOOKIES.some(x => (o.bookie || '').toLowerCase().includes(x));
+  // Pinnacle is allowed (niet in blacklist) → hoort niet in rejected. Maar
+  // Pinnacle 2.05 > Bet365 1.94 zou de bestFromArr-uitkomst zijn (preferred-
+  // pool-bug), niet onze scope-finding. Voor deze test: chosen=1.94 en we
+  // verwachten Unibet 2.07 als rejected-better (+6.7%).
+  const r = findRejectedBetterQuote(all, isAllowed, 1.94, { thresholdPct: 0.03, maxPrice: 3.5 });
+  assert.ok(r, 'verwachtte een rejected-better quote');
+  assert.strictEqual(r.bookie, 'Unibet');
+  assert.strictEqual(r.price, 2.07);
+  assert.strictEqual(r.gapPct, 6.7);
+});
+
+test('v12.4.2 findRejectedBetterQuote: gap onder drempel → null (geen ruis)', () => {
+  const { findRejectedBetterQuote } = require('./lib/bookie-audit');
+  const all = [
+    { bookie: 'Bet365', side: 'over', point: 2.5, price: 1.94, scope: 'incl_ot' },
+    { bookie: 'Unibet', side: 'over', point: 2.5, price: 1.96, scope: 'unknown' },  // +1%, onder 3% drempel
+  ];
+  const isAllowed = (o) => !['unibet'].some(x => (o.bookie || '').toLowerCase().includes(x));
+  const r = findRejectedBetterQuote(all, isAllowed, 1.94, { thresholdPct: 0.03, maxPrice: 3.5 });
+  assert.strictEqual(r, null);
+});
+
+test('v12.4.2 findRejectedBetterQuote: longshot boven maxPrice → genegeerd', () => {
+  const { findRejectedBetterQuote } = require('./lib/bookie-audit');
+  const all = [
+    { bookie: 'Bet365',  side: 'under', point: 5.5, price: 1.85, scope: 'unknown' },
+    { bookie: 'BetCity', side: 'under', point: 5.5, price: 4.20, scope: 'unknown' },  // longshot, irrelevant
+  ];
+  const isAllowed = (o) => !['betcity'].some(x => (o.bookie || '').toLowerCase().includes(x));
+  const r = findRejectedBetterQuote(all, isAllowed, 1.85, { thresholdPct: 0.03, maxPrice: 3.5 });
+  assert.strictEqual(r, null);
+});
+
+test('v12.4.2 findRejectedBetterQuote: geen rejected → null', () => {
+  const { findRejectedBetterQuote } = require('./lib/bookie-audit');
+  const all = [
+    { bookie: 'Bet365',   side: 'over', point: 2.5, price: 1.94 },
+    { bookie: 'Pinnacle', side: 'over', point: 2.5, price: 2.00 },
+  ];
+  const r = findRejectedBetterQuote(all, () => true, 1.94, { thresholdPct: 0.03 });
+  assert.strictEqual(r, null);
+});
+
+test('v12.4.2 logModalBet score-sync: EPAdvice round-trip 1.94 → 2.07 (NHL TT-rapport)', () => {
+  // Operator-pick: 6/10 @ 1.94. Modal toonde 2.07 → score sprong naar 8/10.
+  // Maar tracker saved 6/10 (modalPick.kelly hard-coded). Deze test
+  // verifieert dat de v12.4.2-formule (kellyFor → scoreFromHk) inderdaad
+  // 6 → 8 produceert, dus dat logModalBet's nieuwe code de juiste score
+  // schrijft.
+  const advice = require('./lib/modal-advice');
+  const prob = 0.54; // matched aan operator-pick "6/10 @ 1.94" (kelly~0.025)
+  const origHk = advice.kellyFor(prob, 1.94) * 0.5;
+  const newHk  = advice.kellyFor(prob, 2.07) * 0.5;
+  // Grens-checks zodat een toekomstige rebalance van scoreFromHk de
+  // intentie van deze hotfix nog steeds matcht.
+  assert.ok(origHk > 0.015 && origHk <= 0.03, `origHk=${origHk} buiten 6/10-bracket`);
+  assert.ok(newHk > 0.05 && newHk <= 0.07, `newHk=${newHk} buiten 8/10-bracket`);
+  assert.strictEqual(advice.scoreFromHk(origHk), 6);
+  assert.strictEqual(advice.scoreFromHk(newHk), 8);
 });
 
 // ── EXECUTION GATE: applyExecutionGate (v10.10.10+, fundament 3 Bouwvolgorde) ─

@@ -1375,6 +1375,40 @@ async function logCheckFailure(type, wedstrijd, reason) {
   }
 }
 
+// v12.4.2: bookie-anomaly inbox-warning. Wordt aangeroepen als een upstream
+// bookie-filter (bv. hockey TT scope/blacklist) een quote uitsluit die
+// materieel hoger is dan de gekozen pick. Doel: operator-zichtbaarheid op
+// "elke pick analyseren" — wijzigt de pick zelf NIET (filter blijft canonieke
+// safety-net), wel wordt het patroon zichtbaar zodat operator scope-overrides
+// of blacklist-tuning kan overwegen.
+//
+// Dedup: 6h per (type + title) zoals logCheckFailure. Niet-persistent zodat
+// "Wis alles" hem opruimt — diagnostische ruis, geen audit-event.
+async function logBookieAnomaly(args) {
+  try {
+    const { sport, wedstrijd, market, selectionKey, line, chosen, rejected } = args || {};
+    if (!chosen || !rejected || !chosen.bookie || !rejected.bookie) return;
+    const lineStr = line != null ? ` ${line}` : '';
+    const title = `Bookie-anomaly: ${wedstrijd} ${market}/${selectionKey}${lineStr}`.slice(0, 100);
+    const body = `⚠️ ${sport} ${market}/${selectionKey}${lineStr}: gekozen ${chosen.bookie}@${chosen.price}, uitgefilterde quote ${rejected.bookie}@${rejected.price} (+${rejected.gapPct}%, scope=${rejected.scope || 'unknown'}). Verifieer of ${rejected.bookie} legitiem incl-OT/full-game settlet voor ${market} — overweeg per-bookie scope-override.`;
+    const sinceIso = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+    try {
+      const { data: existing } = await supabase.from('notifications')
+        .select('id')
+        .eq('type', 'bookie_anomaly')
+        .eq('title', title)
+        .gte('created_at', sinceIso)
+        .limit(1);
+      if (Array.isArray(existing) && existing.length) return;
+    } catch (_) { /* fall through */ }
+    await supabase.from('notifications').insert({
+      type: 'bookie_anomaly', title, body, read: false, user_id: null
+    });
+  } catch (e) {
+    console.warn('[logBookieAnomaly]', e?.message || e);
+  }
+}
+
 // ── TOP LEAGUES ────────────────────────────────────────────────────────────────
 const TOP_FB = new Set([
   'Premier League','La Liga','Serie A','Bundesliga','Ligue 1',
@@ -3648,6 +3682,23 @@ async function runHockey(emit) {
           //   (c) price range 1.60-3.5 + edge-min uit MIN_EDGE,
           //   (d) mkP's auditSuspicious-dampen op grote baseline-gaps.
           const ttLambdaOk = (lambda) => Number.isFinite(lambda) && lambda >= 0.5 && lambda <= 5.0;
+          // v12.4.2: bookie-anomaly audit — als isTtMatch een quote uitsluit
+          // die materieel hoger is dan de gekozen, log inbox-warning. Pick
+          // zelf blijft de filter respecteren (settlement-safety); operator
+          // krijgt zichtbaarheid op het patroon.
+          const { findRejectedBetterQuote } = require('./lib/bookie-audit');
+          const auditTtChoice = (team, side, line, best) => {
+            const all = parsed.teamTotals.filter(o => o.team === team && o.side === side && o.point === line);
+            const rej = findRejectedBetterQuote(all, isTtMatch, best.price, { thresholdPct: 0.03, maxPrice: 3.5 });
+            if (rej) {
+              logBookieAnomaly({
+                sport: 'hockey', wedstrijd: `${hm} vs ${aw}`,
+                market: `team_total_${team}`, selectionKey: side, line,
+                chosen: { bookie: best.bookie, price: best.price },
+                rejected: rej,
+              }).catch(() => {});
+            }
+          };
           for (const line of linesHome) {
             if (!ttLambdaOk(lambdaHome)) continue;
             const ov = homeTT.filter(o => o.side === 'over' && o.point === line);
@@ -3657,6 +3708,8 @@ async function runHockey(emit) {
             const bestOv = bestFromArr(ov, { maxPrice: 3.5 });
             const bestUn = bestFromArr(un, { maxPrice: 3.5 });
             if (bestOv.price <= 0 || bestUn.price <= 0) continue;
+            auditTtChoice('home', 'over', line, bestOv);
+            auditTtChoice('home', 'under', line, bestUn);
             const pOver = poissonOver(lambdaHome, line);
             const pUnder = 1 - pOver;
             const ovEdge = pOver * bestOv.price - 1;
@@ -3693,6 +3746,8 @@ async function runHockey(emit) {
             // v12.1.8: maxPrice cap parity met post-check (<= 3.5 voor TT O/U)
             const bestOv = bestFromArr(ov, { maxPrice: 3.5 });
             const bestUn = bestFromArr(un, { maxPrice: 3.5 });
+            if (bestOv.price > 0) auditTtChoice('away', 'over', line, bestOv);
+            if (bestUn.price > 0) auditTtChoice('away', 'under', line, bestUn);
             if (bestOv.price <= 0 || bestUn.price <= 0) continue;
             const pOver = poissonOver(lambdaAway, line);
             const pUnder = 1 - pOver;

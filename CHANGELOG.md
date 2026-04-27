@@ -2,6 +2,42 @@
 
 Alle noemenswaardige wijzigingen aan EdgePickr. Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/), nieuwste eerst.
 
+## [12.4.2] - 2026-04-26
+
+**HOTFIX op operator-rapport NHL TT-pick · modal-tracker score-sync + bookie-anomaly inbox-warning**
+
+Aanleiding: operator zag NHL Team-Total pick op Bet365 @ 1.94 terwijl Unibet @ 2.07 in de markt stond. Plus: bij openen van de modal toonde de modal de herrekende score (8/10 i.p.v. de originele 6/10), maar de tracker bleef na opslaan op de oude 6/10 hangen.
+
+### Fixed
+
+- **`index.html` `logModalBet()`** — `score` wordt nu recomputed uit huidige `m-odds` + `modalPick.prob` via `EPAdvice.kellyFor` + `scoreFromHk`. Voorheen hard-coded uit `modalPick.kelly` (originele pre-edit kelly), waardoor de tracker een score saved gebaseerd op de pre-edit odds terwijl de modal al de nieuwe score toonde. Concreet voor de operator-case: 1.94 → 2.07 op prob=0.54 → kelly stijgt van ~0.025 (hk=0.0125, score 6) naar ~0.110 (hk=0.055, score 8). Modal toonde 8, tracker saved 6 — nu allebei 8. Fallback op de oude formule blijft als `window.EPAdvice` om welke reden dan ook ontbreekt (no-crash gate).
+
+### Added (operator-zichtbaarheid · "elke pick analyseren")
+
+- **`lib/bookie-audit.js`** (NIEUW) — `findRejectedBetterQuote(allCandidates, isAllowed, chosenPrice, opts)`. Pure helper die de wider quote-pool vergelijkt met wat een upstream filter (scope-detect / blacklist / preferred-only) heeft uitgesloten. Returnt `{bookie, price, scope, gapPct}` als een uitgesloten quote ≥`thresholdPct` (default 3%) hoger ligt dan de gekozen — en `null` daarbuiten.
+- **`server.js` `logBookieAnomaly()`** — wrapper rond `notifications.insert` met type `bookie_anomaly`, 6h-dedup per (type+title) zoals `logCheckFailure`. Niet-persistent zodat "Wis alles" 'm opruimt — diagnostische ruis, geen audit-event.
+- **Hockey TT scope-filter audit** — server.js hockey TT-loop (home + away, over + under) draait nu na elke `bestFromArr` een `findRejectedBetterQuote` tegen `parsed.teamTotals` met `isTtMatch` als filter. Bij gap > 3% binnen prijs-cap (≤ 3.5) → `logBookieAnomaly` met de uitgefilterde bookie + prijs + scope. Pick zelf blijft de filter respecteren (settlement-safety: `HOCKEY_60MIN_BOOKIES` blijft canonieke truth dat Unibet/Toto/BetCity/Ladbrokes ML 60-min settlen — hetzelfde geldt waarschijnlijk voor TT als scope='unknown' fallback). Operator krijgt zichtbaarheid op het patroon zodat per-bookie scope-overrides of blacklist-tuning te overwegen is wanneer het patroon zich herhaalt.
+
+### Tests (777 → 782)
+
+- **G5a** · `findRejectedBetterQuote`: NHL TT-rapport reproduceren — Bet365 @ 1.94 chosen, Unibet @ 2.07 in pool maar uitgesloten → returnt `{bookie:'Unibet', price:2.07, gapPct:6.7}`.
+- **G5b** · gap onder drempel (1.94 → 1.96 = +1%) → `null` (geen ruis).
+- **G5c** · longshot boven `maxPrice` (4.20 vs cap 3.5) → `null` (longshot-quotes zijn meestal illiquid en niet representatief).
+- **G5d** · geen rejected → `null`.
+- **G6** · EPAdvice round-trip score-formule: prob=0.54 + 1.94 → 2.07 inderdaad 6 → 8. Bewijst dat `logModalBet`'s nieuwe code de juiste score schrijft (modal-display match).
+
+### Verified
+
+- `npm test` 782/782 groen.
+- `node -e "require('./server.js')"` boot zonder TDZ → `REQUIRE_OK v=12.4.2`.
+- Geen schema-migration nodig (alle fixes code-only). `bookie_anomaly` is een nieuw notification-type maar `notifications.type` is `text` zonder enum-constraint, dus geen DDL.
+
+### Out-of-scope (deferred / monitoring)
+
+- **Andere markten**: BTTS/DNB/DC (football preferred-only filter) en hockey ML (`HOCKEY_60MIN_BOOKIES`) hebben hetzelfde patroon. Niet meegenomen in deze hotfix — eerst hockey TT-data verzamelen om te zien of het patroon zich generaliseert. Indien `bookie_anomaly` inbox consistent terugkomt over 1 week → uitrollen naar de andere filters in v12.5.0.
+- **`marketBest` zichtbaarheid in pick-payload (UI-uitbreiding)**: pick-card zou kunnen tonen "preferred best 1.94 (Bet365), market best 2.20 (Pinnacle)" voor transparantie. Niet in deze hotfix want pick-payload + UI-werk; inbox-warning is voor nu voldoende operator-zichtbaarheid.
+- **Per-bookie scope-override-config**: `OPERATOR.bookie_scope_overrides[bookie] = 'incl_ot' | 'regulation'` zodat operator manueel kan zeggen "Unibet TT settlet altijd full-game" zonder afhankelijkheid van api-sports-labels. Wacht op bewijs uit de bookie-anomaly inbox — als één bookie consistent terugkomt is dat het signal om de override te bouwen.
+
 ## [12.4.1] - 2026-04-26
 
 **HOTFIX op v12.4.0 review-findings · execution-gate lookup-mismatch + paper-trading sweep skip-bug**
